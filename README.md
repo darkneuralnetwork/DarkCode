@@ -1,591 +1,234 @@
-# DarkCode
+<div align="center">
 
-<p align="center">
-  <img src="docs/images/cli.png" alt="DarkCode AI Agent Platform" width="100%">
-</p>
+<img src="docs/images/cli.png" alt="DarkCode AI Agent Platform" width="100%">
 
-<h1 align="center">
-  DarkCode
-</h1>
+# 🌑 DarkCode
 
-<h3 align="center">
-  Next-Generation Autonomous AI Agent Platform
-</h3>
+**Next-Generation Autonomous AI Agent Platform**
 
-<p align="center">
-  A local-first, modular AI agent operating system built in Go for autonomous software engineering, intelligent automation, and scalable AI workflows.
-</p>
+A local-first, modular AI agent operating system built in Go for autonomous software engineering, intelligent automation, and scalable AI workflows.
 
-<p align="center">
-  Built by
-  <a href="https://darkneuralnetwork.com">
-  Team Dark Neural Network (DNN)
-  </a>
-</p>
+Engineered by [**Team Dark Neural Network (DNN)**](https://darkneuralnetwork.com)
 
-<p align="center">
+![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go)
+![AI Agents](https://img.shields.io/badge/AI_Agent-purple?style=for-the-badge)
+![Local LLM](https://img.shields.io/badge/Local_LLM-green?style=for-the-badge)
+![RAG](https://img.shields.io/badge/Hybrid_RAG-orange?style=for-the-badge)
+![Knowledge Graph](https://img.shields.io/badge/Knowledge_Graph-blue?style=for-the-badge)
+![License](https://img.shields.io/badge/License-GPL_3.0-blue?style=for-the-badge)
 
-![Go](https://img.shields.io/badge/Go-1.22+-00ADD8)
-![AI Agents](https://img.shields.io/badge/AI-Agent-purple)
-![Local LLM](https://img.shields.io/badge/Local-LLM-green)
-![RAG](https://img.shields.io/badge/Hybrid-RAG-orange)
-![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-enabled-blue)
-![License](https://img.shields.io/badge/License-GPL--3.0-blue)
+</div>
 
-</p>
+---
 
-# Overview
+## ⚡ Overview
 
-The next generation of AI applications requires more than a conversational model.
+The next generation of AI applications requires more than just a conversational model. DarkCode reimagines AI engineering by distributing intelligence across specialized, modular systems. 
 
-Traditional AI assistants often struggle with:
+**Traditional AI struggles with:**
+* Exponential inference costs
+* Massive context requirements
+* Volatile memory and repeated reasoning
+* Poor holistic project understanding
+* Unreliable execution and cloud dependency
 
-* increasing inference costs
-* large context requirements
-* limited memory
-* repeated reasoning
-* poor project understanding
-* unreliable autonomous execution
-* dependency on expensive cloud models
-
-DarkCode approaches AI engineering differently.
-
-It is designed as a **modular autonomous AI agent platform** where intelligence is distributed across specialized systems:
-
-* orchestration
-* planning
-* model routing
-* agent execution
-* memory
-* retrieval
-* Knowledge Graph reasoning
-* secure tool execution
-
-The objective:
-
+**The DarkCode Objective:**
 > Create an AI system that becomes more efficient over time by remembering, learning, and reusing knowledge instead of repeatedly solving the same problems.
 
 ---
 
-# Why DarkCode?
+## 🧠 The DarkCode Advantage
 
-Most AI assistants operate as:
+Most assistants operate on a simple **User → LLM → Response** loop. DarkCode operates as a dynamic, intelligent execution engine.
 
-```
-User
- |
-LLM
- |
-Response
-```
+**The Execution Pipeline:**
+`User Goal` ➔ `Intent Analysis` ➔ `Planning Engine` ➔ `Task Decomposition` ➔ `Specialized Agents` ➔ `Tool Execution` ➔ `Verification` ➔ `Memory Update` ➔ `Final Result`
 
-DarkCode operates as an intelligent execution system:
-
-```
-User Goal
-
-      ↓
-
-Intent Analysis
-
-      ↓
-
-Planning Engine
-
-      ↓
-
-Task Decomposition
-
-      ↓
-
-Specialized Agents
-
-      ↓
-
-Tool Execution
-
-      ↓
-
-Verification
-
-      ↓
-
-Memory + Knowledge Update
-
-      ↓
-
-Final Result
-```
-
-This architecture enables:
-
-* better task handling
-* reduced token consumption
-* improved reliability
-* reusable knowledge
-* controlled automation
+**What this unlocks:**
+* Superior task handling and precision
+* Drastically reduced token consumption
+* Reusable, persistent knowledge
+* Controlled, secure automation
 
 ---
 
-# Core Architecture
+## 🏗️ Core Architecture
 
-<p align="center">
+<div align="center">
   <img src="docs/images/real-time-details.png" alt="DarkCode AI Agent Platform Details" width="100%">
-</p>
+</div>
 
-DarkCode is built around independent, specialized layers.
+DarkCode is built on a foundation of independent, highly specialized layers.
 
-```
-                       User
-                        |
-                Web UI / CLI
-                        |
-              Orchestration Kernel
-                        |
- ------------------------------------------------
- |                 |                |
-Planner        Model Router      Memory System
- |                 |                |
-Agents       Local / Cloud      RAG + Knowledge
- |                 |                |
- -------------------------------
-                 |
-          Tool Runtime
-                 |
- ---------------------------------
- |          |          |          |
-Files    Terminal    Git       Web
+```text
+                           [ User ]
+                              ↓
+                        [ Web UI / CLI ]
+                              ↓
+                    [ Orchestration Kernel ]
+      ┌───────────────┬───────────────┬───────────────┐
+  [ Planner ]   [ Model Router ]  [ Memory System ]
+      │               │               │
+  [ Agents ]    [ Local/Cloud ]   [ RAG + Graph ]
+      └───────────────┼───────────────┘
+                      ↓
+               [ Tool Runtime ]
+      ┌─────────┬─────┴───┬─────────┬─────────┐
+   [ Files ] [ Terminal ] [ Git ] [ Web ] [ APIs ]
 ```
 
-Each component has a defined responsibility:
+### Component Breakdown
 
-## Orchestration Kernel
-
-Controls:
-
-* execution lifecycle
-* agent coordination
-* workflow management
-* task state
-
-## Planner
-
-Responsible for:
-
-* understanding objectives
-* breaking problems into tasks
-* creating execution strategies
-
-## Model Router
-
-Determines:
-
-* which model should execute
-* local vs cloud usage
-* cost efficiency
-* latency requirements
-
-## Agent Runtime
-
-Provides:
-
-* specialized sub-agents
-* task isolation
-* parallel execution
-* verification
-
-## Tool Runtime
-
-Provides controlled access to:
-
-* filesystem
-* terminal
-* Git
-* web
-* external integrations
+* **Orchestration Kernel:** Commands the execution lifecycle, agent coordination, and workflow state.
+* **Planner:** Translates raw objectives into actionable, step-by-step execution strategies.
+* **Model Router:** Dynamically balances workloads between local and cloud models for optimal cost and latency.
+* **Agent Runtime:** Hosts specialized sub-agents with strict task isolation and parallel execution.
+* **Tool Runtime:** Provides secure, sandboxed access to the filesystem, terminal, Git, and the web.
 
 ---
 
-# Intelligent Model Routing
+## 🔀 Intelligent Model Routing
 
-DarkCode is designed around a **local-first AI strategy**.
+DarkCode thrives on a **local-first AI strategy**. Not every task requires a massive, expensive frontier model. Our routing engine ensures you use the smallest capable model for every action.
 
-Not every task requires an expensive frontier model.
+**Local Models (Fast & Free):**
+* Code explanation & formatting
+* Summarization & classification
+* Simple edits & repetitive tasks
+* RAG retrieval
 
-## Local Models Handle
-
-Examples:
-
-* code explanation
-* summarization
-* classification
-* simple edits
-* retrieval
-* formatting
-* repetitive tasks
-
-## Cloud Models Handle
-
-Examples:
-
-* complex architecture
-* difficult debugging
-* advanced reasoning
-* high-value synthesis
-
-The system goal:
-
-> Use the smallest capable model for every task.
-
-Benefits:
-
-* lower API costs
-* faster responses
-* better privacy
-* efficient resource usage
+**Cloud Models (Heavy Lifting):**
+* Complex system architecture
+* Advanced reasoning & synthesis
+* Deep debugging sessions
 
 ---
 
-# Advanced Memory System
+## 💾 Advanced Memory & Knowledge Graph
 
-Memory is not treated as simple chat history.
+Memory in DarkCode is far more than chat history. It is a persistent intelligence layer that evolves with your projects.
 
-DarkCode maintains multiple intelligence layers:
+**The Memory Hierarchy:**
+`Conversation` ➔ `Working` ➔ `Episodic` ➔ `Semantic` ➔ `Knowledge Graph`
 
-```
-Conversation Memory
+**Continuous Knowledge Improvement:**
+DarkCode actively maps files, functions, APIs, and dependencies into its Knowledge Graph. Every meaningful interaction feeds the system.
 
-        ↓
-
-Working Memory
-
-        ↓
-
-Episodic Memory
-
-        ↓
-
-Semantic Memory
-
-        ↓
-
-Knowledge Graph
-```
-
-
-The system stores:
-
-* successful solutions
-* project information
-* debugging patterns
-* architectural decisions
-* workflows
-* agent experiences
-
-This allows future tasks to reuse existing knowledge instead of rebuilding context.
+`More Usage` ➔ `Deeper Knowledge` ➔ `Better Retrieval` ➔ `Fewer API Calls` ➔ `Lower Costs`
 
 ---
 
-# Knowledge Graph Intelligence
+## 🛡️ Secure Autonomous Execution
 
-DarkCode maintains a continuously evolving understanding of the environment.
+Powerful automation requires uncompromising security. DarkCode implements rigid boundaries to ensure safe execution:
 
-The Knowledge Graph can represent:
-
-* files
-* packages
-* functions
-* APIs
-* dependencies
-* relationships
-* workflows
-* solutions
-* project architecture
-
-The graph helps DarkCode:
-
-* understand projects faster
-* retrieve relevant information
-* reduce unnecessary LLM calls
-* improve reasoning quality
+* Capability-based access
+* Strict tool validation
+* Hardened execution controls
+* Configurable permission boundaries
 
 ---
 
-# Hybrid RAG System
+## 🖥️ Interfaces
 
-DarkCode combines retrieval techniques:
+### Web UI
+<div align="center">
+  <img src="docs/images/gui.png" alt="DarkCode Web UI" width="100%">
+</div>
 
-* semantic search
-* keyword search
-* graph-based retrieval
-* relevance scoring
-* context compression
+A comprehensive control center featuring AI conversations, agent monitoring, visual execution tracking, memory inspection, and deep Knowledge Graph visibility.
 
-The objective is simple:
-
-> Give the model the right information, not more information.
-
-Benefits:
-
-* smaller prompts
-* lower cost
-* faster inference
-* improved accuracy
-
----
-
-# Continuous Knowledge Improvement
-
-Every meaningful interaction can improve the system.
-
-DarkCode is designed to enhance:
-
-* memory
-* retrieval quality
-* Knowledge Graph information
-* project understanding
-* workflow knowledge
-
-Over time:
-
-```
-More Usage
-
-      ↓
-
-More Knowledge
-
-      ↓
-
-Better Retrieval
-
-      ↓
-
-Fewer LLM Calls
-
-      ↓
-
-Lower Cost
-```
-
----
-
-# Secure Autonomous Execution
-
-Autonomous agents require controlled permissions.
-
-DarkCode provides:
-
-* capability-based access
-* tool validation
-* execution controls
-* safety boundaries
-* configurable permissions
-
-The goal:
-
-Enable powerful automation without uncontrolled system access.
-
----
-
-# Interfaces
-
-## Web UI
-
-<p align="center">
-<img src="docs/images/gui.png" alt="DarkCode Web UI" width="100%">
-</p>
-
-The Web UI provides a complete control environment:
-
-Features:
-
-* AI conversations
-* project workspace interaction
-* agent monitoring
-* execution visualization
-* memory inspection
-* Knowledge Graph visibility
-* model configuration
-* workflow tracking
-
----
-
-# Command Line Interface
-
-DarkCode includes a CLI for developers and automation workflows.
-
-CLI capabilities:
-
-* start agent tasks
-* configure models
-* manage settings
-* automate workflows
-* integrate into development environments
-
-Examples:
-
-Start Web UI:
+### Command Line Interface
+Built for power users and CI/CD pipelines. Start tasks, configure models, and automate workflows directly from your terminal.
 
 ```bash
-darkcode --gui
-```
+# Launch the Web GUI
+$ darkcode --gui
 
-Run CLI:
-
-```bash
-darkcode
-```
-
----
-
-# Release Packages
-
-DarkCode provides ready-to-use binaries.
-
-Supported platforms:
-
-| Platform            | Package | Interface    |
-| ------------------- | ------- | ------------ |
-| Windows             | `.exe`  | Web UI + CLI |
-| Linux Debian/Ubuntu | `.deb`  | Web UI + CLI |
-
-Download from GitHub Releases.
-
----
-
-# Installation
-
-## Windows
-
-Download:
-
-```
-darkcode.exe
-```
-
-Run:
-
-```bash
-darkcode.exe --gui
-```
-
-CLI:
-
-```bash
-darkcode.exe
+# Run the standard CLI
+$ darkcode
 ```
 
 ---
 
-## Linux
+## 🚀 Installation & Releases
 
-Download:
+DarkCode provides native, ready-to-use binaries for seamless deployment.
 
+| Platform | Package | Interface |
+| :--- | :--- | :--- |
+| **Windows** | `.exe` | Web UI + CLI |
+| **Linux (Debian/Ubuntu)** | `.deb` | Web UI + CLI |
+
+### Quick Start
+
+**Windows:**
+```powershell
+.\darkcode.exe --gui
 ```
-darkcode.deb
-```
 
-Install:
-
+**Linux:**
 ```bash
 sudo apt install ./darkcode.deb
-```
-
-Launch:
-
-```bash
 darkcode --gui
 ```
 
-CLI:
+---
 
-```bash
-darkcode
-```
+## 🛠️ Technology Stack
+
+| Layer | Technology |
+| :--- | :--- |
+| **Language** | Go (Golang) |
+| **Agent Runtime** | Custom Modular Orchestration Engine |
+| **Models** | Local (llama.cpp compatible) + Cloud LLMs |
+| **Memory** | Native Go Memory Architecture |
+| **Retrieval** | Hybrid RAG Engine |
+| **Intelligence** | Dynamic Knowledge Graph |
+| **Execution** | Secure Tool Runtime Sandbox |
 
 ---
 
-# Technology Stack
+## 🗺️ Roadmap
 
-| Layer              | Technology                    |
-| ------------------ | ----------------------------- |
-| Language           | Go                            |
-| Agent Runtime      | Modular orchestration engine  |
-| Models             | Local + Cloud LLMs            |
-| Local Inference    | llama.cpp compatible models   |
-| Memory             | Native Go memory architecture |
-| Retrieval          | Hybrid RAG                    |
-| Intelligence Layer | Knowledge Graph               |
-| Interface          | Web UI + CLI                  |
-| Execution          | Secure Tool Runtime           |
+**Current Focus:**
+* Agent orchestration & local LLM optimization
+* RAG improvements & Knowledge Graph reasoning
+* Tool reliability & cost minimization
+
+**Future Horizons:**
+* Advanced procedural memory & self-learning
+* Autonomous debugging & distributed agents
+* Enterprise-scale deployment collaboration
 
 ---
 
-# Roadmap
+## 🤝 Contributing
 
-## Current Focus
-
-* Agent orchestration
-* Local LLM optimization
-* Memory intelligence
-* Knowledge Graph reasoning
-* RAG improvements
-* Tool reliability
-* Cost optimization
-
-## Future Development
-
-* Advanced self-learning workflows
-* Procedural memory
-* Autonomous debugging
-* Distributed agents
-* Enterprise deployment
-* Agent collaboration
-* Continuous optimization
+DarkCode is evolving rapidly. We are actively looking for contributors passionate about:
+* Autonomous AI agents
+* LLM optimization & memory systems
+* Knowledge Graphs & AI infrastructure
 
 ---
 
-# Contributing
+## ⚖️ License
 
-DarkCode is actively evolving.
+DarkCode is proudly open-source, released under the **GNU General Public License v3.0 (GPL-3.0)**. 
 
-Areas of interest:
-
-* autonomous agents
-* LLM optimization
-* memory systems
-* retrieval systems
-* Knowledge Graphs
-* AI infrastructure
-* developer tooling
+You are free to use, study, modify, and distribute this software, provided all derivative works remain under the GPL-3.0 license. [Read the full license here](LICENSE).
 
 ---
 
-# License
+<div align="center">
 
+### Engineered by [Dark Neural Network](https://darkneuralnetwork.com)
+*Building the next generation of intelligent autonomous systems.*
 
-DarkCode is released under the **GNU General Public License v3.0 (GPL-3.0)**.
+🌐 [Website](https://darkneuralnetwork.com) &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Star on GitHub &nbsp;&nbsp;•&nbsp;&nbsp; 🤝 Join the Community
 
+*If DarkCode helps you build, automate, or explore the future of AI agents, consider supporting the project by contributing or sharing feedback.*
 
-This means:
+**DarkCode is not just an assistant. It is a foundation for building intelligent systems.**
 
-- You are free to use the software.
-- You are free to study and modify the source code.
-- You are free to distribute modified versions.
-- Any distributed derivative work must also remain under GPL-3.0.
-
-
-See the full license:
-
-[GNU General Public License v3.0](LICENSE)
-
----
-
-<p align="center">
-
-Built by
-
-<b>Dark Neural Network</b>
-
-</p>
+</div>
