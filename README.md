@@ -389,19 +389,6 @@ If installed using releases, download and replace the previous binary with the n
 
 ---
 
-## 🛠️ Technology Stack
-
-| Layer             | Technology                                |
-| :---------------- | :---------------------------------------- |
-| **Language**      | Go (Golang)                               |
-| **Agent Runtime** | Custom Modular Orchestration Engine       |
-| **Models**        | Local (llama.cpp compatible) + Cloud LLMs |
-| **Memory**        | Native Go Memory Architecture             |
-| **Retrieval**     | Hybrid RAG Engine                         |
-| **Intelligence**  | Dynamic Knowledge Graph                   |
-| **Execution**     | Secure Tool Runtime Sandbox               |
-
----
 
 ## 🛠️ Technology Stack
 
