@@ -2,7 +2,7 @@
 
 <img src="docs/images/cli.png" alt="DarkCode AI Agent Platform" width="100%">
 
-#DarkCode
+# DarkCode
 
 **Next-Generation Autonomous AI Agent Platform**
 
