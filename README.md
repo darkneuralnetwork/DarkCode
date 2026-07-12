@@ -163,27 +163,243 @@ $ darkcode
 
 ---
 
-## 🚀 Installation & Releases
+## 🚀 Installation & Setup
 
-DarkCode provides native, ready-to-use binaries for seamless deployment.
+DarkCode supports multiple installation methods depending on your use case. You can either download a ready-to-use release binary or build the platform directly from source.
 
-| Platform | Package | Interface |
-| :--- | :--- | :--- |
-| **Windows** | `.exe` | Web UI + CLI |
-| **Linux (Debian/Ubuntu)** | `.deb` | Web UI + CLI |
+---
 
-### Quick Start
+## Option 1: Download Prebuilt Releases (Recommended)
 
-**Windows:**
+DarkCode provides native binaries for common platforms.
+
+| Platform                  | Package        | Interface       |
+| :------------------------ | :------------- | :-------------- |
+| **Windows**               | `.exe`         | Web UI + CLI    |
+| **Linux (Debian/Ubuntu)** | `.deb`         | Web UI + CLI    |
+| **Source Code**           | Git Repository | Developer Setup |
+
+Download the latest release from the project releases page and follow the platform-specific instructions below.
+
+---
+
+# Option 2: Install From Source (Git Clone)
+
+Building from source is recommended for developers, contributors, and users who want the latest features.
+
+## Requirements
+
+Before installing DarkCode, make sure you have:
+
+* Go **1.22+**
+* Git
+* A supported local LLM runtime (optional)
+* Linux, Windows, or macOS environment
+
+Verify your installation:
+
+```bash
+go version
+git --version
+```
+
+---
+
+## Clone the Repository
+
+```bash
+git clone https://github.com/Dark-Neural-Network/DarkCode.git
+
+cd DarkCode
+```
+
+---
+
+## Install Dependencies
+
+Download all Go dependencies:
+
+```bash
+go mod download
+```
+
+Verify the project:
+
+```bash
+go mod tidy
+```
+
+---
+
+## Build DarkCode
+
+Build the executable:
+
+```bash
+go build -o darkcode .
+```
+
+The binary will be generated as:
+
+```
+darkcode
+```
+
+Windows users:
+
+```
+darkcode.exe
+```
+
+---
+
+## Run DarkCode
+
+### Start Command Line Interface
+
+```bash
+./darkcode
+```
+
+Windows:
+
+```powershell
+.\darkcode.exe
+```
+
+---
+
+### Launch Web Interface
+
+```bash
+./darkcode --gui
+```
+
+Windows:
+
 ```powershell
 .\darkcode.exe --gui
 ```
 
-**Linux:**
+The DarkCode dashboard will start and provide access to:
+
+* AI conversations
+* Agent execution monitoring
+* Knowledge Graph inspection
+* Memory management
+* Workflow tracking
+
+---
+
+# Option 3: Linux Debian Installation
+
+Install the `.deb` package:
+
 ```bash
 sudo apt install ./darkcode.deb
+```
+
+After installation:
+
+```bash
 darkcode --gui
 ```
+
+DarkCode will be available globally from your terminal.
+
+---
+
+# Option 4: Windows Installation
+
+Download the latest Windows release:
+
+```
+darkcode.exe
+```
+
+Run:
+
+```powershell
+.\darkcode.exe --gui
+```
+
+No additional installation is required.
+
+---
+
+# First-Time Configuration
+
+On the first launch, DarkCode initializes:
+
+```
+✓ Agent Runtime
+✓ Memory System
+✓ Knowledge Graph
+✓ Tool Runtime
+✓ Model Router
+```
+
+Configure your preferred AI models through the DarkCode configuration file:
+
+```
+config/
+```
+
+or through the Web UI settings panel.
+
+---
+
+# Development Mode
+
+For contributors and developers:
+
+Run directly without building:
+
+```bash
+go run .
+```
+
+Run Web UI mode:
+
+```bash
+go run . --gui
+```
+
+Run tests:
+
+```bash
+go test ./...
+```
+
+---
+
+# Updating DarkCode
+
+If installed from source:
+
+```bash
+git pull
+
+go mod download
+
+go build -o darkcode .
+```
+
+If installed using releases, download and replace the previous binary with the newest version.
+
+---
+
+## 🛠️ Technology Stack
+
+| Layer             | Technology                                |
+| :---------------- | :---------------------------------------- |
+| **Language**      | Go (Golang)                               |
+| **Agent Runtime** | Custom Modular Orchestration Engine       |
+| **Models**        | Local (llama.cpp compatible) + Cloud LLMs |
+| **Memory**        | Native Go Memory Architecture             |
+| **Retrieval**     | Hybrid RAG Engine                         |
+| **Intelligence**  | Dynamic Knowledge Graph                   |
+| **Execution**     | Secure Tool Runtime Sandbox               |
 
 ---
 
