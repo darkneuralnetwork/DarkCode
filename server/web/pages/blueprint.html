@@ -1,0 +1,73 @@
+<div class="blueprint-layout" style="display: flex; width: 100%; height: 100%; overflow: hidden; background: var(--bg-void); padding: 24px; flex-direction: column; gap: 24px;">
+
+  <div style="display: flex; justify-content: space-between; align-items: center;">
+    <h2 class="gradient-text" style="margin: 0; font-size: 24px;">Blueprint</h2>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn-glow" id="blueprint-refresh">Refresh</button>
+      <button class="btn-glow max-btn" data-target="blueprint-layout">⛶ Maximize</button>
+    </div>
+  </div>
+
+  <!-- TOP ROW: Project Workspace (moved from Cognition tab) -->
+  <div class="glass-panel" id="bp-projects-panel" style="padding: 20px; display: flex; flex-direction: column; max-height: 320px; flex-shrink: 0;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">📁 Project Workspace</h3>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn-glow" id="proj-refresh" style="padding: 4px 10px; font-size: 11px;">Reload</button>
+        <button class="btn-glow primary" id="proj-new" style="padding: 4px 10px; font-size: 11px;">+ New</button>
+        <button class="fe-btn max-btn" data-target="bp-projects-panel">⛶</button>
+      </div>
+    </div>
+    <div class="proj-grid" id="proj-grid" style="flex: 1; overflow-y: auto;"></div>
+  </div>
+
+  <!-- PLAN + WORKFLOW BOARD (catchy, real-time, task tracking) -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; flex: 1; overflow: hidden;">
+
+    <!-- Implementation Plan -->
+    <div class="glass-panel" style="display: flex; flex-direction: column; overflow: hidden;">
+      <div class="fe-header" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 16px 20px; display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="fe-title" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-1);">Implementation Plan & Architecture</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="bp-progress-label" id="plan-progress-label" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-mute);">0/0</span>
+            <button class="btn-glow" id="plan-regenerate" style="padding: 3px 9px; font-size: 10px;">↻ Regenerate</button>
+            <button class="fe-btn max-btn" data-target="workflow-plan-container">⛶</button>
+          </div>
+        </div>
+        <div class="bp-progress-track" style="height: 6px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden;">
+          <div class="bp-progress-fill" id="plan-progress-fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--green)); border-radius: 4px; transition: width 0.4s var(--ease);"></div>
+        </div>
+      </div>
+      <div class="workflow-container custom-scrollbar" id="workflow-plan-container" style="padding: 20px; flex: 1; overflow-y: auto;">
+        <div id="workflow-plan-view" class="bp-board" data-kind="plan" style="font-size: 13px; line-height: 1.6;">
+          <p style="color: var(--text-mute);"><i>Awaiting plan generation...</i></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Architecture & Workflow -->
+    <div class="glass-panel" style="display: flex; flex-direction: column; overflow: hidden;">
+      <div class="fe-header" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 16px 20px; display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="fe-title" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-3);">Task Workflow</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="bp-progress-label" id="workflow-progress-label" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-mute);">0/0</span>
+            <button class="btn-glow" id="workflow-regenerate" style="padding: 3px 9px; font-size: 10px;">↻ Regenerate</button>
+            <button class="fe-btn max-btn" data-target="workflow-arch-container">⛶</button>
+          </div>
+        </div>
+        <div class="bp-progress-track" style="height: 6px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden;">
+          <div class="bp-progress-fill" id="workflow-progress-fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent-3), var(--cyan)); border-radius: 4px; transition: width 0.4s var(--ease);"></div>
+        </div>
+      </div>
+      <div class="workflow-container custom-scrollbar" id="workflow-arch-container" style="padding: 20px; flex: 1; overflow-y: auto;">
+        <div id="workflow-arch-view" class="bp-board" data-kind="workflow" style="font-size: 13px; line-height: 1.6;">
+          <p style="color: var(--text-mute);"><i>Awaiting workflow extraction...</i></p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>

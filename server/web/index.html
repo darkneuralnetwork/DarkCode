@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DarkCode OS</title>
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/css/animations.css" />
+  <link rel="stylesheet" href="/css/layout.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
+  <script>
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+    }
+  </script>
+  <link rel="icon" href="./favicon.ico">
+</head>
+<body>
+  <!-- ═══ Splash Screen ═══ -->
+  <div id="splash">
+    <pre class="splash-logo"> ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ██████╗ ██████╗ ███████╗
+ ██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔════╝██╔═══██╗██╔══██╗██╔════╝
+ ██║  ██║███████║██████╔╝█████╔╝ ██║     ██║   ██║██║  ██║█████╗
+ ██║  ██║██╔══██║██╔══██╗██╔═██╗ ██║     ██║   ██║██║  ██║██╔══╝
+ ██████╔╝██║  ██║██║  ██║██║  ██╗╚██████╗╚██████╔╝██████╔╝███████╗
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝</pre>
+    <div class="splash-title">DarkCode System</div>
+    <div class="splash-sub">Enterprise AI Developer Platform</div>
+    <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+    <div class="splash-status" id="splash-status">Initializing kernel…</div>
+  </div>
+
+  <!-- ═══ Ambient Background ═══ -->
+  <div class="ambient-bg"></div>
+  <div class="ambient-grid"></div>
+  <div class="ambient-blob blob-1"></div>
+  <div class="ambient-blob blob-2"></div>
+  <div class="ambient-blob blob-3"></div>
+
+  <div id="app" class="glass-container">
+    <!-- ═══ Unified Header (brand + horizontal nav + right cluster) ═══ -->
+    <header class="app-header glass-panel">
+      <div class="brand brand-compact">
+        <img src="/logo.ico" alt="DarkCode Logo" style="height: 36px; width: auto; object-fit: contain; border-radius: 4px;" />
+      </div>
+
+      <!-- Section dropdown: trigger shows the active section; click opens a
+           grouped menu of all sections. -->
+      <div class="nav-dropdown" id="nav-dropdown">
+        <button class="nav-dropdown-trigger" id="nav-dropdown-btn" type="button"
+                aria-haspopup="true" aria-expanded="false" title="Switch section">
+          <span class="nav-dropdown-icon" id="nav-dropdown-icon">💬</span>
+          <span class="nav-dropdown-label" id="nav-dropdown-label">Nexus (Chat & Workspace)</span>
+          <span class="nav-dropdown-caret">▾</span>
+        </button>
+        <div class="nav-dropdown-menu custom-scrollbar" id="nav-dropdown-menu" hidden>
+          <div class="nav-dropdown-group">
+            <div class="nav-dropdown-group-label">Nexus</div>
+            <button class="nav-dropdown-item active" data-tab="nexus" data-ico="⚡">⚡ Chat & Workspace</button>
+            <button class="nav-dropdown-item" data-tab="blueprint" data-ico="📐">📐 Blueprint (Plan & Workflow)</button>
+            <button class="nav-dropdown-item" data-tab="registry" data-ico="🔧">🔧 Tool Registry</button>
+          </div>
+          <div class="nav-dropdown-group">
+            <div class="nav-dropdown-group-label">Observability</div>
+            <button class="nav-dropdown-item" data-tab="telemetry" data-ico="📊">📊 Telemetry <span class="nav-badge" id="evt-badge" hidden>0</span></button>
+          </div>
+          <div class="nav-dropdown-group">
+            <div class="nav-dropdown-group-label">System</div>
+            <button class="nav-dropdown-item" data-tab="config" data-ico="⚙️">⚙️ Configurations</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="loop-indicator" id="loop-indicator" title="Agentic Loop (ReAct) — toggle in Configurations" hidden>
+          <span class="loop-ico">🔁</span>
+          <span class="loop-label">Loop</span>
+        </div>
+        <div class="live-meters" id="live-meters">
+          <div class="meter"><span class="meter-ico">🪙</span><span class="meter-val" id="meter-tokens">0</span><span class="meter-lbl">tok</span></div>
+          <div class="meter"><span class="meter-ico">💲</span><span class="meter-val" id="meter-cost">$0.00</span><span class="meter-lbl">cost</span></div>
+          <div class="meter"><span class="meter-ico">📡</span><span class="meter-val" id="meter-reqs">0</span><span class="meter-lbl">reqs</span></div>
+        </div>
+        <div class="model-switcher" id="model-switcher" title="Switch primary model (hot-reload)">
+          <span class="model-switcher-label">Model</span>
+          <select id="model-select"></select>
+        </div>
+        <div class="badges" id="badges"></div>
+        <div class="conn" id="conn-indicator" title="Connection status">
+          <span class="conn-dot"></span>
+          <span class="conn-label">Connecting…</span>
+        </div>
+        <div class="kbd-hint" id="cmdk-hint" title="Open command palette">
+          <span class="kbd">⌘K</span>
+        </div>
+        <button type="button" id="chat-switch-cli" class="cli-btn" title="Switch to CLI">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          CLI
+        </button>
+      </div>
+    </header>
+
+    <!-- ═══ Page title breadcrumb (slim sub-row) ═══ -->
+    <div class="page-title-bar" style="display: none;">
+      <h2 id="page-title" class="gradient-text">Nexus (Chat & Workspace)</h2>
+    </div>
+
+    <!-- ═══ Main ═══ -->
+    <main class="main">
+      <div class="content">
+        <section class="tab-panel active fade-in" id="tab-nexus" data-src="/pages/nexus.html"></section>
+        <section class="tab-panel fade-in" id="tab-blueprint" data-src="/pages/blueprint.html"></section>
+        <section class="tab-panel fade-in" id="tab-registry" data-src="/pages/registry.html"></section>
+        <section class="tab-panel fade-in" id="tab-telemetry" data-src="/pages/telemetry.html"></section>
+        <section class="tab-panel fade-in" id="tab-config" data-src="/pages/config.html"></section>
+      </div>
+    </main>
+  </div>
+
+  <!-- ═══ Command Palette ═══ -->
+  <div id="cmd-palette">
+    <div class="cmd-box">
+      <div class="cmd-input-wrap">
+        <span>▸</span>
+        <input type="text" class="cmd-input" id="cmd-input" placeholder="Type a command or search…" autocomplete="off" />
+      </div>
+      <div class="cmd-results" id="cmd-results"></div>
+    </div>
+  </div>
+
+  <!-- ═══ Permission Popup ═══ -->
+  <!-- Shown when a dangerous tool call needs the user's approval. The -->
+  <!-- orchestrator blocks until a button is clicked (or the request times out). -->
+  <div class="perm-overlay" id="perm-overlay">
+    <div class="perm-modal">
+      <div class="perm-header">
+        <span class="perm-icon">⚠</span>
+        <span class="perm-title">Permission Required</span>
+        <span class="perm-risk" id="perm-risk">medium risk</span>
+      </div>
+      <div class="perm-body">
+        <div class="perm-tool-row">
+          <span class="perm-label">Tool</span>
+          <span class="perm-tool" id="perm-tool">—</span>
+        </div>
+        <div class="perm-summary" id="perm-summary"></div>
+        <pre class="perm-preview" id="perm-preview"></pre>
+        <!-- Optional in-between feedback: the user can attach a free-form steer
+             (e.g. "use /tmp instead of /var") that flows back to the agent via
+             the tool-result channel so it adapts mid-execution. -->
+        <textarea class="perm-feedback" id="perm-feedback" rows="2" placeholder="Optional feedback for the agent (e.g. use /tmp instead)…"></textarea>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-once" id="perm-allow-once">✓ Allow Once</button>
+        <button class="perm-btn perm-allow-session" id="perm-allow-session">✓✓ Allow for Session</button>
+        <button class="perm-btn perm-deny" id="perm-deny">✗ Deny</button>
+      </div>
+      <div class="perm-hint" id="perm-hint">The agent is waiting for your decision…</div>
+    </div>
+  </div>
+
+  <!-- ═══ Global Modals ═══ -->
+  <!-- Maximize Panel Modal -->
+  <div class="perm-overlay" id="maximize-modal" style="display: none; z-index: 10000; align-items: center; justify-content: center;">
+    <div class="perm-modal" style="width: 90vw; height: 90vh; max-width: 1400px; max-height: 1000px; display: flex; flex-direction: column;">
+      <div class="perm-header" style="justify-content: space-between;">
+        <div>
+          <span class="perm-icon">⛶</span>
+          <span class="perm-title" id="maximize-modal-title">Maximized View</span>
+        </div>
+        <button class="btn-glow btn-xs" id="maximize-close-btn">Close</button>
+      </div>
+      <div class="perm-body" id="maximize-modal-body" style="flex: 1; padding: 20px; overflow: auto; background: var(--bg-void);">
+        <!-- Content will be cloned here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- File Viewer Modal -->
+  <div class="perm-overlay" id="file-viewer-modal" style="display: none; z-index: 10001; align-items: center; justify-content: center;">
+    <div class="perm-modal" style="width: 80vw; height: 80vh; max-width: 1000px; display: flex; flex-direction: column;">
+      <div class="perm-header" style="justify-content: space-between;">
+        <div>
+          <span class="perm-icon">📄</span>
+          <span class="perm-title" id="file-viewer-title">file.txt</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-glow btn-xs" id="file-viewer-min-btn">Minimize</button>
+          <button class="btn-glow btn-xs danger" id="file-viewer-close-btn">Close</button>
+        </div>
+      </div>
+      <div class="perm-body" style="flex: 1; padding: 0; display: flex; flex-direction: column; overflow: hidden; background: #1e1e1e;">
+        <pre id="file-viewer-content" class="custom-scrollbar" style="margin: 0; padding: 16px; overflow: auto; flex: 1; font-family: 'Fira Code', monospace; font-size: 13px; color: #d4d4d4;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Toast Container ═══ -->
+  <div id="toast-container"></div>
+
+  <!-- ═══ Project modals (top-level so they render from any tab) ═══ -->
+  <!-- New / Edit project modal -->
+  <div class="perm-overlay" id="proj-modal">
+    <div class="perm-modal" style="max-width:560px">
+      <div class="perm-header">
+        <span class="perm-icon">📁</span>
+        <span class="perm-title" id="proj-modal-title">New Project</span>
+      </div>
+      <div class="perm-body" style="padding:18px 20px">
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-name">Name</label>
+          <input class="proj-input" id="pf-name" type="text" placeholder="e.g. DarkCode GUI" autocomplete="off" />
+        </div>
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-desc">Description</label>
+          <input class="proj-input" id="pf-desc" type="text" placeholder="What is this project?" autocomplete="off" />
+        </div>
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-path">Working Directory</label>
+          <div style="display:flex; gap:8px;">
+            <input class="proj-input" id="pf-path" type="text" placeholder="/path/to/project (optional)" autocomplete="off" style="flex:1" />
+            <button class="btn-glow btn-xs" id="proj-browse-btn" type="button">Browse</button>
+          </div>
+        </div>
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-tags">Tags</label>
+          <input class="proj-input" id="pf-tags" type="text" placeholder="go, web, ai (comma-separated)" autocomplete="off" />
+        </div>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-session" id="proj-save">Save</button>
+        <button class="perm-btn perm-deny" id="proj-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Directory Picker Modal -->
+  <div class="perm-overlay" id="dir-picker-modal">
+    <div class="perm-modal" style="max-width:600px; width:90%; display:flex; flex-direction:column; max-height:80vh;">
+      <div class="perm-header" style="justify-content:space-between">
+        <div>
+          <span class="perm-icon">📁</span>
+          <span class="perm-title">Select Directory</span>
+        </div>
+        <button class="btn-glow btn-xs" id="dir-picker-new-btn">New Folder</button>
+      </div>
+      <div class="perm-body" style="padding:0; display:flex; flex-direction:column; overflow:hidden; flex:1">
+        <div class="dir-picker-path" id="dir-picker-breadcrumbs">
+          <!-- populated dynamically -->
+        </div>
+        <div class="dir-picker-new-row" id="dir-picker-new-row" style="display:none; padding:10px 15px; background:var(--bg-panel); border-bottom:1px solid var(--border-light);">
+          <div style="display:flex; gap:8px;">
+            <input type="text" id="dir-picker-new-input" class="glass-input" placeholder="New folder name" style="flex:1; padding:6px 10px; font-size:13px;" autocomplete="off" />
+            <button class="btn-glow btn-xs primary" id="dir-picker-create-btn">Create</button>
+            <button class="btn-glow btn-xs" id="dir-picker-cancel-new-btn">Cancel</button>
+          </div>
+        </div>
+        <div class="dir-picker-list custom-scrollbar" id="dir-picker-list" style="overflow-y:auto; flex:1; padding:10px 0;">
+          <!-- populated dynamically -->
+        </div>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-once" id="dir-picker-select">Select This Directory</button>
+        <button class="perm-btn perm-deny" id="dir-picker-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context editor modal -->
+  <div class="perm-overlay" id="ctx-modal">
+    <div class="perm-modal" style="max-width:760px">
+      <div class="perm-header">
+        <span class="perm-icon">📝</span>
+        <span class="perm-title" id="ctx-modal-title">Project Context</span>
+      </div>
+      <div class="perm-body" style="padding:14px 20px">
+        <div class="perm-tool-row" id="ctx-meta"></div>
+        <div style="font-size:11px;color:var(--text-mute);margin-bottom:6px">
+          Markdown context for this project. When active, this is injected into the agent's prompt.
+        </div>
+        <textarea class="proj-context-editor" id="ctx-body" placeholder="# Project Context&#10;&#10;Describe the project, key files, conventions, current goals..."></textarea>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-once" id="ctx-rewrite" title="Rewrite context with local LLM" style="background:var(--blue);color:var(--bg-deep)">Rewrite</button>
+        <div style="flex:1"></div>
+        <button class="perm-btn perm-allow-once" id="ctx-set-active">Set Active &amp; Save</button>
+        <button class="perm-btn perm-allow-session" id="ctx-save">Save</button>
+        <button class="perm-btn perm-deny" id="ctx-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLI Switching Modal -->
+  <div class="perm-overlay" id="cli-modal">
+    <div class="perm-modal" style="max-width:500px; text-align:center;">
+      <div class="perm-header" style="justify-content:center">
+        <span class="perm-title">DarkCode is Running in Terminal</span>
+      </div>
+      <div class="perm-body" style="padding:30px 20px">
+        <p>The orchestrator has successfully resumed execution in your CLI prompt.</p>
+        <p style="color:var(--text-mute); margin-top:10px;">You can safely close this browser window or return to the terminal to continue.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Frontend modules (loaded in dependency order). app.js is now a thin
+       loader doc; the logic lives in /js/*.js. Zero build step — go:embed
+       web/* embeds these verbatim. Cache-busting ?v=8 forces a reload after
+       a binary rebuild (the server also sends no-store). -->
+  <script src="/js/00-core.js?v=8"></script>
+  <script src="/js/10-sse.js?v=8"></script>
+  <script src="/js/20-approvals.js?v=8"></script>
+  <script src="/js/30-tokens.js?v=8"></script>
+  <script src="/js/40-events.js?v=8"></script>
+  <script src="/js/50-chat.js?v=8"></script>
+  <script src="/js/60-filetree.js?v=8"></script>
+  <script src="/js/70-attachments.js?v=8"></script>
+  <script src="/js/80-tools.js?v=8"></script>
+  <script src="/js/90-memory.js?v=8"></script>
+  <script src="/js/100-projects.js?v=8"></script>
+  <script src="/js/110-status.js?v=8"></script>
+  <script src="/js/120-metrics.js?v=8"></script>
+  <script src="/js/130-config.js?v=8"></script>
+  <script src="/js/140-ui.js?v=8"></script>
+  <script src="/js/150-events.js?v=8"></script>
+  <script src="/js/160-widgets.js?v=8"></script>
+  <script src="/js/170-init.js?v=8"></script>
+  <script src="/js/180-dirpicker.js?v=8"></script>
+  <script src="/js/190-model-fetch.js?v=8"></script>
+  <script src="/js/220-v2.js?v=8"></script>
+  <script src="/js/230-tail.js?v=8"></script>
+  <script src="/app.js?v=8"></script>
+</body>
+</html>

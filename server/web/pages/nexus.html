@@ -1,0 +1,120 @@
+<div class="studio-layout" style="display: flex; width: 100%; height: 100%; overflow: hidden; background: var(--bg-void);">
+  
+  <!-- LEFT PANE: Workspace -->
+  <div class="studio-pane-left" style="width: 320px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-panel); overflow: hidden;">
+    
+    <!-- FILE EXPLORER -->
+    <div style="flex: 1; display: flex; flex-direction: column; min-height: 100%;">
+      <div class="fe-header" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 12px 16px;">
+        <span class="fe-title" style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim);">Live Workspace</span>
+        <div class="fe-actions">
+          <button class="fe-btn xs" id="fe-switch-ws" title="Switch workspace">⇄</button>
+          <button class="fe-btn xs" id="fe-refresh" title="Refresh">↻</button>
+        </div>
+      </div>
+      <div class="fe-cwd" id="fe-cwd" title="Current working directory" style="font-size: 10px; color: var(--accent-3); background: rgba(255,145,0,0.05);">…</div>
+      <div class="fe-tree custom-scrollbar" id="fe-tree" style="flex: 1; padding: 8px;">
+        <div class="fe-empty">Loading workspace…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER PANE: Chat -->
+  <div class="studio-pane-center chat-main" style="flex: 1; display: flex; flex-direction: column; background: var(--bg-deep); position: relative;">
+    <div class="chat-toolbar" style="padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05);">
+      <div style="font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.9); display: flex; align-items: center; gap: 8px;">
+        <span style="color: var(--accent-3);">✦</span> DarkCode Orchestrator
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button type="button" id="reopen-approval-btn" class="ct-btn notification-btn" title="Pending Approval: Click to Review" style="display: none; color: #ff9100;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </button>
+        <button type="button" id="chat-clear" class="ct-btn" title="Clear Screen (Ctrl+L)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+        <button type="button" id="chat-new" class="ct-btn" title="New Session">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- EXECUTION STATUS BAR -->
+    <div class="exec-status-bar" id="exec-status-bar" hidden>
+      <div class="exec-pipeline" id="exec-pipeline">
+        <div class="exec-stage" data-stage="planning"><span class="exec-stage-dot"></span><span class="exec-stage-label">Plan</span></div>
+        <div class="exec-stage" data-stage="retrieval"><span class="exec-stage-dot"></span><span class="exec-stage-label">Retrieve</span></div>
+        <div class="exec-stage" data-stage="compression"><span class="exec-stage-dot"></span><span class="exec-stage-label">Compress</span></div>
+        <div class="exec-stage" data-stage="tools"><span class="exec-stage-dot"></span><span class="exec-stage-label">Tools</span></div>
+        <div class="exec-stage" data-stage="execution"><span class="exec-stage-dot"></span><span class="exec-stage-label">Execute</span></div>
+        <div class="exec-stage" data-stage="verification"><span class="exec-stage-dot"></span><span class="exec-stage-label">Verify</span></div>
+        <div class="exec-stage" data-stage="reflection"><span class="exec-stage-dot"></span><span class="exec-stage-label">Reflect</span></div>
+        <div class="exec-stage" data-stage="completion"><span class="exec-stage-dot"></span><span class="exec-stage-label">Done</span></div>
+      </div>
+      <div class="exec-metrics" id="exec-metrics">
+        <div class="exec-metric"><span class="exec-metric-label">Tokens</span><span class="exec-metric-value" id="exec-tokens">0</span></div>
+        <div class="exec-metric"><span class="exec-metric-label">Time</span><span class="exec-metric-value" id="exec-duration">0.0s</span></div>
+      </div>
+      <!-- The global "View/Hide Execution Details" toggle was removed (Fix D).
+           Each response now carries its own collapsible execution-detail
+           toggle just below it (attached by 220-v2.js attachExecDetails). -->
+    </div>
+
+    <div class="chat-messages custom-scrollbar" id="chat-messages" style="flex: 1; padding: 24px;">
+      <div class="chat-empty">
+        <div class="chat-empty-icon pulse-anim">⚡</div>
+        <h3>Welcome to Nexus</h3>
+        <p>Advanced enterprise orchestration. Type a message to command the kernel.</p>
+        <div class="feature-pills">
+          <span class="pill">7-Layer Pipeline</span>
+          <span class="pill">Self-Verification</span>
+          <span class="pill">Live Workspace</span>
+        </div>
+      </div>
+    </div>
+
+    <form class="chat-input glass-panel" id="chat-form" style="margin: 0 24px 24px;">
+      <div class="attach-tray" id="attach-tray"></div>
+      <input type="hidden" id="chat-mode-value" value="project">
+      <div class="chat-input-row" style="position: relative;">
+        <div style="position: relative; display: flex; align-items: center; padding-left: 12px; opacity: 0.7;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <textarea id="chat-text" placeholder="Command the orchestrator kernel…  (type @ to attach a file or folder)" rows="1" autocomplete="off"></textarea>
+        <div class="chat-input-actions">
+          <button type="button" id="chat-attach" class="chat-input-btn" title="Attach context (@)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <button type="submit" id="chat-send" title="Send (Enter)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="chat-input-hints" style="display: flex; gap: 16px; font-size: 11px; color: var(--text-mute); padding-left: 38px; margin-top: 8px;">
+        <span><kbd>Enter</kbd> to Send</span>
+        <span><kbd>Shift + Enter</kbd> for New Line</span>
+        <span><kbd>@</kbd> to Attach Context</span>
+        <span><kbd>/</kbd> for Commands</span>
+      </div>
+    </form>
+  </div>
+
+</div>
+
+<!-- ATTACHMENT BROWSER / PREVIEW MODALS -->
+<div class="attach-browser" id="attach-browser" hidden></div>
+<div class="file-preview-modal" id="file-preview-modal" hidden>
+  <div class="fpm-content glass-panel">
+    <div class="fpm-header">
+      <div class="fpm-title-group">
+        <span class="fpm-icon" id="fpm-icon">📄</span>
+        <div><div class="fpm-title" id="fpm-title">file</div><div class="fpm-meta" id="fpm-meta"></div></div>
+      </div>
+      <div class="fpm-actions">
+        <button class="fe-btn" id="fpm-close" title="Close">✕</button>
+      </div>
+    </div>
+    <pre class="fpm-body custom-scrollbar" id="fpm-body"></pre>
+  </div>
+</div>

@@ -1,0 +1,217 @@
+<div class="telemetry-layout custom-scrollbar" style="display: flex; flex-direction: column; width: 100%; height: 100%; overflow-y: auto; background: var(--bg-void); padding: 24px;">
+  
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+    <h2 class="gradient-text" style="margin: 0; font-size: 24px;">Configurations</h2>
+    <div style="display: flex; gap: 12px; align-items: center;">
+      <span class="evt-live" id="cfg-live">● SYNCED</span>
+      <button class="btn-glow" id="config-refresh">Reload Config</button>
+    </div>
+  </div>
+
+  <div id="config-content" class="config-content custom-scrollbar" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
+
+    <!-- LEFT COLUMN -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+      
+      <!-- ═══ Models & Connection (merged: Connection Status + Add Model) ═══ -->
+      <div class="glass-panel" id="cfg-active-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">🔌 Models &amp; Connection</h3>
+        <!-- Segmented toggle: swaps between the two merged sub-sections.
+             Reuses the existing #cfg-active-grid and #provider-grid ids so
+             loadConfig/renderProviderGrid need no data-flow change (Fix H). -->
+        <div id="cfg-mc-toggle" style="display: flex; gap: 6px; background: rgba(0,0,0,0.2); padding: 5px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); margin: 16px 0 20px;">
+          <button type="button" class="cfg-mc-btn active" data-view="status" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">🟢 Connection Status</button>
+          <button type="button" class="cfg-mc-btn" data-view="add" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">⚡ Add Model</button>
+        </div>
+
+        <!-- Connection Status sub-section -->
+        <div id="cfg-mc-status" class="cfg-mc-view">
+          <p class="cfg-help" style="margin-bottom: 20px;">Live connection details for the active model. Switch the primary model via the topbar or the list below to update.</p>
+          <div class="s-grid" id="cfg-active-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div class="s-tile"><div class="s-tile-label">Model</div><div class="s-tile-value" id="ac-model">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Provider</div><div class="s-tile-value" id="ac-provider">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Base URL</div><div class="s-tile-value" id="ac-base-url" style="font-size: 11px; word-break: break-all;">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">API Key</div><div class="s-tile-value" id="ac-api-key">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Auth Scheme</div><div class="s-tile-value" id="ac-auth">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Context Length</div><div class="s-tile-value" id="ac-context">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Temperature</div><div class="s-tile-value" id="ac-temp">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Max Concurrent</div><div class="s-tile-value" id="ac-concurrent">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">UI Mode</div><div class="s-tile-value" id="ac-uimode">—</div></div>
+            <div class="s-tile"><div class="s-tile-label">Compress Context</div><div class="s-tile-value" id="ac-compress">—</div></div>
+          </div>
+        </div>
+
+        <!-- Add Model sub-section -->
+        <div id="cfg-mc-add" class="cfg-mc-view" style="display: none;">
+          <p class="cfg-help" style="margin-bottom: 20px;">Pick a provider below to configure a new model. Tiers are resolved automatically.</p>
+          <div id="provider-grid" class="provider-grid" style="margin-bottom: 0;"></div>
+        </div>
+      </div>
+
+      <!-- ═══ Registered Models ═══ -->
+      <div class="glass-panel" style="padding: 24px; display: flex; flex-direction: column;">
+        <h3 class="cfg-h3" style="margin-top: 0;">📑 Registered Models</h3>
+        <p class="cfg-help">Registered models are saved to your configuration and hot-reloaded instantly.</p>
+        <div id="models-list" class="models-list custom-scrollbar" style="margin-top: 16px; flex: 1; min-height: 0; max-height: 60vh; overflow-y: auto; padding-right: 8px;"></div>
+      </div>
+      
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+      
+      <!-- ═══ Global Settings ═══ -->
+      <div class="glass-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">⚙️ Engine Configuration</h3>
+        
+        <form id="config-settings-form" class="cfg-form" style="display: flex; flex-direction: column; gap: 16px; margin-top: 16px;">
+          <div class="cfg-field" style="margin-bottom: 0;">
+            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Routing Mode</label>
+            <select id="cfg-routing" class="custom-select">
+              <option value="single">Single Agent</option>
+              <option value="escalation">Escalation (Fallback)</option>
+              <option value="consensus">Consensus (Multi-Agent)</option>
+            </select>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">Escalation routes tasks dynamically between fast and reasoning models based on complexity.</div>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="cfg-field" style="margin-bottom: 0;">
+              <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Safety Level</label>
+              <select id="cfg-safety" class="custom-select">
+                <option value="relaxed">Relaxed</option>
+                <option value="normal">Normal</option>
+                <option value="strict">Strict</option>
+              </select>
+            </div>
+            <div class="cfg-field" style="margin-bottom: 0;">
+              <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Max Turns</label>
+              <input type="number" id="cfg-max-turns" class="glass-input" value="50">
+            </div>
+          </div>
+
+          <div class="cfg-field" style="margin-bottom: 0;">
+            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Context Compressor Model</label>
+            <select id="cfg-compressor-model" class="custom-select">
+              <option value="">(primary model)</option>
+            </select>
+          </div>
+          
+          <button type="submit" class="btn-glow primary" style="width: 100%; margin-top: 8px;">Update Settings</button>
+        </form>
+      </div>
+
+      <!-- ═══ Execution Profile ═══ -->
+      <div class="glass-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">⚡ Execution Profile</h3>
+        <p class="cfg-desc" style="margin-bottom: 16px;">
+          Controls how parallel model calls (DAG sub-agents + consensus fan-out) run. Retry/backoff is always on regardless of profile.
+        </p>
+        <div id="cfg-exec-profile" style="display: flex; gap: 8px; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+          <button type="button" class="cfg-seg-btn" data-profile="auto" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Auto <span style="opacity:.6">(smart)</span></button>
+          <button type="button" class="cfg-seg-btn" data-profile="sequential" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Sequential</button>
+          <button type="button" class="cfg-seg-btn" data-profile="parallel" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Parallel</button>
+        </div>
+        <div id="cfg-exec-profile-hint" style="font-size: 11px; color: var(--text-dim); margin-top: 10px; line-height: 1.5;">—</div>
+      </div>
+
+      <!-- ═══ Agentic Loop ═══ -->
+      <div class="glass-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">🔁 Agentic Loop</h3>
+        <p class="cfg-desc" style="margin-bottom: 16px;">
+          Enable the optional Sense-Think-Act (ReAct) execution loop for autonomous multi-step execution.
+        </p>
+        <div class="cfg-loop-row" style="display: flex; align-items: center; gap: 16px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+          <label class="cfg-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="cfg-agentic-loop">
+            <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
+          </label>
+          <span class="cfg-switch-label" id="cfg-agentic-loop-label" style="min-width: 60px;">Disabled</span>
+          
+          <div style="flex: 1;"></div>
+          
+          <div class="cfg-field cfg-max-loops-field" style="margin-bottom: 0; display: flex; align-items: center; gap: 8px;">
+            <label style="color: var(--text-mute); font-size: 11px; text-transform: uppercase; margin-bottom: 0;">Max Loops</label>
+            <input type="number" id="cfg-max-loops" class="glass-input" value="20" min="1" max="100" style="width: 60px; padding: 4px 8px;">
+          </div>
+          <button type="button" class="btn-glow primary" id="cfg-loop-btn" style="padding: 6px 12px;">Apply</button>
+        </div>
+      </div>
+      
+      <!-- ═══ Local LLM ═══ -->
+      <div class="glass-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">🖥️ Local LLM</h3>
+        <p class="cfg-desc" style="margin-bottom: 16px;">
+          Automatically load the embedded llama.cpp local LLM at startup, based on available memory.
+        </p>
+        <div class="cfg-loop-row" style="display: flex; align-items: center; gap: 16px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+          <label class="cfg-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="cfg-enable-local-llm">
+            <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
+          </label>
+          <span class="cfg-switch-label" id="cfg-enable-local-llm-label" style="min-width: 60px;">Auto-load</span>
+          
+          <div style="flex: 1;"></div>
+          
+          <label class="cfg-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="cfg-enable-local-offload">
+            <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
+          </label>
+          <span class="cfg-switch-label" id="cfg-enable-local-offload-label" style="min-width: 60px;">Task Offloading</span>
+
+          <div style="flex: 1;"></div>
+          <button type="button" class="btn-glow primary" id="cfg-local-llm-btn" style="padding: 6px 12px;">Apply</button>
+        </div>
+        <div id="cfg-local-llm-status" style="margin-top: 14px; display: none; gap: 16px; flex-wrap: wrap; font-size: 12px; font-family: var(--font-mono); color: var(--text-dim);">
+          <div><span style="color:var(--text-mute)">State:</span> <span id="cfg-local-llm-state" style="color:#5eead4">—</span></div>
+          <div><span style="color:var(--text-mute)">Model:</span> <span id="cfg-local-llm-model">—</span></div>
+          <div><span style="color:var(--text-mute)">Endpoint:</span> <span id="cfg-local-llm-url">—</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ Provider Configuration Modal ═══ -->
+  <div id="provider-modal" class="perm-overlay" style="display: none; align-items: center; justify-content: center; z-index: 10000; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(4px);">
+    <div class="glass-panel" style="width: 480px; max-width: 90%; display: flex; flex-direction: column; overflow: visible; padding: 0;">
+      <div style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02); border-radius: var(--radius-lg) var(--radius-lg) 0 0;">
+        <h2 id="provider-modal-title" style="margin: 0; font-size: 18px; color: var(--text-bright);">Configure Provider</h2>
+        <button id="provider-modal-close-btn" class="fe-btn" style="width: 28px; height: 28px;">✕</button>
+      </div>
+      <div style="padding: 24px; padding-bottom: 40px; overflow: visible;">
+        <form id="config-model-form" class="cfg-form" style="display: flex; flex-direction: column; gap: 16px;">
+          <div class="cfg-field" style="margin-bottom: 0;">
+            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Provider</label>
+            <select id="cfg-provider" class="custom-select"></select>
+          </div>
+
+          <div class="cfg-field" style="margin-bottom: 0;">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom: 6px;">
+              <label style="color: var(--text-mute); font-size: 11px; text-transform: uppercase;">API Key <span class="cfg-opt" style="text-transform: none;">(blank for local)</span></label>
+              <a href="#" id="cfg-get-key-link" target="_blank" style="font-size:11px; color:var(--accent-3); display:none; text-decoration:none;">Get API Key ↗</a>
+            </div>
+            <input type="password" id="cfg-api-key" class="glass-input" placeholder="sk-...">
+          </div>
+
+          <div class="cfg-field" style="margin-bottom: 0;">
+            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Base URL <span class="cfg-opt" style="text-transform: none;">(auto-filled)</span></label>
+            <input type="text" id="cfg-base-url" class="glass-input">
+          </div>
+
+          <button type="button" class="btn-glow" id="cfg-fetch-models-btn" style="width:100%; padding: 8px;">🔄 Fetch Available Models</button>
+
+          <div class="cfg-field" style="margin-bottom: 0;">
+            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Model</label>
+            <select id="cfg-model-name" class="custom-select"></select>
+          </div>
+
+          <div id="model-detail" class="model-detail"></div>
+
+          <button type="button" class="btn-glow primary" id="cfg-add-btn" style="width:100%; margin-top: 8px;">Register Model</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+</div>

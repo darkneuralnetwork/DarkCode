@@ -1,0 +1,169 @@
+<div class="telemetry-layout" style="display: flex; flex-direction: column; width: 100%; height: 100%; overflow-y: auto; background: var(--bg-void); padding: 24px;">
+  
+  <!-- Header removed to prevent duplication -->
+
+  <!-- TOP ROW: Live Events & Telemetry KPIs -->
+  <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; margin-bottom: 24px;">
+    
+    <!-- Live Events Stream -->
+    <div class="glass-panel" id="tel-events-panel" style="padding: 20px; display: flex; flex-direction: column; height: 320px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">📡 Live Events</h3>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span class="evt-live" id="evt-live">● LIVE</span>
+          <button class="fe-btn max-btn" data-target="tel-events-panel">⛶</button>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 11px;">
+        <span class="stat-value" id="evt-count" style="color: var(--text-dim);">0 events</span>
+        <div style="display: flex; gap: 8px;">
+          <label style="display: flex; align-items: center; gap: 4px; color: var(--text-mute);"><input type="checkbox" id="evt-autoscroll" checked> Auto-scroll</label>
+          <button class="btn-glow xs" id="evt-clear" style="padding: 2px 6px;">Clear</button>
+        </div>
+      </div>
+      <div class="events-list custom-scrollbar" id="events-list" style="flex: 1; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; overflow-y: auto; background: rgba(0,0,0,0.2);">
+        <div class="events-empty" style="text-align: center; color: var(--text-mute); padding: 20px;">Awaiting event stream…</div>
+      </div>
+    </div>
+
+    <!-- Telemetry KPIs & Monitoring -->
+    <div class="glass-panel" id="tel-monitoring-panel" style="padding: 20px; display: flex; flex-direction: column; height: 320px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">📊 Real-Time Monitoring</h3>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-glow" id="mon-refresh" style="padding: 4px 10px; font-size: 11px;">Refresh</button>
+          <button class="btn-glow danger" id="mon-reset" style="padding: 4px 10px; font-size: 11px;">Reset</button>
+          <button class="fe-btn max-btn" data-target="tel-monitoring-panel">⛶</button>
+        </div>
+      </div>
+      <div class="kpi-row" id="kpi-row" style="margin-bottom: 16px;">
+        <div class="kpi-card">
+          <div class="kpi-icon">🪙</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Total Tokens</div>
+            <div class="kpi-value" id="kpi-total-tokens">0</div>
+            <div class="kpi-sub"><span id="kpi-prompt">0</span> in · <span id="kpi-completion">0</span> out</div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon">💲</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Estimated Cost</div>
+            <div class="kpi-value" id="kpi-cost">$0.0000</div>
+            <div class="kpi-sub">since <span id="kpi-since">—</span></div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon">📡</div>
+          <div class="kpi-body">
+            <div class="kpi-label">LLM Requests</div>
+            <div class="kpi-value" id="kpi-requests">0</div>
+            <div class="kpi-sub"><span id="kpi-errors">0</span> errors</div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon">⚡</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Avg Latency</div>
+            <div class="kpi-value" id="kpi-latency">0ms</div>
+            <div class="kpi-sub"><span id="kpi-rpm">0</span> req/min</div>
+          </div>
+        </div>
+      </div>
+      <div style="flex: 1; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; background: rgba(0,0,0,0.2); text-align: center; color: var(--text-mute);">
+         Chart views available when telemetry is active.
+      </div>
+    </div>
+  </div>
+
+  <!-- MIDDLE ROW: Verification, Consensus, Resources -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+    
+    <!-- Verification Pipeline -->
+    <div class="glass-panel" id="tel-verification-panel" style="padding: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🛡️ Verification Pipeline</h3>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span class="evt-live" id="verify-live">● IDLE</span>
+          <button class="fe-btn max-btn" data-target="tel-verification-panel">⛶</button>
+        </div>
+      </div>
+      <div class="verification-pipeline" id="verify-pipeline" style="background: rgba(0,0,0,0.2); padding: 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+        <div class="verify-stage" data-stage="formatter"><div class="verify-stage-icon">📝</div><div class="verify-stage-name">Format</div></div>
+        <div class="verify-stage" data-stage="compiler"><div class="verify-stage-icon">⚙️</div><div class="verify-stage-name">Compile</div></div>
+        <div class="verify-stage" data-stage="tests"><div class="verify-stage-icon">🧪</div><div class="verify-stage-name">Tests</div></div>
+        <div class="verify-stage" data-stage="lint"><div class="verify-stage-icon">🔍</div><div class="verify-stage-name">Lint</div></div>
+        <div class="verify-stage" data-stage="security"><div class="verify-stage-icon">🛡️</div><div class="verify-stage-name">Security</div></div>
+      </div>
+    </div>
+
+    <!-- Consensus Engine -->
+    <div class="glass-panel" id="tel-consensus-panel" style="padding: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🤝 Multi-Model Consensus</h3>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span class="evt-live" id="consensus-live">● IDLE</span>
+          <button class="fe-btn max-btn" data-target="tel-consensus-panel">⛶</button>
+        </div>
+      </div>
+      <div class="kpi-row" id="consensus-kpi" style="margin-bottom: 12px;">
+        <div class="kpi-card"><div class="kpi-icon">🤝</div><div class="kpi-body"><div class="kpi-label">Models</div><div class="kpi-value" id="cs-model-count">0</div></div></div>
+        <div class="kpi-card"><div class="kpi-icon">📊</div><div class="kpi-body"><div class="kpi-label">Agreement</div><div class="kpi-value" id="cs-agreement">—</div></div></div>
+        <div class="kpi-card"><div class="kpi-icon">⏱️</div><div class="kpi-body"><div class="kpi-label">Total Time</div><div class="kpi-value" id="cs-total-time">—</div></div></div>
+        <div class="kpi-card"><div class="kpi-icon">🎯</div><div class="kpi-body"><div class="kpi-label">Strategy</div><div class="kpi-value" id="cs-strategy">—</div></div></div>
+      </div>
+      <div id="consensus-history" class="consensus-history custom-scrollbar" style="height: 140px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 12px;"></div>
+    </div>
+
+    <!-- Resource Center -->
+    <div class="glass-panel" id="tel-resources-panel" style="padding: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🖥️ Resource Center</h3>
+        <button class="btn-glow xs" id="res-refresh" style="padding: 2px 6px;">Refresh</button>
+      </div>
+      <div class="kpi-row" style="grid-template-columns: 1fr 1fr 1fr; margin-bottom: 12px;">
+        <div class="kpi-card" style="padding:8px"><div class="kpi-icon">⚡</div><div class="kpi-body"><div class="kpi-label">CPU</div><div class="kpi-value" id="hw-cpu" style="font-size:14px">0%</div></div></div>
+        <div class="kpi-card" style="padding:8px"><div class="kpi-icon">🧠</div><div class="kpi-body"><div class="kpi-label">RAM</div><div class="kpi-value" id="hw-ram" style="font-size:14px">0 MB</div></div></div>
+        <div class="kpi-card" style="padding:8px"><div class="kpi-icon">🧵</div><div class="kpi-body"><div class="kpi-label">Threads</div><div class="kpi-value" id="hw-threads" style="font-size:14px">0</div></div></div>
+        <div class="kpi-card" style="padding:8px"><div class="kpi-icon">📦</div><div class="kpi-body"><div class="kpi-label">Heap</div><div class="kpi-value" id="hw-heap" style="font-size:14px">0 MB</div></div></div>
+        <div class="kpi-card" style="padding:8px; grid-column: span 2;"><div class="kpi-icon">🎮</div><div class="kpi-body"><div class="kpi-label">GPU/VRAM (Local LLM)</div><div class="kpi-value" id="hw-vram" style="font-size:14px">—</div></div></div>
+      </div>
+      <div style="font-size: 11px; color: var(--text-mute); padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between;">
+        <span id="hw-os-arch">OS/Arch</span>
+        <span id="hw-execution-tier" style="color: var(--theme-primary); font-weight: bold;">Execution Tier: Unknown</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- BOTTOM ROW: System Status & Audit -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+    
+    <!-- System Diagnostics -->
+    <div class="glass-panel" id="tel-status-panel" style="padding: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">⚙️ System Diagnostics</h3>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-glow" id="status-refresh" style="padding: 4px 10px; font-size: 11px;">Run Diagnostics</button>
+          <button class="fe-btn max-btn" data-target="tel-status-panel">⛶</button>
+        </div>
+      </div>
+      <div id="status-content" class="status-content custom-scrollbar" style="height: 200px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; background: rgba(0,0,0,0.2);"></div>
+    </div>
+
+    <!-- Audit & Governance -->
+    <div class="glass-panel" id="tel-audit-panel" style="padding: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">📋 Audit & Compliance</h3>
+        <div style="display: flex; gap: 8px;">
+          <span class="stat-value" id="audit-stats" style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">— Total Logs</span>
+          <button class="btn-glow" id="audit-refresh" style="padding: 4px 10px; font-size: 11px;">Fetch</button>
+          <button class="fe-btn max-btn" data-target="tel-audit-panel">⛶</button>
+        </div>
+      </div>
+      <div class="audit-list custom-scrollbar" id="audit-list" style="height: 200px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; background: rgba(0,0,0,0.2);"></div>
+    </div>
+
+  </div>
+
+</div>
