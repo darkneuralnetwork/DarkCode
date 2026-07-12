@@ -2,7 +2,7 @@
 
 <img src="docs/images/cli.png" alt="DarkCode AI Agent Platform" width="100%">
 
-# 🌑 DarkCode
+#DarkCode
 
 **Next-Generation Autonomous AI Agent Platform**
 
@@ -15,6 +15,7 @@ Engineered by [**Team Dark Neural Network (DNN)**](https://darkneuralnetwork.com
 ![Local LLM](https://img.shields.io/badge/Local_LLM-green?style=for-the-badge)
 ![RAG](https://img.shields.io/badge/Hybrid_RAG-orange?style=for-the-badge)
 ![Knowledge Graph](https://img.shields.io/badge/Knowledge_Graph-blue?style=for-the-badge)
+![Loop Engineering](https://img.shields.io/badge/Loop_Engineering-red?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-GPL_3.0-blue?style=for-the-badge)
 
 </div>
@@ -34,6 +35,17 @@ The next generation of AI applications requires more than just a conversational 
 
 **The DarkCode Objective:**
 > Create an AI system that becomes more efficient over time by remembering, learning, and reusing knowledge instead of repeatedly solving the same problems.
+
+---
+
+## 🔄 Loop Engineering Technology
+
+DarkCode is built on advanced **Loop Engineering** to create self-sustaining, autonomous workflows. Instead of linear, one-off executions, the platform operates on continuous feedback and improvement loops:
+
+* **Execution Loops:** Iterative *plan-execute-verify* cycles ensuring robust task completion.
+* **Feedback Loops:** Real-time monitoring of environment and tool outputs to dynamically course-correct failures.
+* **Memory Optimization Loops:** Continuous background processes that compress working memory into episodic and semantic Knowledge Graph updates.
+* **Reflective Loops:** Self-evaluating mechanisms where agents review their own code and logic before final deployment.
 
 ---
 
@@ -195,6 +207,7 @@ darkcode --gui
 * Agent orchestration & local LLM optimization
 * RAG improvements & Knowledge Graph reasoning
 * Tool reliability & cost minimization
+* Self sustainable system with Loop Engineering
 
 **Future Horizons:**
 * Advanced procedural memory & self-learning
