@@ -2,12 +2,15 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/dag"
 	"github.com/darkcode/llm"
@@ -126,6 +129,18 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 	var allToolCalls []core.ToolCall
 	var lastCallSig string
 	var repeatCount int
+	// Per-tool call budget: the exact-repeat guard below only catches
+	// byte-identical calls, so an agent that re-searches with slightly
+	// reworded queries (e.g. 12 web_search calls for one factual question)
+	// slips past it and burns turns + LLM calls. Once a single tool has been
+	// used perToolSoftCap times we nudge the model to conclude; at
+	// perToolHardCap we STOP offering tools for the rest of the run, forcing a
+	// final text answer. This makes a runaway tool loop converge cheaply.
+	toolNameCounts := map[string]int{}
+	nudged := false
+	forcedFinal := false
+	const perToolSoftCap = 3
+	const perToolHardCap = 5
 
 	for turn := 0; turn < maxTurns; turn++ {
 		if ctx.Err() != nil {
@@ -139,17 +154,52 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				fmt.Sprintf("agent working (step %d)", turn+1))
 		}
 
+		// Tool budget: decide whether to keep offering tools this turn. Once
+		// any tool hits the hard cap we force a final text answer by not
+		// offering tools; a one-time soft nudge earlier asks the model to
+		// wrap up on its own.
+		maxUses := 0
+		for _, n := range toolNameCounts {
+			if n > maxUses {
+				maxUses = n
+			}
+		}
+		offerTools := maxUses < perToolHardCap
+		if maxUses >= perToolSoftCap && !nudged && offerTools {
+			a.messages = append(a.messages, core.Message{
+				Role:    core.RoleSystem,
+				Content: "You have gathered enough information. Stop calling tools and answer the goal now, concisely, using what you already have.",
+			})
+			nudged = true
+		}
+		if !offerTools && !forcedFinal {
+			a.messages = append(a.messages, core.Message{
+				Role:    core.RoleSystem,
+				Content: "Tool budget reached. Provide your FINAL answer now as plain text using the information already gathered. Do not request any more tools.",
+			})
+			forcedFinal = true
+		}
+
 		// Call LLM with streaming and ErrorManager retry loop
 		var resp *core.CompletionResponse
 		var llmErr error
 
 		for attempt := 0; attempt < 2; attempt++ {
 			temp := 0.7
+			var schemas []llm.ToolSchema
+			if offerTools {
+				schemas = a.registry.LLMSchemas().([]llm.ToolSchema)
+			}
+			// Hard context-fit guarantee before dispatch (Part 3 contract):
+			// worker history grows with each tool turn, so fit to the
+			// receiving client's effective window to prevent a local-model
+			// "context window exceeded" fatal mid-task.
+			a.messages = compression.FitClient(a.messages, client, 0, len(schemas))
 			req := &llm.CompletionRequest{
 				Model:       modelName,
 				Messages:    a.messages,
 				Temperature: &temp,
-				Tools:       a.registry.LLMSchemas().([]llm.ToolSchema),
+				Tools:       schemas, // nil once the tool budget is spent → forces a final answer
 			}
 
 			resp, llmErr = client.ChatCompletionStream(ctx, req, &llm.StreamCallbacks{
@@ -167,6 +217,20 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				},
 			})
 
+			// Recovery ladder for a context overflow that slipped past the
+			// FitClient estimate (tokenizer drift): shrink hard to 75% of the
+			// client's window and retry once, rather than failing the task.
+			if llmErr != nil && errors.Is(llmErr, core.ErrContextTooLong) && attempt == 0 {
+				window := 0
+				if client != nil {
+					window = client.ModelInfo().Context
+				}
+				if window <= 0 {
+					window = compression.DefaultContextWindow
+				}
+				a.messages = compression.FitToWindow(a.messages, window*3/4, 0)
+				continue
+			}
 			if llmErr != nil && a.errMgr != nil {
 				modified, newHist := a.errMgr.Handle(llmErr, a.messages)
 				if modified {
@@ -227,6 +291,11 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				lastCallSig = callSig
 				repeatCount = 0
 			}
+		}
+
+		// Count per-tool usage for the budget guard above.
+		for _, tc := range msg.ToolCalls {
+			toolNameCounts[tc.Function.Name]++
 		}
 
 		// Execute tools concurrently
@@ -299,11 +368,11 @@ func buildAgentSystemPrompt(role core.AgentRole, goal, context string) string {
 	case core.RolePlanner:
 		sb.WriteString("You are a Planner Agent. Your job is task decomposition.\n")
 		sb.WriteString("Given a goal, create a DAG of tasks with dependencies.\n")
-		sb.WriteString("Output each task as:\n")
-		sb.WriteString("TASK: <name> | GOAL: <description> | DEPS: <comma-separated task names> | AGENT: <worker|critic|research|qa|security|ops> | PRIORITY: <high|normal|low>\n")
-		sb.WriteString("End with: PLAN_END\n")
-		sb.WriteString("Consider which tasks can run in parallel (no dependencies).\n")
-		sb.WriteString("Assign the right agent type: research for info gathering, qa for testing, security for risk, ops for deployment.\n")
+		sb.WriteString("Output ONLY a JSON array of task objects, nothing else (no prose, no markdown fences). Each object has:\n")
+		sb.WriteString(`  {"name": "<short unique id>", "goal": "<what to do>", "dependencies": ["<other task names>"], "agent": "worker|critic|research|qa|security|ops", "priority": "high|normal|low"}` + "\n")
+		sb.WriteString("Use an empty dependencies array for tasks that can run in parallel.\n")
+		sb.WriteString("Assign the right agent type: research for info gathering, qa for testing, security for risk, ops for deployment; worker for implementation.\n")
+		sb.WriteString(`Example: [{"name":"impl","goal":"write the parser","dependencies":[],"agent":"worker","priority":"high"},{"name":"test","goal":"add tests","dependencies":["impl"],"agent":"qa","priority":"normal"}]` + "\n")
 
 	case core.RoleWorker:
 		sb.WriteString("You are a Coding Agent. You execute implementation tasks using available tools.\n")
@@ -398,8 +467,106 @@ type PlannerTask struct {
 	Priority core.TaskPriority `json:"priority"`
 }
 
-// ParsePlannerOutput extracts structured tasks from the planner agent's text output.
+// ParsePlannerOutput extracts structured tasks from the planner agent's
+// output. It prefers a JSON array (the format the planner prompt now
+// requests — far more robust to LLM formatting drift than delimited text,
+// especially on smaller local models), and falls back to the legacy
+// pipe-delimited `TASK: … | GOAL: …` format so a model that ignores the JSON
+// instruction, or a persisted older plan, still parses.
 func ParsePlannerOutput(text string) []PlannerTask {
+	if tasks := parsePlannerJSON(text); len(tasks) > 0 {
+		return tasks
+	}
+	return parsePlannerPipe(text)
+}
+
+// plannerJSONTask is the wire shape the planner emits: all fields are plain
+// strings so role/priority go through the same normalization as the legacy
+// parser (rather than requiring the model to emit exact enum values).
+type plannerJSONTask struct {
+	Name     string   `json:"name"`
+	Goal     string   `json:"goal"`
+	Deps     []string `json:"dependencies"`
+	Agent    string   `json:"agent"`
+	Priority string   `json:"priority"`
+}
+
+// parsePlannerJSON extracts a JSON array of tasks from the planner output,
+// tolerating surrounding prose or ```json fences by scanning for the first
+// balanced top-level [...] block. Returns nil if no valid task array is found.
+func parsePlannerJSON(text string) []PlannerTask {
+	raw := extractJSONArray(text)
+	if raw == "" {
+		return nil
+	}
+	var wire []plannerJSONTask
+	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
+		return nil
+	}
+	var tasks []PlannerTask
+	for _, w := range wire {
+		name := strings.TrimSpace(w.Name)
+		if name == "" {
+			continue
+		}
+		var deps []string
+		for _, d := range w.Deps {
+			if d = strings.TrimSpace(d); d != "" && !strings.EqualFold(d, "none") {
+				deps = append(deps, d)
+			}
+		}
+		tasks = append(tasks, PlannerTask{
+			Name:     name,
+			Goal:     strings.TrimSpace(w.Goal),
+			Deps:     deps,
+			Agent:    roleFromString(w.Agent),
+			Priority: priorityFromString(w.Priority),
+		})
+	}
+	return tasks
+}
+
+// extractJSONArray returns the first balanced top-level [...] substring of s,
+// or "" if none. This tolerates a model wrapping the array in prose or a
+// markdown code fence.
+func extractJSONArray(s string) string {
+	start := strings.IndexByte(s, '[')
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
+// parsePlannerPipe parses the legacy pipe-delimited planner format.
+func parsePlannerPipe(text string) []PlannerTask {
 	var tasks []PlannerTask
 	lines := strings.Split(text, "\n")
 
@@ -419,6 +586,44 @@ func ParsePlannerOutput(text string) []PlannerTask {
 	}
 
 	return tasks
+}
+
+// roleFromString maps a free-text agent label to an AgentRole, defaulting to
+// RoleWorker. Shared by the JSON and pipe planner parsers.
+func roleFromString(s string) core.AgentRole {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critic":
+		return core.RoleCritic
+	case "planner":
+		return core.RolePlanner
+	case "executive":
+		return core.RoleExecutive
+	case "research":
+		return core.RoleResearch
+	case "qa":
+		return core.RoleQA
+	case "security":
+		return core.RoleSecurity
+	case "ops":
+		return core.RoleOps
+	default:
+		return core.RoleWorker
+	}
+}
+
+// priorityFromString maps a free-text priority label to a TaskPriority,
+// defaulting to PriorityNormal. Shared by the JSON and pipe planner parsers.
+func priorityFromString(s string) core.TaskPriority {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical":
+		return core.PriorityCritical
+	case "high":
+		return core.PriorityHigh
+	case "low":
+		return core.PriorityLow
+	default:
+		return core.PriorityNormal
+	}
 }
 
 func parseTaskLine(line string) PlannerTask {
@@ -446,37 +651,9 @@ func parseTaskLine(line string) PlannerTask {
 				}
 			}
 		} else if strings.HasPrefix(part, "AGENT:") {
-			agentStr := strings.TrimSpace(strings.TrimPrefix(part, "AGENT:"))
-			switch strings.ToLower(agentStr) {
-			case "critic":
-				task.Agent = core.RoleCritic
-			case "planner":
-				task.Agent = core.RolePlanner
-			case "executive":
-				task.Agent = core.RoleExecutive
-			case "research":
-				task.Agent = core.RoleResearch
-			case "qa":
-				task.Agent = core.RoleQA
-			case "security":
-				task.Agent = core.RoleSecurity
-			case "ops":
-				task.Agent = core.RoleOps
-			default:
-				task.Agent = core.RoleWorker
-			}
+			task.Agent = roleFromString(strings.TrimPrefix(part, "AGENT:"))
 		} else if strings.HasPrefix(part, "PRIORITY:") {
-			priStr := strings.TrimSpace(strings.TrimPrefix(part, "PRIORITY:"))
-			switch strings.ToLower(priStr) {
-			case "critical":
-				task.Priority = core.PriorityCritical
-			case "high":
-				task.Priority = core.PriorityHigh
-			case "low":
-				task.Priority = core.PriorityLow
-			default:
-				task.Priority = core.PriorityNormal
-			}
+			task.Priority = priorityFromString(strings.TrimPrefix(part, "PRIORITY:"))
 		}
 	}
 

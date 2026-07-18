@@ -1,13 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
+	"time"
 
 	"github.com/darkcode/capability"
 	"github.com/darkcode/config"
+	"github.com/darkcode/llm"
 	"github.com/darkcode/provider"
 	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/metrics"
@@ -76,12 +78,14 @@ func (s *Server) handleModelsFetch(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if p.ID == "embedded" {
-		// Ensure ./models directory exists to prevent fatal errors
-		_ = os.MkdirAll("./models", 0755)
-		// Use the shared singleton (embedded.Default) so the model list is
-		// consistent with the running server. Configure sets the models dir;
-		// empty binaryDir is ignored so it can't clobber the startup dir.
-		embProv := embedded.Configure("./models", "")
+		// Use the shared singleton (embedded.Default) exactly as startup
+		// configured it — do NOT call Configure here with a CWD-relative
+		// "./models": that unconditionally overwrites the singleton's
+		// modelsDir on every call, clobbering the system-wide
+		// ~/.darkcode/models path app_wireup.go set at startup (local-first
+		// upgrade §6b) with a stale per-directory path the moment a user
+		// opens the GUI's model picker for local models.
+		embProv := embedded.Default()
 		ggufModels, mErr := embProv.ListModels(r.Context())
 		if mErr != nil {
 			err = mErr
@@ -103,6 +107,147 @@ func (s *Server) handleModelsFetch(w http.ResponseWriter, r *http.Request) {
 		"models": models,
 		"count":  len(models),
 	})
+}
+
+// handleModelsPing is the explicit "test connection" action (local-first
+// upgrade §4c): verifies an OpenAI-compatible endpoint is actually reachable
+// on demand, rather than only discovering a broken connection when a real
+// chat request fails. Shares handleModelsFetch's security posture exactly
+// (provider-catalogue lookup, key/base_url sanitization to prevent an
+// exfiltration vector, SSRF guard) since it's the same shape of request:
+// caller-supplied provider/key/base_url triggering an outbound network call.
+func (s *Server) handleModelsPing(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+
+	var req struct {
+		Provider string `json:"provider"`
+		APIKey   string `json:"api_key"`
+		BaseURL  string `json:"base_url"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	p, ok := config.LookupProvider(req.Provider)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown provider")
+		return
+	}
+
+	// See handleModelsFetch's identical block for the security rationale.
+	apiKey := req.APIKey
+	if p.AuthScheme == config.AuthNone {
+		apiKey = ""
+	}
+	allowLocal := p.Local || p.CustomBaseURL
+	baseURL := p.BaseURL
+	if allowLocal && req.BaseURL != "" {
+		baseURL = req.BaseURL
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
+
+	if !ssrfGuard(baseURL, allowLocal) {
+		writeError(w, http.StatusBadRequest, "blocked: base_url is not an allowed http(s) destination")
+		return
+	}
+
+	if p.ID == "embedded" {
+		// Local models have their own health/readiness machinery (process
+		// startup wait-for-healthy) — connectivity in the OpenAI-compatible
+		// sense doesn't apply the same way; report status from the shared
+		// singleton instead of trying to Ping a URL that may not exist yet.
+		st := embedded.Default().Status()
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":     st.State == embedded.StateRunning,
+			"status": st.State.String(),
+		})
+		return
+	}
+
+	client := llm.NewClient(baseURL, apiKey, req.Model)
+	client.SetProvider(p.ID)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+// handleModelsDisable temporarily takes a registered model out of routing/
+// consensus selection (local-first upgrade §6c) — the GUI counterpart of
+// the CLI's "/models disable". Thin wrapper over Kernel.DisableModel, which
+// delegates to the router; the disable is live-only (not persisted to
+// config) and expires automatically after duration.
+func (s *Server) handleModelsDisable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var req struct {
+		Model    string `json:"model"`
+		Duration string `json:"duration"` // Go duration string, e.g. "1h"; default 1h
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	dur := time.Hour
+	if req.Duration != "" {
+		d, err := time.ParseDuration(req.Duration)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+			return
+		}
+		dur = d
+	}
+	if s.kernel == nil {
+		writeError(w, http.StatusServiceUnavailable, "kernel not initialized")
+		return
+	}
+	until := time.Now().Add(dur)
+	s.kernel.DisableModel(req.Model, until)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "model": req.Model, "disabled_until": until})
+}
+
+// handleModelsEnable reverses a temporary disable early — the GUI
+// counterpart of "/models enable". A no-op if the model wasn't disabled.
+func (s *Server) handleModelsEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	if s.kernel == nil {
+		writeError(w, http.StatusServiceUnavailable, "kernel not initialized")
+		return
+	}
+	s.kernel.EnableModel(req.Model)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "model": req.Model})
 }
 
 // handleMetricsTokens returns the full usage snapshot for the dashboard.
@@ -145,6 +290,21 @@ func (s *Server) handleCapability(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"hardware": hw,
 		"tier":     tier.String(),
+	})
+}
+
+// handleCascade returns the cognition-cascade telemetry: the recent per-query
+// rung log (which rung answered and why, with confidence + provenance) and
+// per-rung lifetime stats including the current auto-calibrated thresholds.
+// This is the local-first upgrade's cost-savings proof surface.
+func (s *Server) handleCascade(w http.ResponseWriter, r *http.Request) {
+	if s.kernel == nil {
+		writeError(w, http.StatusServiceUnavailable, "kernel not initialized")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"log":   s.kernel.CascadeLog(),
+		"stats": s.kernel.CascadeStats(),
 	})
 }
 

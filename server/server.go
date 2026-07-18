@@ -11,6 +11,8 @@ import (
 	"net/http/pprof"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -135,38 +137,29 @@ func (s *Server) maybeRewriteProjectContext(projID string) {
 	if strings.TrimSpace(rawCtx) == "" {
 		return
 	}
-	
-	// Force the use of the local embedded model if possible, per user request.
-	client := s.primaryClient()
-	
+
+	// Route this rewrite through the kernel's compressor (Part 5b): it already
+	// honors the local model via the compressor's useLocal path, so this
+	// per-project-turn call runs on the local model at $0 when one is loaded,
+	// and on the cloud compressor otherwise — instead of always burning a
+	// cloud primary call. nil-safe / fail-quiet.
+	if s.kernel == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
-	prompt := "Rewrite the following project context into a very concise, few-token briefing that retains all important details.\n\n" + rawCtx
-	temp := 0.2
-	maxTok := 1024
-	req := &core.CompletionRequest{
-		Messages: []core.Message{
-			{Role: core.RoleSystem, Content: "You are a highly efficient context compressor. Rewrite the given text into the fewest possible tokens while keeping all facts, open questions, and important details intact. Output only the compressed text."},
-			{Role: core.RoleUser, Content: prompt},
-		},
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-	resp, err := client.ChatCompletion(ctx, req)
-	if err != nil || len(resp.Choices) == 0 {
-		log.Printf("[server] context rewrite failed: %v", err)
+
+	rewritten, err := s.kernel.CompressProjectContext(ctx, rawCtx, projID)
+	if err != nil || strings.TrimSpace(rewritten) == "" {
+		if err != nil {
+			log.Printf("[server] context rewrite failed: %v", err)
+		}
 		return
 	}
-	
-	rewritten := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if rewritten == "" {
-		return
-	}
-	
-	_ = s.projects.SetContext(projID, rewritten)
+
+	_ = s.projects.SetContext(projID, strings.TrimSpace(rewritten))
 	if s.emitter != nil {
-		s.emitter.EmitTaskUpdate("summary_updated", projID, rewritten)
+		s.emitter.EmitTaskUpdate("summary_updated", projID, strings.TrimSpace(rewritten))
 	}
 }
 
@@ -243,26 +236,28 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 		if strings.TrimSpace(ctxBody) != "" {
 			ctxNote = "\n\nExisting project context:\n" + strutil.TruncateForPrompt(ctxBody, 4000)
 		}
-		planPrompt := fmt.Sprintf("You are an AI architect. Generate a comprehensive Implementation Plan in raw markdown for a project named %q.\nDescription: %s%s\n\nInclude sections like Goal Description, Proposed Changes, and Verification Plan. You MUST also include an Architecture section featuring a Mermaid graph (`graph TD`) visualizing the data flow and project architecture. If you have any confusion or underspecified requirements, add an 'Open Questions' section to ask the user.\n\nOutput ONLY the markdown plan, and ensure the mermaid graph is wrapped in ```mermaid ... ```.", name, desc, ctxNote)
-		wfPrompt := fmt.Sprintf("You are an AI architect. Generate a concise Task Workflow in raw markdown for a project named %q.\nDescription: %s%s\n\nFormat the workflow strictly as a checklist using GitHub-flavored markdown checkboxes: use \"- [ ]\" for pending steps and \"- [x]\" for completed steps. Group steps under ## phase headings.\n\nOutput ONLY the markdown.", name, desc, ctxNote)
-		pResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{Messages: []core.Message{{Role: "system", Content: "You are an AI architect. Keep the plan detailed but concise. You MUST include a Mermaid architecture graph. Only output valid markdown."}, {Role: "user", Content: planPrompt}}, Temperature: &temp})
-		if err == nil && len(pResp.Choices) > 0 {
-			planText := pResp.Choices[0].Message.Content
-			if strings.TrimSpace(planText) != "" {
-				s.projects.SetPlan(projID, planText)
-				if s.emitter != nil {
-					s.emitter.EmitPlanUpdated(projID, planText)
-				}
+		planPrompt := fmt.Sprintf("You are an AI architect. Generate a comprehensive Implementation Plan in raw markdown for a project named %q.\nDescription: %s%s\n\nInclude sections like Goal Description, Proposed Changes, and Verification Plan. You MUST also include an Architecture section featuring a Mermaid graph (`graph TD`) visualizing the data flow and project architecture, where every node ID exactly matches a Workflow task ID (format T1, T2, T3, ...). If you have any confusion or underspecified requirements, add an 'Open Questions' section to ask the user.\n\nOutput ONLY the markdown plan, and ensure the mermaid graph is wrapped in ```mermaid ... ```.", name, desc, ctxNote)
+		wfPrompt := fmt.Sprintf("You are an AI architect. Generate a concise Task Workflow in raw markdown for a project named %q.\nDescription: %s%s\n\nFormat every step strictly as \"- [ ] T<n>: <one-line approach>\" (pending) or \"- [x] T<n>: ...\" (done) — assign each task a stable ID (T1, T2, T3, ...) matching the Implementation Plan's Mermaid node IDs. Group steps under ## phase headings.\n\nOutput ONLY the markdown.", name, desc, ctxNote)
+		var planText, wfText string
+		if pResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{Messages: []core.Message{{Role: "system", Content: "You are an AI architect. Keep the plan detailed but concise. You MUST include a Mermaid architecture graph whose node IDs match the workflow's task IDs (T1, T2, ...). Only output valid markdown."}, {Role: "user", Content: planPrompt}}, Temperature: &temp}); err == nil && len(pResp.Choices) > 0 {
+			planText = strings.TrimSpace(pResp.Choices[0].Message.Content)
+		}
+		if wResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{Messages: []core.Message{{Role: "system", Content: "You are an AI architect. Keep the workflow architecture concise. Use \"- [ ] T<n>: ...\" / \"- [x] T<n>: ...\" checkboxes with stable task IDs. Only output valid markdown."}, {Role: "user", Content: wfPrompt}}, Temperature: &temp}); err == nil && len(wResp.Choices) > 0 {
+			wfText = strings.TrimSpace(wResp.Choices[0].Message.Content)
+		}
+		if planText != "" {
+			if wfText != "" {
+				planText = injectNodeStatus(planText, wfText)
+			}
+			s.projects.SetPlan(projID, planText)
+			if s.emitter != nil {
+				s.emitter.EmitPlanUpdated(projID, planText)
 			}
 		}
-		wResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{Messages: []core.Message{{Role: "system", Content: "You are an AI architect. Keep the workflow architecture concise. Use GitHub-flavored markdown checkboxes (- [ ] / - [x]) for steps. Only output valid markdown."}, {Role: "user", Content: wfPrompt}}, Temperature: &temp})
-		if err == nil && len(wResp.Choices) > 0 {
-			wfText := wResp.Choices[0].Message.Content
-			if strings.TrimSpace(wfText) != "" {
-				s.projects.SetWorkflow(projID, wfText)
-				if s.emitter != nil {
-					s.emitter.EmitWorkflowUpdated(projID, wfText)
-				}
+		if wfText != "" {
+			s.projects.SetWorkflow(projID, wfText)
+			if s.emitter != nil {
+				s.emitter.EmitWorkflowUpdated(projID, wfText)
 			}
 		}
 	}(projID, name, description, ctxBody)
@@ -300,6 +295,171 @@ func (s *Server) regeneratePlanWorkflow(projID, kind string) {
 	s.seedProjectPlanWorkflow(projID, p.Name, p.Description, p.Context)
 }
 
+// shortContinuationMaxLen bounds what counts as a "bare continuation"
+// ("continue", "yes", "go on") for needsPlanAmend — long enough to cover
+// short acknowledgements, short enough that a real (if terse) instruction
+// still triggers a real amend.
+const shortContinuationMaxLen = 30
+
+// needsPlanAmend reports whether query should trigger a synchronous
+// plan/workflow rewrite before Execute runs (local-first upgrade §5: "if a
+// new instruction comes, first change these, then go through these only").
+// Skips the amend — reuse the existing plan/workflow unchanged — only for a
+// short continuation after a real prior turn, using the same continuation
+// signal the clarification gate uses (orchestrator.HasActiveConversation)
+// so both decisions agree on what counts as "just a continuation": a bare
+// "continue"/"yes" shouldn't cost an LLM round-trip and shouldn't churn the
+// plan, but anything else is plausibly a new instruction and gets a fresh
+// amend.
+func needsPlanAmend(query string, stm []core.Message, skipReadOnly bool) bool {
+	trimmed := strings.TrimSpace(query)
+	if orchestrator.HasActiveConversation(stm) && len(trimmed) < shortContinuationMaxLen {
+		return false
+	}
+	// A read-only / question turn ("what does X do?", "explain the plan")
+	// can't change the plan, so amending it is 2 wasted cloud calls
+	// (Part 5b). Skip when SkipAuxForReadOnly is on.
+	if skipReadOnly && orchestrator.QueryIsInformational(query) {
+		return false
+	}
+	return true
+}
+
+// amendPlanWorkflowSync synchronously rewrites the plan+workflow for a new
+// instruction, BEFORE the kernel executes it — replacing the old design
+// where the rewrite ran in a goroutine launched only AFTER Execute returned
+// (racing with a separate pre-Execute "mark task running" goroutine), so
+// execution always ran against a stale plan. Bounded by a tight sub-timeout
+// so a slow LLM can't stall chat; on timeout/error the old plan/workflow are
+// returned unchanged (fail-open — matches the existing best-effort
+// philosophy of every other project LLM call in this file).
+func (s *Server) amendPlanWorkflowSync(ctx context.Context, projID, query, oldPlan, oldWorkflow string) (string, string) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	// Prefer the local model for these two rewrites when one is healthy
+	// (Part 5b) — else the cloud primary, unchanged. RouteAux returns a
+	// core.LLMClient; fall back to primaryClient when no model routes.
+	var client core.LLMClient = s.primaryClient()
+	if s.kernel != nil {
+		if lc, _, ok := s.kernel.RouteAux("plan_amend", 0); ok && lc != nil {
+			client = lc
+		}
+	}
+	temp := 0.2
+
+	plan := oldPlan
+	planPrompt := fmt.Sprintf("Here is the current Implementation Plan and Architecture:\n%s\n\nThe user just requested: %s\n\nRewrite the implementation plan to reflect this new instruction BEFORE any work is done — describe what will change, not what already happened (the workflow tracks progress separately). You MUST keep the Mermaid architecture graph (```mermaid graph TD ... ```), and every node ID MUST exactly match a Workflow task ID (format T1, T2, T3, ...) — reuse existing IDs for existing tasks and only add new IDs for new tasks. If underspecified, add an 'Open Questions' section. Output ONLY the raw markdown plan.", oldPlan, query)
+	if pResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
+		Messages: []core.Message{
+			{Role: "system", Content: "You are an AI architect. Keep the plan detailed but concise. Only output valid markdown. Always include a Mermaid graph whose node IDs exactly match the workflow's task IDs (T1, T2, ...)."},
+			{Role: "user", Content: planPrompt},
+		},
+		Temperature: &temp,
+	}); err == nil && len(pResp.Choices) > 0 {
+		if t := strings.TrimSpace(pResp.Choices[0].Message.Content); t != "" {
+			plan = t
+		}
+	}
+
+	workflow := oldWorkflow
+	wfPrompt := fmt.Sprintf("Here is the current Task Workflow:\n%s\n\nThe user just requested: %s\n\nRewrite the workflow to reflect this new instruction: adjust or add tasks as needed, and mark the task that will be worked on next as running. Format every line strictly as \"- [ ] T<n>: <one-line approach>\" (pending), \"- [/] T<n>: ...\" (running), or \"- [x] T<n>: ...\" (done). Task IDs (T1, T2, ...) MUST stay stable across rewrites — never renumber an existing task, only add new IDs for genuinely new tasks. Output ONLY the raw markdown checklist.", oldWorkflow, query)
+	if wResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
+		Messages: []core.Message{
+			{Role: "system", Content: "You are an AI architect. Only output valid markdown checklists with stable T<n> task IDs."},
+			{Role: "user", Content: wfPrompt},
+		},
+		Temperature: &temp,
+	}); err == nil && len(wResp.Choices) > 0 {
+		if t := strings.TrimSpace(wResp.Choices[0].Message.Content); t != "" {
+			workflow = t
+		}
+	}
+
+	// Status-linked flowgraph (local-first upgrade §5): stamp the workflow's
+	// real task status onto the plan's Mermaid graph so the architecture
+	// diagram is a genuine real-time view, not a static snapshot.
+	plan = injectNodeStatus(plan, workflow)
+
+	if projID != "" && s.projects != nil {
+		_ = s.projects.SetPlan(projID, plan)
+		_ = s.projects.SetWorkflow(projID, workflow)
+		if s.emitter != nil {
+			s.emitter.EmitPlanUpdated(projID, plan)
+			s.emitter.EmitWorkflowUpdated(projID, workflow)
+		}
+	}
+	return plan, workflow
+}
+
+// workflowTaskLineRe matches a workflow checklist line, capturing the
+// checkbox state and the task ID — the read side of the same "- [ ] T1: ..."
+// format project.Store.MarkTaskStatus writes.
+var workflowTaskLineRe = regexp.MustCompile(`^\s*-\s*\[([ x/])\]\s*([A-Za-z0-9_-]+):`)
+
+// parseWorkflowTaskStatuses extracts a task-ID → Mermaid classDef name map
+// ("done"/"running"/"pending") from a workflow's checklist lines.
+func parseWorkflowTaskStatuses(workflow string) map[string]string {
+	out := make(map[string]string)
+	for _, line := range strings.Split(workflow, "\n") {
+		m := workflowTaskLineRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		status := "pending"
+		switch m[1] {
+		case "x":
+			status = "done"
+		case "/":
+			status = "running"
+		}
+		out[m[2]] = status
+	}
+	return out
+}
+
+// mermaidFenceRe locates a ```mermaid ... ``` fenced code block in plan
+// markdown (non-greedy, spans newlines).
+var mermaidFenceRe = regexp.MustCompile("(?s)```mermaid\\n(.*?)```")
+
+// injectNodeStatus appends Mermaid classDef/class styling to the plan's
+// mermaid fence so the architecture flowgraph visually reflects the
+// workflow's real task status (green=done, amber=running, gray=pending) —
+// the "real-time flowgraph which showing whats done and what not" from the
+// local-first upgrade plan, built on the already-vendored mermaid.min.js
+// (no new diagramming library, no client-side changes needed). No-op if the
+// plan has no mermaid fence or the workflow has no ID'd task lines to map.
+func injectNodeStatus(plan, workflow string) string {
+	statuses := parseWorkflowTaskStatuses(workflow)
+	if len(statuses) == 0 {
+		return plan
+	}
+	return mermaidFenceRe.ReplaceAllStringFunc(plan, func(block string) string {
+		m := mermaidFenceRe.FindStringSubmatch(block)
+		if m == nil {
+			return block
+		}
+		body := strings.TrimRight(m[1], "\n")
+		var ids []string
+		for id := range statuses {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+
+		var sb strings.Builder
+		sb.WriteString("```mermaid\n")
+		sb.WriteString(body)
+		sb.WriteString("\n")
+		sb.WriteString("classDef done fill:#2ea043,stroke:#1a7f37,color:#fff\n")
+		sb.WriteString("classDef running fill:#d29922,stroke:#9e6a03,color:#fff\n")
+		sb.WriteString("classDef pending fill:#30363d,stroke:#8b949e,color:#c9d1d9\n")
+		for _, id := range ids {
+			fmt.Fprintf(&sb, "class %s %s\n", id, statuses[id])
+		}
+		sb.WriteString("```")
+		return sb.String()
+	})
+}
+
 // Start launches the HTTP server on the configured address.
 func (s *Server) Start(addr string) error {
 	mux := http.NewServeMux()
@@ -321,6 +481,7 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/events/history", s.handleEventHistory)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/reset", s.handleReset)
+	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/session/state", s.handleSessionState)
 	mux.HandleFunc("/api/switch-cli", s.handleSwitchCLI)
 
@@ -328,10 +489,14 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/providers", s.handleProviders)
 	mux.HandleFunc("/api/models/fetch", s.handleModelsFetch)
+	mux.HandleFunc("/api/models/ping", s.handleModelsPing)
+	mux.HandleFunc("/api/models/disable", s.handleModelsDisable)
+	mux.HandleFunc("/api/models/enable", s.handleModelsEnable)
 	mux.HandleFunc("/api/metrics/tokens", s.handleMetricsTokens)
 	mux.HandleFunc("/api/metrics/requests", s.handleMetricsRequests)
 	mux.HandleFunc("/api/analytics/history", s.handleMetricsRequests) // Alias for Observability
 	mux.HandleFunc("/api/metrics/reset", s.handleMetricsReset)
+	mux.HandleFunc("/api/cascade", s.handleCascade)
 	mux.HandleFunc("/api/capability", s.handleCapability)
 
 	// Architecture extensions

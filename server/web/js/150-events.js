@@ -2,6 +2,128 @@
 // EVENT WIRING
 // ════════════════════════════════════════════════════════════════════════
 function attachEventListeners() {
+  // Chat/Build mode + Loop + Brain composer controls (Phase 5). These drive the
+  // hidden #chat-mode-value / #chat-brain-value that the send body reads.
+  //  • Chat  → chat_mode "general" (talk/Q&A, no tools) — Loop toggle hidden.
+  //  • Build → chat_mode "project" (coding with tools); with Loop checked →
+  //    "loop" (auto-generate + run tasks). Loop is only meaningful in Build.
+  function syncMode() {
+    const active = document.querySelector(".mode-seg-btn.active");
+    const base = active ? active.dataset.mode : "project";
+    const loopWrap = $("#chat-loop-wrap");
+    const loopOn = $("#chat-loop-toggle")?.checked;
+    if (loopWrap) loopWrap.style.display = base === "project" ? "inline-flex" : "none";
+    const mv = $("#chat-mode-value");
+    if (mv) mv.value = base === "project" && loopOn ? "loop" : base;
+  }
+  $$(".mode-seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".mode-seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      syncMode();
+    });
+  });
+  $("#chat-loop-toggle")?.addEventListener("change", syncMode);
+  $("#chat-brain-select")?.addEventListener("change", (e) => {
+    const bv = $("#chat-brain-value");
+    if (bv) bv.value = e.target.value || "auto";
+  });
+  syncMode();
+
+  // Knowledge ingestion (Phase 3): teach the system from a file/dir/url/text.
+  $("#cfg-ingest-btn")?.addEventListener("click", async () => {
+    const input = $("#cfg-ingest-source");
+    const status = $("#cfg-ingest-status");
+    const source = (input?.value || "").trim();
+    if (!source) { toast("info", "Enter a path, URL, or text to ingest."); return; }
+    const btn = $("#cfg-ingest-btn");
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Ingesting…";
+    if (status) { status.style.display = "block"; status.textContent = "Ingesting…"; }
+    try {
+      const res = await fetch(API + "/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.success) throw new Error(d.error || "ingest failed");
+      let msg = `✓ ${d.sources} source(s) → ${d.chunks} memory chunk(s)`;
+      if (d.kg_nodes) msg += `, ${d.kg_nodes} code nodes`;
+      if (d.skipped) msg += `, ${d.skipped} skipped`;
+      if (status) { status.style.color = "var(--green, #34d399)"; status.textContent = msg; }
+      toast("success", "Knowledge ingested.");
+      if (input) input.value = "";
+    } catch (err) {
+      if (status) { status.style.color = "var(--red, #f87171)"; status.textContent = "✗ " + err.message; }
+      toast("error", err.message);
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  });
+
+  // "Browse" button → reuse the directory picker to fill the ingest input with a
+  // filesystem path (directories). Files can be selected via the Content browser.
+  $("#cfg-ingest-browse")?.addEventListener("click", () => {
+    if (typeof openDirPicker === "function") openDirPicker("cfg-ingest-source");
+  });
+
+  // Collapsible "Content" browser: lists the files/subdirs at the entered path
+  // (or the workspace when empty), doubling as a picker — click a folder to
+  // drill in, click a file to select it into the ingest input.
+  async function loadIngestContent(path) {
+    const bc = $("#cfg-ingest-breadcrumb");
+    const list = $("#cfg-ingest-listing");
+    if (!list) return;
+    list.innerHTML = `<div style="padding:8px; color:var(--text-mute); font-size:12px;">Loading…</div>`;
+    try {
+      const q = path ? "?path=" + encodeURIComponent(path) : "";
+      const res = await fetch(API + "/api/workspace/browse" + q);
+      if (!res.ok) throw new Error(await res.text());
+      const d = await res.json();
+      const cwd = d.cwd || "";
+      if (bc) bc.textContent = cwd || "(workspace)";
+      const rowStyle = "display:flex; align-items:center; gap:8px; padding:5px 8px; cursor:pointer; font-size:12px; border-radius:4px;";
+      let html = "";
+      if (d.parent) {
+        html += `<div class="ing-row" data-dir="${esc(d.parent)}" style="${rowStyle}"><span>📁</span><span>..</span></div>`;
+      }
+      (d.entries || []).forEach((e) => {
+        const abs = cwd ? cwd.replace(/\/$/, "") + "/" + e.name : e.name;
+        if (e.is_dir || e.isDir) {
+          html += `<div class="ing-row" data-dir="${esc(abs)}" style="${rowStyle}"><span>📁</span><span>${esc(e.name)}</span></div>`;
+        } else {
+          html += `<div class="ing-row" data-file="${esc(abs)}" style="${rowStyle}"><span>📄</span><span>${esc(e.name)}</span></div>`;
+        }
+      });
+      if (!html) html = `<div style="padding:8px; color:var(--text-mute); font-size:12px;">Empty.</div>`;
+      // A "use this folder" affordance at the top.
+      if (cwd) html = `<div class="ing-row" data-usedir="${esc(cwd)}" style="${rowStyle} color:var(--accent-3);"><span>✓</span><span>Use this folder for ingest</span></div>` + html;
+      list.innerHTML = html;
+    } catch (err) {
+      list.innerHTML = `<div style="padding:8px; color:var(--red,#f87171); font-size:12px;">${esc(err.message)}</div>`;
+    }
+  }
+  $("#cfg-ingest-content-toggle")?.addEventListener("click", () => {
+    const panel = $("#cfg-ingest-content");
+    const toggle = $("#cfg-ingest-content-toggle");
+    if (!panel) return;
+    const open = panel.style.display !== "none";
+    panel.style.display = open ? "none" : "block";
+    if (toggle) toggle.textContent = (open ? "▸" : "▾") + " Content";
+    if (!open) loadIngestContent(($("#cfg-ingest-source")?.value || "").trim());
+  });
+  $("#cfg-ingest-listing")?.addEventListener("click", (e) => {
+    const row = e.target.closest(".ing-row");
+    if (!row) return;
+    if (row.dataset.dir) { loadIngestContent(row.dataset.dir); return; }
+    const pick = row.dataset.file || row.dataset.usedir;
+    if (pick) {
+      const input = $("#cfg-ingest-source");
+      if (input) input.value = pick;
+      toast("info", "Selected: " + pick);
+    }
+  });
+
   // Global modal handlers
   document.addEventListener("click", (e) => {
     // Maximize button
@@ -83,66 +205,22 @@ function attachEventListeners() {
   //    modal.
   // Blocked while a response is in flight (pendingChat is the real tracker;
   // the old code referenced an undefined `sendDisabled` which was a dead guard).
+  // New Chat — the single "start fresh" control, uniform across every mode.
+  // It always: (1) in project/loop mode, deactivates the active project so its
+  // plan/workflow stops being injected; (2) POSTs /api/reset, which clears STM
+  // AND advances the session epoch server-side so prior conversations no longer
+  // resurface through memory recall; (3) clears the transcript. Distinct from
+  // Clear Screen (Ctrl+L), which only hides the transcript and keeps memory.
   $("#chat-new")?.addEventListener("click", async () => {
     if (pendingChat) { toast("info", "Wait for the current response to finish."); return; }
     const mode = $("#chat-mode-value")?.value || "general";
     try {
-      if (mode === "general") {
-        // General mode: just remove context (clear STM + transcript).
-        const res = await fetch(API + "/api/reset", { method: "POST" });
-        if (!res.ok) throw new Error("Reset failed");
-        const msgs = $("#chat-messages");
-        if (msgs) {
-          msgs.innerHTML = `
-            <div class="chat-empty">
-              <div class="chat-empty-icon pulse-anim">⚡</div>
-              <h3>New Chat</h3>
-              <p>General mode · context cleared. Type to begin.</p>
-            </div>`;
-        }
-        toast("success", "New chat started (General mode).");
-      } else {
-        // Project/Loop/Auto mode: deactivate the active project + open the
-        // new-project modal so the user can start a fresh project.
-        if (activeProjectId) {
-          await setActiveProject(null);
-        }
-        const msgs = $("#chat-messages");
-        if (msgs) {
-          msgs.innerHTML = `
-            <div class="chat-empty">
-              <div class="chat-empty-icon pulse-anim">⚡</div>
-              <h3>New Chat</h3>
-              <p>Project deactivated · start a new project to continue.</p>
-            </div>`;
-        }
-        openProjectModal(null);
-        toast("success", "Project closed — create a new project to continue.");
+      // Drop the active project first (project/loop) so its long-lived context
+      // isn't carried into the fresh chat.
+      if (mode !== "general" && activeProjectId) {
+        await setActiveProject(null);
       }
-    } catch (err) {
-      toast("error", err.message);
-    }
-  });
-
-  // Clear Screen (keep memory) — empties the visible transcript only; the
-  // agent's short-term memory and permission session are preserved. Works in
-  // every chat mode (general/project/auto/loop) since it is pure DOM.
-  $("#chat-clear")?.addEventListener("click", () => {
-    const msgs = $("#chat-messages");
-    if (!msgs) return;
-    msgs.innerHTML = `
-      <div class="chat-empty">
-        <div class="chat-empty-icon pulse-anim">⚡</div>
-        <h3>Screen Cleared</h3>
-        <p>Transcript hidden — memory and context are preserved. Type to continue.</p>
-      </div>
-    `;
-    msgs.scrollTop = 0;
-    toast("info", "Screen cleared (memory kept).");
-  });
-
-  $("#chat-reset")?.addEventListener("click", async () => {
-    try {
+      // Wipe conversational context in every mode (STM + session epoch).
       const res = await fetch(API + "/api/reset", { method: "POST" });
       if (!res.ok) throw new Error("Reset failed");
       const msgs = $("#chat-messages");
@@ -150,15 +228,33 @@ function attachEventListeners() {
         msgs.innerHTML = `
           <div class="chat-empty">
             <div class="chat-empty-icon pulse-anim">⚡</div>
-            <h3>Session Reset</h3>
-            <p>Short-term memory cleared and permission gate reset.</p>
-          </div>
-        `;
+            <h3>New Chat</h3>
+            <p>Fresh session · previous context cleared. Type to begin.</p>
+          </div>`;
       }
-      toast("success", "Session reset.");
+      toast("success", "New chat started — previous context cleared.");
     } catch (err) {
       toast("error", err.message);
     }
+  });
+
+  // Clear Screen (Ctrl+L) — purely cosmetic in EVERY mode: it hides the visible
+  // transcript but never touches memory or the session. This removes the old
+  // overlap with New Chat (which is the one control that actually resets); use
+  // New Chat to start fresh, Clear Screen to just tidy the view.
+  $("#chat-clear")?.addEventListener("click", () => {
+    const msgs = $("#chat-messages");
+    if (!msgs) return;
+    msgs.innerHTML = `
+      <div class="chat-empty">
+        <div class="chat-empty-icon pulse-anim">⚡</div>
+        <h3>Screen Cleared</h3>
+        <p>Transcript hidden — memory and context are preserved. Type to continue,
+        or use New Chat to start fresh.</p>
+      </div>
+    `;
+    msgs.scrollTop = 0;
+    toast("info", "Screen cleared (memory kept).");
   });
 
 
@@ -191,6 +287,11 @@ function attachEventListeners() {
       if (act === "primary") configAction("set_primary", model);
       else if (act === "remove") {
         if (confirm("Remove model " + model + "?")) configAction("remove_model", model);
+      } else if (act === "disable") {
+        const durInput = document.querySelector(`.mc-disable-dur[data-model="${CSS.escape(model)}"]`);
+        modelDisable(model, durInput?.value?.trim() || "");
+      } else if (act === "enable") {
+        modelEnable(model);
       }
       return;
     }
@@ -621,18 +722,33 @@ function attachEventListeners() {
   $("#cfg-local-llm-btn")?.addEventListener("click", async () => {
     const on = $("#cfg-enable-local-llm").checked;
     const offload = $("#cfg-enable-local-offload").checked;
+    const force = $("#cfg-force-local")?.checked || false;
+    const memoryProfile = $("#cfg-memory-profile")?.value ?? "";
+    // Force implies local enabled. local_mode drives routing: "force" pins to
+    // local (no cloud fallback), "auto" is the gated default, "off" disables.
+    const localMode = force ? "force" : (on ? "auto" : "off");
     const btn = $("#cfg-local-llm-btn");
     btn.innerHTML = '<div class="typing-dot" style="margin:4px auto"></div>';
     try {
       const res = await fetch(API + "/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_settings", enable_local_llm: on, enable_local_offloading: offload }),
+        body: JSON.stringify({ action: "update_settings", enable_local_llm: on || force, local_mode: localMode, enable_local_offloading: offload, memory_profile: memoryProfile }),
       });
       if (!res.ok) throw new Error("save failed");
+      const data = await res.json().catch(() => ({}));
       btn.innerHTML = "Saved!";
       setTimeout(() => (btn.innerHTML = "Apply"), 2000);
-      toast("success", "Local LLM setting saved." + (on ? " Model loads on next restart." : ""));
+      // A force-local start failure comes back as a warning — surface it
+      // rather than pretending it succeeded (never a silent cloud fallback).
+      if (data.warning) {
+        toast("error", data.warning);
+      } else if (data.force_local) {
+        toast("success", "Force Local active — every request now uses the local model.");
+      } else {
+        toast("success", "Local LLM setting saved." + (on ? " Model loads on next restart." : ""));
+      }
+      if (typeof renderForceLocalBadge === "function") renderForceLocalBadge(!!data.force_local);
     } catch (err) {
       console.error(err);
       btn.innerHTML = "Error";

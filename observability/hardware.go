@@ -60,6 +60,7 @@ func GetHardwareStats() HardwareStats {
 			stats.RAMUsedMB = used
 			stats.RAMUsagePercent = (used / total) * 100
 		}
+		stats.CPUUsagePercent = getWindowsCPUUsage()
 	}
 
 	fetchOllamaPS(&stats)
@@ -177,8 +178,9 @@ func getLinuxCPUUsage() float64 {
 }
 
 // getWindowsMemory uses wmic or systeminfo for a lightweight Windows fallback
-func getWindowsMemory() (float64, float64) {
-	// Simple powershell one-liner or system calls. 
-	// Due to light constraint, we skip complex parsing if not strictly necessary.
-	return 0, 0
-}
+// getWindowsMemory / getWindowsCPUUsage are implemented per-platform:
+// real kernel32 syscalls in hardware_windows.go, no-op stubs in
+// hardware_notwindows.go. This keeps the Windows-only syscall code out of the
+// cross-platform build while giving the Windows branch above a real
+// implementation (it was previously a `return 0, 0` stub, which is why the
+// Resource Center showed RAM 0/0 and CPU 0% on Windows).

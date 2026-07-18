@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -127,6 +128,25 @@ func (c *Client) setAuth(req *http.Request) {
 	}
 }
 
+// ErrNoBaseURL is returned before any HTTP attempt when a client has no base
+// URL configured. It is deliberately a plain (non-net.Error) error so the
+// retry layer classifies it as permanent — retrying a request with no URL
+// only produces the same `unsupported protocol scheme ""` failure five times.
+// A client with an empty BaseURL should never be registered (see
+// app_wireup.endpointUsable); this is the defense-in-depth at the call site.
+var ErrNoBaseURL = errors.New("no base URL configured for this model (set a provider/base_url, or enable a local model)")
+
+// checkEndpoint validates the client can actually build a request URL. Called
+// at the top of every request method so an unusable client fails fast with a
+// clear, non-retryable error instead of an opaque URL-scheme error deep in
+// net/http.
+func (c *Client) checkEndpoint() error {
+	if strings.TrimSpace(c.BaseURL) == "" {
+		return ErrNoBaseURL
+	}
+	return nil
+}
+
 // endpointURL builds the full request URL, appending any extra query params.
 func (c *Client) endpointURL(path string) string {
 	url := c.BaseURL + path
@@ -140,11 +160,12 @@ func (c *Client) endpointURL(path string) string {
 // When the API did not return usage (some streaming providers omit it),
 // tokens are estimated from the request/response sizes.
 func (c *Client) recordUsage(req *CompletionRequest, resp *CompletionResponse, latency time.Duration, success bool) {
-	var prompt, completion, total int
+	var prompt, completion, total, cached int
 	if resp != nil {
 		prompt = resp.Usage.PromptTokens
 		completion = resp.Usage.CompletionTokens
 		total = resp.Usage.TotalTokens
+		cached = resp.Usage.CachedPromptTokens()
 	}
 	if total == 0 && (prompt != 0 || completion != 0) {
 		total = prompt + completion
@@ -167,6 +188,7 @@ func (c *Client) recordUsage(req *CompletionRequest, resp *CompletionResponse, l
 		Provider:         c.Provider,
 		PromptTokens:     prompt,
 		CompletionTokens: completion,
+		CachedTokens:     cached,
 		TotalTokens:      total,
 		LatencyMs:        latency.Milliseconds(),
 		Stream:           req.Stream,
@@ -248,6 +270,9 @@ func sanitizeMessages(msgs []core.Message) {
 
 // ChatCompletion sends a non-streaming chat completion request.
 func (c *Client) ChatCompletion(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
+	if err := c.checkEndpoint(); err != nil {
+		return nil, err
+	}
 	req.Stream = false
 	sanitizeMessages(req.Messages)
 	body, err := json.Marshal(req)
@@ -287,6 +312,9 @@ func (c *Client) ChatCompletion(ctx context.Context, req *CompletionRequest) (*C
 
 // CreateEmbedding generates an embedding for the given text.
 func (c *Client) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	if err := c.checkEndpoint(); err != nil {
+		return nil, err
+	}
 	reqBody := map[string]interface{}{
 		"model": c.Model,
 		"input": text,
@@ -341,6 +369,9 @@ func (c *Client) CreateEmbedding(ctx context.Context, text string) ([]float32, e
 // invoking callbacks for each content/tool-call delta. Returns the
 // fully assembled response when done.
 func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionRequest, cb *StreamCallbacks) (*CompletionResponse, error) {
+	if err := c.checkEndpoint(); err != nil {
+		return nil, err
+	}
 	req.Stream = true
 	req.StreamOptions = &StreamOptions{IncludeUsage: true} // request usage in final chunk
 	sanitizeMessages(req.Messages)
@@ -492,6 +523,9 @@ func (c *Client) ModelInfo() core.ModelMetadata {
 // `return nil` stub, which reported every provider (including ones with an
 // empty BaseURL) as healthy.
 func (c *Client) Ping(ctx context.Context) error {
+	if err := c.checkEndpoint(); err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpointURL("/models"), nil)
 	if err != nil {
 		return fmt.Errorf("ping: %w", err)

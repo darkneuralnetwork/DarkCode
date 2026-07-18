@@ -416,7 +416,9 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.memSystem != nil {
-		s.memSystem.STMClear()
+		// StartNewSession clears STM AND advances the session epoch so episodic
+		// recall stops surfacing prior conversations (durable facts are kept).
+		s.memSystem.StartNewSession()
 	}
 	if s.kernel != nil && s.kernel.Gate() != nil {
 		s.kernel.Gate().ResetSession()

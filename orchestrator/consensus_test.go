@@ -142,6 +142,60 @@ func TestMergeWithConsensusSynthesizesWhenAvailable(t *testing.T) {
 	}
 }
 
+// TestRunConsensusOnOutputIncludesSTM is the Issue 3 regression test: a
+// persona model reviewing a later turn must see the actual conversation
+// history, not just the isolated goal/output/review-request triple —
+// previously the thin context could cause a "skeptic"/"critic" persona to
+// genuinely misread a context-dependent follow-up (e.g. "continue", or a
+// message referencing a tool used earlier).
+func TestRunConsensusOnOutputIncludesSTM(t *testing.T) {
+	var sawHistory bool
+	client := &fakeLLMClient{name: "primary", respFunc: func(idx int, req *core.CompletionRequest) string {
+		for _, m := range req.Messages {
+			if strings.Contains(m.ContentString(), "earlier turn about the auth module") {
+				sawHistory = true
+			}
+		}
+		return "refined answer"
+	}}
+	deps := newTestKernelWithMode(t, core.RouteConsensus, client)
+	deps.Memory.STMAdd(core.Message{Role: core.RoleUser, Content: "earlier turn about the auth module"})
+	deps.Memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: "done with the auth module"})
+
+	if _, err := deps.Kernel.runConsensusOnOutput(context.Background(), "continue", "the agent's answer", ""); err != nil {
+		t.Fatalf("runConsensusOnOutput: %v", err)
+	}
+	if !sawHistory {
+		t.Error("expected prior STM turns to be visible to the consensus review, not just the isolated goal/output pair")
+	}
+}
+
+// TestMergeWithConsensusIncludesSTM is the DAG-path counterpart of the
+// above: the synthesis persona models must see conversation history, not
+// just this DAG's isolated sub-agent outputs.
+func TestMergeWithConsensusIncludesSTM(t *testing.T) {
+	var sawHistory bool
+	client := &fakeLLMClient{name: "primary", respFunc: func(idx int, req *core.CompletionRequest) string {
+		for _, m := range req.Messages {
+			if strings.Contains(m.ContentString(), "earlier turn about the auth module") {
+				sawHistory = true
+			}
+		}
+		return "consensus-synthesized merge"
+	}}
+	deps := newTestKernelWithMode(t, core.RouteConsensus, client)
+	deps.Memory.STMAdd(core.Message{Role: core.RoleUser, Content: "earlier turn about the auth module"})
+	deps.Memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: "done with the auth module"})
+
+	results := []*core.SubAgentResult{{Output: "output A", Success: true}}
+	if _, err := deps.Kernel.mergeWithConsensus(context.Background(), results, "goal"); err != nil {
+		t.Fatalf("mergeWithConsensus: %v", err)
+	}
+	if !sawHistory {
+		t.Error("expected prior STM turns to be visible to the DAG merge synthesis")
+	}
+}
+
 // Sanity check that the test router itself behaves like the real thing: a
 // model registered under a second name is visible to router.Consensus as an
 // "other" contributor, not silently deduped away by the shared client

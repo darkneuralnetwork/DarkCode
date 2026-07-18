@@ -21,11 +21,13 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/darkcode/internal/strutil"
 	"strings"
 	"time"
 
+	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/router"
@@ -45,6 +47,14 @@ const MaxObservationLen = 4000
 // DefaultMaxLoops is the safety ceiling when none is configured. The doc
 // suggests ~20; we keep a slightly higher default but still bounded.
 const DefaultMaxLoops = 20
+
+// loopHistoryBudgetBytes bounds how much prior conversation (from the
+// caller's STM) is folded into a Run() call, keeping the most recent
+// messages when the budget is exceeded. This is what gives the loop real
+// conversation continuity (local-first upgrade §7 Fix C): previously every
+// Run() started a brand-new 2-message conversation with zero memory of what
+// it was doing, so a follow-up "continue" had nothing to continue.
+const loopHistoryBudgetBytes = 6000
 
 // ReActLoop is the agentic execution loop. It is constructed once by the
 // orchestrator kernel and re-used per Execute call when AgenticLoop is on.
@@ -89,8 +99,14 @@ type Result struct {
 }
 
 // Run executes the Sense-Think-Act loop for the given goal and returns the
-// agent's final answer along with a trace of the tools it executed.
-func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
+// agent's final answer along with a trace of the tools it executed. history
+// is the caller's prior conversation (STM) — nil/empty for a genuinely fresh
+// task, non-empty when this is a follow-up (e.g. "continue") so the loop
+// knows what it was doing rather than starting from zero every time (local-
+// first upgrade §7 Fix C). Truncated to loopHistoryBudgetBytes, keeping the
+// most recent messages, so a long conversation can't blow out the context
+// window on every single loop turn.
+func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message) (*Result, error) {
 	ctx, span := observability.StartSpan(ctx, "agentic-loop")
 	defer span.End()
 
@@ -105,11 +121,11 @@ func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
 		return nil, fmt.Errorf("agentic loop: model routing failed: %w", err)
 	}
 
-	// Assemble the initial conversation: a ReAct system prompt + the goal.
-	messages := []core.Message{
-		{Role: core.RoleSystem, Content: l.systemPrompt()},
-		{Role: core.RoleUser, Content: goal},
-	}
+	// Assemble the initial conversation: a ReAct system prompt + prior
+	// history (if any, continuity) + the goal.
+	messages := []core.Message{{Role: core.RoleSystem, Content: l.systemPrompt()}}
+	messages = append(messages, truncateHistory(history, loopHistoryBudgetBytes)...)
+	messages = append(messages, core.Message{Role: core.RoleUser, Content: goal})
 
 	if l.emitter != nil {
 		l.emitter.EmitTaskUpdate("agentic-loop", "started",
@@ -129,6 +145,9 @@ func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
 	// after one more repeat we break early so a stuck loop can't burn the
 	// entire iteration budget on the same error.
 	stuckFails := make(map[string]int)
+	// refitDone guards the one-shot context-overflow recovery so a persistent
+	// overflow can't spin the loop forever (single hard refit, then surface).
+	refitDone := false
 	start := time.Now()
 
 	// ── The loop ──────────────────────────────────────────────────────────
@@ -144,10 +163,16 @@ func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
 
 		// ── 1. THINK (Orient/Decide) ──────────────────────────────────────
 		temp := 0.7
+		schemas := l.registry.LLMSchemas().([]llm.ToolSchema)
+		// Hard context-fit guarantee: messages grow with each iteration's tool
+		// output, so fit to the RECEIVING client's effective window right
+		// before dispatch (Part 3 contract). Prevents the "context window
+		// exceeded" fatal on long local-model loops.
+		messages = compression.FitClient(messages, client, 0, len(schemas))
 		req := &core.CompletionRequest{
 			Model:       modelName,
 			Messages:    messages,
-			Tools:       l.registry.LLMSchemas().([]llm.ToolSchema),
+			Tools:       schemas,
 			Temperature: &temp,
 		}
 
@@ -165,6 +190,19 @@ func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
 			},
 		})
 		if err != nil {
+			// Recovery ladder: a context overflow past the FitClient estimate
+			// (tokenizer drift) shrinks hard to 75% of the window and retries
+			// the same iteration once, instead of aborting the whole task.
+			if errors.Is(err, core.ErrContextTooLong) && !refitDone {
+				refitDone = true
+				window := client.ModelInfo().Context
+				if window <= 0 {
+					window = compression.DefaultContextWindow
+				}
+				messages = compression.FitToWindow(messages, window*3/4, 0)
+				iteration--
+				continue
+			}
 			return nil, fmt.Errorf("agentic loop iteration %d: %w", iteration, err)
 		}
 		if len(resp.Choices) == 0 {
@@ -195,6 +233,29 @@ func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
 					l.emitter.EmitTaskUpdate("agentic-loop", "verifying", "Verification failed, forcing self-correction")
 				}
 				continue // loop back and fix it
+			}
+
+			// Goal-completion self-evaluation (local-first upgrade §7 Fix A):
+			// the syntactic stop condition (no tool calls) only means the
+			// model chose to stop, not that the goal was actually met. Ask
+			// it directly, once, before accepting the answer as final — this
+			// is what makes the loop genuinely "self-directed... evaluates
+			// its own output against a defined goal, and iterates until the
+			// objective is met" per the definition of loop engineering,
+			// rather than a fixed ReAct cycle with no real completion check.
+			if iteration < l.maxLoops {
+				if done, reason := l.evaluateGoalCompletion(ctx, client, modelName, goal, final); !done {
+					messages = append(messages, core.Message{
+						Role: core.RoleSystem,
+						Content: "Self-evaluation: the goal is not yet fully met — " + reason +
+							"\nContinue working; do not repeat steps you've already completed.",
+					})
+					if l.emitter != nil {
+						l.emitter.EmitTaskUpdate("agentic-loop", "self-eval",
+							"Self-evaluation found the goal incomplete: "+reason)
+					}
+					continue // loop back and keep working
+				}
 			}
 
 			if l.emitter != nil {
@@ -281,6 +342,92 @@ func (l *ReActLoop) Run(ctx context.Context, goal string) (*Result, error) {
 		return &Result{Output: partial + "\n\n_(agentic loop reached the max iteration limit)_", ToolTrace: trace.String()}, nil
 	}
 	return nil, fmt.Errorf("agentic loop reached max iterations (%d) without a final answer", l.maxLoops)
+}
+
+// selfEvalDoneMarker / selfEvalContinuePrefix are the structured response
+// tokens evaluateGoalCompletion asks for — a fixed-prefix check rather than
+// fragile prose parsing, and cheap (the model is asked for one short line,
+// not a paragraph).
+const (
+	selfEvalDoneMarker     = "GOAL_STATUS: DONE"
+	selfEvalContinuePrefix = "GOAL_STATUS: CONTINUE"
+)
+
+// evaluateGoalCompletion asks the model, in one cheap completion, whether
+// its own final answer actually satisfies the original goal — the missing
+// piece that makes the loop genuinely "self-directed... evaluates its own
+// output against a defined goal" (the user's own definition of loop
+// engineering) instead of stopping purely because it produced a response
+// with no tool calls. Called once per Run() (only at the syntactic stop
+// condition), never per-iteration, so it doesn't double the cost of every
+// loop turn.
+//
+// Fails OPEN (reports done) on any error, empty response, or unparseable
+// content: a flaky self-eval call must never be able to force a longer
+// loop — the existing max-iterations ceiling is the only hard backstop and
+// this must never undermine it.
+func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, client core.LLMClient, model, goal, final string) (done bool, reason string) {
+	// Prefer a cheap LOCAL tier for this one-line yes/no check — it's the
+	// definition of an auxiliary call. Fall back to the passed-in (coding)
+	// client when no local model is loaded, keeping the existing behavior on
+	// cloud-only setups. Self-eval already fails open, so a local miss is safe.
+	if l.router != nil {
+		if lc, lm, err := l.router.Route(core.ModelTierTinyLocal, 0, "self_eval"); err == nil && lc != nil {
+			client, model = lc, lm
+		}
+	}
+	temp := 0.0
+	maxTok := 60
+	req := &core.CompletionRequest{
+		Model: model,
+		Messages: []core.Message{
+			{Role: core.RoleSystem, Content: "You are a strict completion checker. Respond with EXACTLY one line: \"" +
+				selfEvalDoneMarker + "\" if the answer below fully and completely satisfies the goal, or \"" +
+				selfEvalContinuePrefix + ": <one short reason>\" if it does not. No other text, no explanation."},
+			{Role: core.RoleUser, Content: fmt.Sprintf("GOAL: %s\n\nANSWER:\n%s\n\nDoes the answer fully satisfy the goal?", goal, final)},
+		},
+		Temperature: &temp,
+		MaxTokens:   &maxTok,
+	}
+	resp, err := client.ChatCompletion(ctx, req)
+	if err != nil || len(resp.Choices) == 0 {
+		return true, ""
+	}
+	line := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if strings.HasPrefix(line, selfEvalContinuePrefix) {
+		reason = strings.TrimSpace(strings.TrimPrefix(line, selfEvalContinuePrefix))
+		reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))
+		if reason == "" {
+			reason = "the model did not give a specific reason"
+		}
+		return false, reason
+	}
+	// The DONE marker, or any response that doesn't match the CONTINUE
+	// prefix (e.g. the model ignored the format) — fail-open rather than
+	// guess at parsing free-form prose.
+	return true, ""
+}
+
+// truncateHistory keeps the most recent messages from history whose combined
+// content fits within maxBytes, dropping the oldest first — the byte-budget
+// truncation Run uses to fold prior conversation in without letting a long
+// history blow out the context window on every loop turn. Mirrors the same
+// keep-the-tail pattern orchestrator.truncateMid uses for plan/workflow
+// injection.
+func truncateHistory(history []core.Message, maxBytes int) []core.Message {
+	if len(history) == 0 {
+		return nil
+	}
+	total := 0
+	start := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		total += len(history[i].ContentString())
+		if total > maxBytes {
+			start = i + 1
+			break
+		}
+	}
+	return history[start:]
 }
 
 // systemPrompt returns the ReAct instruction set given to the model. It tells

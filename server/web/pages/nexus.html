@@ -25,14 +25,30 @@
       <div style="font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.9); display: flex; align-items: center; gap: 8px;">
         <span style="color: var(--accent-3);">✦</span> DarkCode Orchestrator
       </div>
-      <div style="display: flex; gap: 8px;">
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <div class="mode-seg" role="group" aria-label="Mode" style="display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+          <button type="button" class="mode-seg-btn" data-mode="general" title="Chat — talk / ask questions (no tools)">Chat</button>
+          <button type="button" class="mode-seg-btn active" data-mode="project" title="Build — coding with tools">Build</button>
+        </div>
+        <label id="chat-loop-wrap" class="chat-loop-toggle" title="Loop engineering: auto-generate and run tasks (enable in Settings)" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-mute); cursor: pointer;">
+          <input type="checkbox" id="chat-loop-toggle"> Loop
+        </label>
+        <label class="chat-brain-wrap" title="Which brain answers: Auto (local-first, escalate), Local (offline), or Cloud" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-mute);">
+          🧠
+          <select id="chat-brain-select" style="background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 12px;">
+            <option value="auto" selected>Auto</option>
+            <option value="local">Local</option>
+            <option value="cloud">Cloud</option>
+          </select>
+        </label>
+        <div style="width: 1px; height: 20px; background: var(--border); margin: 0 2px;"></div>
         <button type="button" id="reopen-approval-btn" class="ct-btn notification-btn" title="Pending Approval: Click to Review" style="display: none; color: #ff9100;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
         </button>
         <button type="button" id="chat-clear" class="ct-btn" title="Clear Screen (Ctrl+L)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         </button>
-        <button type="button" id="chat-new" class="ct-btn" title="New Session">
+        <button type="button" id="chat-new" class="ct-btn" title="New Chat — start fresh (clears context in every mode)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
         </button>
       </div>
@@ -75,6 +91,7 @@
     <form class="chat-input glass-panel" id="chat-form" style="margin: 0 24px 24px;">
       <div class="attach-tray" id="attach-tray"></div>
       <input type="hidden" id="chat-mode-value" value="project">
+      <input type="hidden" id="chat-brain-value" value="auto">
       <div class="chat-input-row" style="position: relative;">
         <div style="position: relative; display: flex; align-items: center; padding-left: 12px; opacity: 0.7;">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

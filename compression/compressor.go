@@ -8,7 +8,15 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/observability"
 )
+
+// loraLogf adapts the structured logger to the printf-style logger
+// core.WithLoRA expects, so a missing/misplaced adapter surfaces in the log
+// instead of silently degrading to the base model.
+func loraLogf(format string, args ...interface{}) {
+	observability.Log().Warn(fmt.Sprintf(format, args...), nil)
+}
 
 // Compressor is the Layer 3 compression agent. It uses a lightweight
 // model call to reduce context between steps, extracting only meaningful
@@ -100,17 +108,13 @@ func (c *Compressor) Compress(ctx context.Context, messages []core.Message, goal
 		return c.heuristicCompress(messages, goal), nil
 	}
 
+	useSummarizerLoRA := false
 	if useLocal && router != nil {
 		localClient, localModel, err := router.Route(core.ModelTierFast, 0, "local_compression")
 		if err == nil && localClient != nil {
 			client = localClient
 			fastModel = localModel
-			
-			// Try to mount the summarizer LoRA
-			if lm, ok := client.(core.LoRAManager); ok {
-				_ = lm.MountLoRA("summarizer", 1.0)
-				defer lm.MountLoRA("summarizer", 0.0)
-			}
+			useSummarizerLoRA = true
 		}
 	}
 
@@ -138,7 +142,20 @@ func (c *Compressor) Compress(ctx context.Context, messages []core.Message, goal
 		MaxTokens:   &maxTok,
 	}
 
-	resp, err := client.ChatCompletion(ctx, req)
+	// Mount the summarizer LoRA for the local compression call via the single
+	// audited path (logs a mount failure instead of silently using the base
+	// model). A no-op for cloud/non-LoRA clients.
+	var resp *core.CompletionResponse
+	var err error
+	call := func() error {
+		resp, err = client.ChatCompletion(ctx, req)
+		return err
+	}
+	if useSummarizerLoRA {
+		_ = core.WithLoRA(client, "local_compression", loraLogf, call)
+	} else {
+		_ = call()
+	}
 	if err != nil {
 		// Fallback to heuristic on error
 		snapshot := c.heuristicCompress(messages, goal)

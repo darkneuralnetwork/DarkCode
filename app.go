@@ -47,6 +47,7 @@ type AppRunner struct {
 	globalActiveProject string
 	resumedFromGUI      bool
 	mode                string
+	localLLMPromptShown bool
 }
 
 func NewAppRunner(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) *AppRunner {

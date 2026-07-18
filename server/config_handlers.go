@@ -63,7 +63,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"temperature":      temperature,
 		"execution_profile": executionProfile,
 		"enable_local_llm": s.cfg.EnableLocalLLM,
+		"local_mode":       s.cfg.ResolvedLocalMode(),
+		"force_local":      s.cfg.ForceLocal(),
 		"local_model_role": s.cfg.LocalModelRole,
+		"memory_profile":   s.cfg.MemoryProfile,
 		"has_api_key":      hasKey,
 		"models":           safeModels,
 		"embedded":         s.embeddedStatus(),
@@ -89,7 +92,16 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// "auto". Pointer so an explicit "auto" is distinguishable from "not sent".
 		ExecutionProfile *string `json:"execution_profile,omitempty"`
 
+		// MemoryProfile is the local model's context/RAM knob: "lean" | "balanced"
+		// | "max" | "" (auto). Pointer so an unset field leaves it unchanged.
+		MemoryProfile *string `json:"memory_profile,omitempty"`
+
 		EnableLocalLLM *bool `json:"enable_local_llm,omitempty"`
+		// LocalMode sets the three-plus-state local preference directly:
+		// "off" | "auto" | "on" | "force". "force" pins routing to the local
+		// model (no cloud fallback) and starts it on demand. Pointer so an
+		// unset field leaves the current mode unchanged.
+		LocalMode *string `json:"local_mode,omitempty"`
 
 		ModelName       string `json:"model_name,omitempty"`
 		Provider        string `json:"provider,omitempty"`
@@ -270,6 +282,35 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		if req.EnableLocalLLM != nil {
 			s.cfg.EnableLocalLLM = *req.EnableLocalLLM
 		}
+		// Memory profile (local model context/RAM knob). Validated against the
+		// known names; empty means auto. Takes effect on the next local-model
+		// (re)load.
+		if req.MemoryProfile != nil {
+			switch strings.ToLower(strings.TrimSpace(*req.MemoryProfile)) {
+			case "", "lean", "balanced", "max":
+				s.cfg.MemoryProfile = strings.ToLower(strings.TrimSpace(*req.MemoryProfile))
+			default:
+				writeError(w, http.StatusBadRequest, "invalid memory_profile (want lean|balanced|max)")
+				return
+			}
+		}
+		// Local mode ("off"|"auto"|"on"|"force"). Applied via
+		// ApplyLocalPreference below so force-local pins routing and starts the
+		// embedded model without a restart. Keep the legacy EnableLocalLLM bool
+		// in sync so a downgrade to an older build still behaves sensibly.
+		if req.LocalMode != nil {
+			switch *req.LocalMode {
+			case "off":
+				s.cfg.LocalMode = "off"
+				s.cfg.EnableLocalLLM = false
+			case "auto", "on", "force":
+				s.cfg.LocalMode = *req.LocalMode
+				s.cfg.EnableLocalLLM = true
+			default:
+				writeError(w, http.StatusBadRequest, "invalid local_mode (want off|auto|on|force)")
+				return
+			}
+		}
 		// Agentic loop hot-toggle. Pointer so we can distinguish "not sent"
 		// from "explicitly false".
 		if req.AgenticLoop != nil {
@@ -305,10 +346,27 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		s.kernel.ReloadModels(s.cfg)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"message": "Configuration updated successfully",
-	})
+	// Apply the local-LLM preference last: pin/unpin force-local routing and,
+	// when force-local is requested but not yet up, start the embedded model.
+	// A force-local failure is reported (never a silent cloud fallback) but
+	// does not fail the whole settings save — the rest of the update stuck.
+	warning := ""
+	if s.kernel != nil {
+		if err := s.kernel.ApplyLocalPreference(r.Context(), s.cfg); err != nil {
+			warning = err.Error()
+		}
+	}
+
+	resp := map[string]interface{}{
+		"success":     true,
+		"message":     "Configuration updated successfully",
+		"local_mode":  s.cfg.ResolvedLocalMode(),
+		"force_local": s.cfg.ForceLocal(),
+	}
+	if warning != "" {
+		resp["warning"] = warning
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // activeTask helpers

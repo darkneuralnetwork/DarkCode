@@ -113,7 +113,12 @@ func (e *EmbeddedClient) CreateEmbedding(ctx context.Context, text string) ([]fl
 func (e *EmbeddedClient) ModelInfo() core.ModelMetadata {
 	ctxSize := 0
 	if e.prov != nil {
-		ctxSize = e.prov.ContextSize()
+		// Report the EFFECTIVE per-request window (NCtx/NParallel), not the
+		// raw -c value. llama-server splits -c across its -np decode slots, so
+		// a single request only ever gets -c/-np tokens — reporting the raw
+		// -c here is the silent overcount behind most "context window
+		// exceeded" errors. EffectiveWindow() reads the governor's plan.
+		ctxSize = e.prov.EffectiveWindow()
 	}
 	return core.ModelMetadata{
 		ID:      e.modelID,

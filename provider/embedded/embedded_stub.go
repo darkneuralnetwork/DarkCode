@@ -40,6 +40,22 @@ import (
 // their own ProcessManager — losing track of the running server and risking
 // multiple concurrent llama-server processes on different ports.
 type Provider struct {
+	// --- 64-bit atomic fields — MUST stay first for 8-byte alignment on
+	// 32-bit platforms (386/arm), where a misaligned 64-bit atomic panics.
+	// See memory/writer.go for the same fix. Both are accessed via the
+	// sync/atomic package (generation: AddUint64/LoadUint64;
+	// lastUsedUnixNano: StoreInt64/LoadInt64).
+
+	// generation is bumped every time LoadModel swaps the running model. An
+	// in-flight EmbeddedClient captures the generation at creation and fails
+	// fast (errModelSwapped) if it changes mid-request, preventing a 60s
+	// retry-storm when a model is hot-swapped under an active completion.
+	generation uint64
+	// lastUsedUnixNano is bumped by EmbeddedClient on every request (see
+	// client.go's touch()). Used by the idle-unload monitor to decide when
+	// the model has been inactive long enough to free RAM/VRAM.
+	lastUsedUnixNano int64
+
 	mu            sync.Mutex
 	scheduler     interface{} // kept for API compat; not used in subprocess mode
 	pm            *ProcessManager
@@ -59,16 +75,6 @@ type Provider struct {
 	// the ctxengine integration) see the model's real window instead of a
 	// guess. 0 before any model has loaded.
 	loadedContextSize int
-	// generation is bumped every time LoadModel swaps the running model. An
-	// in-flight EmbeddedClient captures the generation at creation and fails
-	// fast (errModelSwapped) if it changes mid-request, preventing a 60s
-	// retry-storm when a model is hot-swapped under an active completion.
-	generation uint64
-
-	// lastUsedUnixNano is bumped by EmbeddedClient on every request (see
-	// client.go's touch()). Used by the idle-unload monitor to decide when
-	// the model has been inactive long enough to free RAM/VRAM.
-	lastUsedUnixNano int64
 	// idleTimeout: 0 = idle-unload disabled (default — a silently unloaded
 	// model means the next request pays a full reload, which most users
 	// would not expect without opting in). >0 = unload after this much
@@ -79,6 +85,16 @@ type Provider struct {
 	// new timeout is configured or the provider is closed. nil when no idle
 	// monitor is running.
 	idleStop chan struct{}
+	// loadPlan is the Local Resource Governor's verdict (see governor.go).
+	// When set, computeLaunchOpts uses its NCtx/NParallel verbatim — the
+	// governor already accounted model+KV+LoRA against free RAM, so no other
+	// sizing logic may second-guess it.
+	loadPlan *LoadPlan
+	// loadRefusal is the governor's human-readable reason when local was
+	// refused (over budget / weak hardware). Surfaced via LoadRefusal() to
+	// the CLI /local status and the GUI Local-LLM card so "why is local
+	// off?" is always answerable.
+	loadRefusal string
 }
 
 // Singleton plumbing.
@@ -137,6 +153,52 @@ func SetContextSizeOverride(n int) {
 	p.mu.Lock()
 	p.contextSizeOverride = n
 	p.mu.Unlock()
+}
+
+// SetLoadPlan installs the Local Resource Governor's verdict on the
+// singleton. computeLaunchOpts launches with the plan's NCtx/NParallel; a nil
+// plan restores the legacy RAM-tiered sizing (tests, direct API users).
+func SetLoadPlan(plan *LoadPlan) {
+	p := Default()
+	p.mu.Lock()
+	p.loadPlan = plan
+	if plan != nil && plan.Fits {
+		p.loadRefusal = ""
+	}
+	p.mu.Unlock()
+}
+
+// SetLoadRefusal records why the governor refused to load a local model, for
+// status surfaces. Cleared by a successful SetLoadPlan.
+func SetLoadRefusal(reason string) {
+	p := Default()
+	p.mu.Lock()
+	p.loadRefusal = reason
+	p.mu.Unlock()
+}
+
+// LoadRefusal returns the governor's refusal reason ("" when local loaded or
+// was never attempted).
+func (p *Provider) LoadRefusal() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.loadRefusal
+}
+
+// EffectiveWindow returns the per-request usable context of the running
+// model (NCtx/NParallel from the governor's plan), or 0 when unknown. This is
+// the number prompt fitting must respect — NOT the raw -c value, which
+// llama-server splits across parallel slots.
+func (p *Provider) EffectiveWindow() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.loadPlan != nil && p.loadPlan.Fits {
+		return p.loadPlan.EffectiveWindow()
+	}
+	if p.loadedContextSize > 0 {
+		return p.loadedContextSize / 4 // legacy launch used -np 4
+	}
+	return 0
 }
 
 // idleCheckInterval is how often the idle monitor polls last-used time.
@@ -414,7 +476,13 @@ func (p *Provider) computeLaunchOpts(modelPath string) LaunchOpts {
 	if catalogCtx == 0 {
 		catalogCtx = 32768 // unknown model → user's minimum
 	}
-	if p.contextSizeOverride > 0 {
+	if p.loadPlan != nil && p.loadPlan.Fits {
+		// The governor already budgeted model+KV+LoRA against free RAM and
+		// chose these values (honoring the user's context override as its
+		// starting point) — no sizing logic here may second-guess them.
+		opts.ContextSize = p.loadPlan.NCtx
+		opts.Parallel = p.loadPlan.NParallel
+	} else if p.contextSizeOverride > 0 {
 		opts.ContextSize = p.contextSizeOverride
 	} else if p.caps == nil {
 		opts.ContextSize = 32768
@@ -559,6 +627,17 @@ func (p *Provider) Status() ProcessStatus {
 // Close stops any running server.
 func (p *Provider) Close() error {
 	p.UnloadModel()
+	// Terminal shutdown: stop the idle-monitor goroutine so it doesn't leak
+	// (or later act on a stale/reloaded model). UnloadModel deliberately does
+	// NOT stop it — a normal idle-triggered or manual unload should leave the
+	// monitor running so it resumes watching if a new model loads; only Close
+	// is terminal.
+	p.mu.Lock()
+	if p.idleStop != nil {
+		close(p.idleStop)
+		p.idleStop = nil
+	}
+	p.mu.Unlock()
 	return nil
 }
 

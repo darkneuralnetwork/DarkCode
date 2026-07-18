@@ -51,6 +51,9 @@ func (t *FileTool) WriteFile(ctx context.Context, args map[string]interface{}) *
 	}
 
 	path = expandPath(ctx, path)
+	if err := confineWrite(ctx, path); err != nil {
+		return &ToolResult{Name: "write_file", Success: false, Error: err.Error()}
+	}
 
 	// Create parent directories
 	dir := filepath.Dir(path)
@@ -116,6 +119,9 @@ func (t *FileTool) PatchFile(ctx context.Context, args map[string]interface{}) *
 	}
 
 	path = expandPath(ctx, path)
+	if err := confineWrite(ctx, path); err != nil {
+		return &ToolResult{Name: "patch", Success: false, Error: err.Error()}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &ToolResult{Name: "patch", Success: false, Error: err.Error()}
@@ -157,6 +163,9 @@ func (t *FileTool) ReplaceFileContent(ctx context.Context, args map[string]inter
 	}
 
 	path = expandPath(ctx, path)
+	if err := confineWrite(ctx, path); err != nil {
+		return &ToolResult{Name: "replace_file_content", Success: false, Error: err.Error()}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &ToolResult{Name: "replace_file_content", Success: false, Error: err.Error()}

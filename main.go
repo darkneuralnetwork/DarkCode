@@ -8,6 +8,7 @@ import (
 
 	"github.com/darkcode/config"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/cli"
 	"github.com/darkcode/cli/tui"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/router"
@@ -15,6 +16,13 @@ import (
 )
 
 func main() {
+	// Enable ANSI/VT processing (and detect color support) as early as
+	// possible — a process-wide console setting, so every subsequent print
+	// (setup wizard, GUI-switch messages, the interactive console) renders
+	// correctly instead of garbled raw escape codes on Windows consoles that
+	// need SetConsoleMode before they'll interpret them.
+	cli.EnableTerminalColors()
+
 	var (
 		query       string
 		model       string

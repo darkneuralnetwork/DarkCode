@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -25,4 +26,20 @@ func terminalSize() (int, int) {
 		}
 	}
 	return 96, 24
+}
+
+// supportsColor reports whether the current stdout can render ANSI color
+// codes. Unix terminals interpret ANSI natively (no VT-mode dance needed),
+// so this only needs to respect the NO_COLOR convention and redirected
+// output — the Windows counterpart (term_windows.go) additionally depends
+// on successfully enabling VT processing.
+func supportsColor() bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return true // can't tell — default to color rather than guessing wrong
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }

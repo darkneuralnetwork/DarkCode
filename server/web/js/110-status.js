@@ -97,7 +97,8 @@ async function loadStatus() {
         <div class="s-grid">
           ${sTile("Total Tokens", fmtNum(m.total_tokens || 0))}
           ${sTile("Estimated Cost", fmtCost(m.total_cost || 0))}
-          ${sTile("LLM Requests", m.total_requests || 0)}
+          ${sTile("LLM Calls", m.total_requests || 0)}
+          ${sTile("Questions", m.total_turns || 0)}
           ${sTile("Avg Latency", Math.round(m.avg_latency_ms || 0) + "ms")}
         </div>
       </div>` : ""}

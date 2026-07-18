@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/darkcode/llm"
 	"github.com/darkcode/loop"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/metrics"
 	"github.com/darkcode/permission"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
@@ -54,6 +56,12 @@ type Config struct {
 	// package instead of the DAG decomposition.
 	AgenticLoop bool
 	MaxLoops    int
+
+	// UseLocalForAux routes auxiliary calls to the local model when healthy +
+	// fitting; PostLoopConsensus gates the redundant post-loop re-synthesis.
+	// (SkipAuxForReadOnly is applied server-side where the amend lives.)
+	UseLocalForAux    bool
+	PostLoopConsensus bool
 }
 
 // SafetyLevel controls how restrictive the safety checks are.
@@ -145,8 +153,91 @@ type Kernel struct {
 	ctxEngine   *ctxengine.Engine
 	ctxEngineMu sync.Mutex
 
-	mu      sync.Mutex
-	taskLog []TaskLogEntry
+	// governor enforces optional spend caps before each Execute. nil = no
+	// enforcement (the default), so behavior is unchanged unless a budget is
+	// configured. Set via SetCostGovernor.
+	governor *metrics.CostGovernor
+
+	// classifier picks the cognition-cascade entry rung per query (see
+	// cascade.go). Constructed in New; never nil in a kernel built via New.
+	classifier *router.TaskClassifier
+
+	mu         sync.Mutex
+	taskLog    []TaskLogEntry
+	cascadeLog []CascadeEntry // per-query rung telemetry (see cascade.go)
+
+	// Cascade calibration state (see cascade.go). Thresholds start at
+	// cascadeDefaultThreshold and only ever rise, driven by the re-ask
+	// negative-label signal; counters feed CascadeStats. All guarded by mu.
+	cascadeThresholds   [6]float64
+	cascadeRungAnswered [6]int
+	cascadeRungRetried  [6]int
+	cascadeLogPath      string // "" = no persistence
+
+	// localLoader brings up the embedded local model on demand and registers
+	// it on the router, returning an error if nothing could be loaded.
+	// Injected by the app wireup because embedded-model loading lives in
+	// package main (AppRunner.loadLocalLLM) which the kernel can't import.
+	// This lets /local force and the GUI toggle start the local model without
+	// a restart. nil in tests and when local support isn't wired. Guarded by
+	// localLoaderMu (a separate mutex so a slow load never blocks Execute's
+	// short critical sections on mu).
+	localLoaderMu sync.Mutex
+	localLoader   func(context.Context) error
+}
+
+// SetLocalLoader installs the on-demand embedded-model loader (see the
+// localLoader field). Pass nil to clear it.
+func (k *Kernel) SetLocalLoader(fn func(context.Context) error) {
+	k.localLoaderMu.Lock()
+	k.localLoader = fn
+	k.localLoaderMu.Unlock()
+}
+
+// ApplyLocalPreference re-applies the config's local-LLM preference at runtime
+// so /local and the GUI toggle take effect without a restart. It pins or
+// unpins force-local routing (cfg.ForceLocal) and, when local is wanted
+// (mode != "off") but no local model is registered, invokes the injected
+// loader to bring one up.
+//
+// In force mode a load failure is returned as an error so the caller can
+// surface it — force-local NEVER silently falls back to cloud. In auto/on
+// mode the returned error is advisory: any configured cloud model still
+// serves. Returns nil when the preference is already satisfied.
+func (k *Kernel) ApplyLocalPreference(ctx context.Context, cfg *config.Config) error {
+	k.router.SetForceLocal(cfg.ForceLocal())
+
+	if cfg.ResolvedLocalMode() == "off" || k.router.HasLocalModel() {
+		return nil
+	}
+
+	k.localLoaderMu.Lock()
+	loader := k.localLoader
+	k.localLoaderMu.Unlock()
+	if loader == nil {
+		if cfg.ForceLocal() {
+			return fmt.Errorf("force-local requested but on-demand local loading is not available here — restart with the local model enabled")
+		}
+		return nil
+	}
+	if err := loader(ctx); err != nil {
+		if cfg.ForceLocal() {
+			return fmt.Errorf("force-local: local model failed to start: %w (no cloud fallback will be used)", err)
+		}
+		return err
+	}
+	if cfg.ForceLocal() && !k.router.HasLocalModel() {
+		return fmt.Errorf("force-local is active but no local model came up — check the logs; no cloud fallback will be used")
+	}
+	return nil
+}
+
+// SetCostGovernor installs an optional spend-cap enforcer consulted at the
+// start of every Execute. Passing nil disables enforcement.
+func (k *Kernel) SetCostGovernor(g *metrics.CostGovernor) {
+	k.mu.Lock()
+	k.governor = g
+	k.mu.Unlock()
 }
 
 // getCtxEngine lazily builds the ctxengine.Engine when cfg.UseCtxEngine is
@@ -194,7 +285,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		}
 	}
 
-	return &Kernel{
+	k := &Kernel{
 		cfg:        cfg,
 		router:     rtr,
 		registry:   reg,
@@ -209,7 +300,12 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		gate:       gate,
 		agenticLoop: loop.New(rtr, reg, emitter, cfg.MaxLoops),
 		agenticOn:  cfg.AgenticLoop,
+		classifier: router.NewTaskClassifier(),
 	}
+	for i := range k.cascadeThresholds {
+		k.cascadeThresholds[i] = cascadeDefaultThreshold
+	}
+	return k
 }
 
 // Gate returns the kernel's permission gate (creating a default one lazily if
@@ -298,15 +394,34 @@ func (k *Kernel) SetAgenticLoop(enabled bool, maxLoops int) {
 // is "off" (disable tool access — General mode fast path) or ""/"on" (tools
 // enabled). This makes the `mode`/`safety`/`chat_mode` fields of POST
 // /api/chat take effect for that single request.
-func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools string) func() {
+func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) func() {
 	var oldMode core.RoutingMode
 	var oldLevel permission.Level
 	var oldReqLoop *bool
 	var oldToolsDisabled *bool
+	var oldForceLocal *bool
 	haveMode := mode != ""
 	haveSafety := safety != ""
 	haveLoop := loop != ""
 	haveTools := tools != ""
+	// Brain selector (per-request): "local" pins to the local model (offline),
+	// "cloud" allows cloud routing, "auto"/"" leave the configured default. Only
+	// local/cloud actually change the router's force-local flag.
+	haveBrain := false
+	if k.router != nil {
+		switch strings.ToLower(brain) {
+		case "local":
+			cur := k.router.ForceLocal()
+			oldForceLocal = &cur
+			k.router.SetForceLocal(true)
+			haveBrain = true
+		case "cloud":
+			cur := k.router.ForceLocal()
+			oldForceLocal = &cur
+			k.router.SetForceLocal(false)
+			haveBrain = true
+		}
+	}
 	if haveMode && k.router != nil {
 		oldMode = k.router.GetMode()
 		k.router.SetMode(parseRoutingModeLocal(mode))
@@ -347,6 +462,9 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools string) func() 
 		}
 		if haveSafety && k.gate != nil {
 			k.gate.SetLevel(oldLevel)
+		}
+		if haveBrain && k.router != nil && oldForceLocal != nil {
+			k.router.SetForceLocal(*oldForceLocal)
 		}
 		if haveLoop || haveTools {
 			k.mu.Lock()
@@ -557,6 +675,29 @@ func (k *Kernel) ClearProjectContext() {
 	k.mu.Unlock()
 }
 
+// RecentSTM returns the current short-term-memory conversation window. Used
+// by the server layer (which doesn't hold k.memory directly, by design —
+// the kernel is decoupled from project.Store/persistence concerns) to judge
+// whether an incoming message is a bare continuation of an active
+// conversation — see HasActiveConversation. Read-only; safe to call at any
+// point in the request lifecycle.
+func (k *Kernel) RecentSTM() []core.Message {
+	return k.memory.STMGet()
+}
+
+// HasActiveConversation reports whether stm represents a real, ongoing
+// conversation — at least one real assistant turn already happened — as
+// opposed to a cold start. The current turn is assumed to have already been
+// appended (via STMAdd) by the time this is checked, so index -2 is the
+// prior turn. Shared by the clarification gate (a short follow-up like
+// "continue" after a real answer isn't ambiguous, it's a continuation) and
+// the server's blueprint-amend gate (skip re-amending the plan/workflow for
+// the same kind of short continuation) so both decisions agree on what
+// counts as "just a continuation."
+func HasActiveConversation(stm []core.Message) bool {
+	return len(stm) >= 2 && stm[len(stm)-2].Role == core.RoleAssistant
+}
+
 // injectProjectContext prepends the stashed plan/workflow (if any) to the
 // goal so every execution path (general, loop, trivial-direct, DAG) follows
 // the active project's plan. No-op when no project is active.
@@ -583,8 +724,76 @@ func (k *Kernel) injectProjectContext(goal string) string {
 		sb.WriteString("\n\n")
 	}
 	sb.WriteString("## Task Goal\n")
-	sb.WriteString(goal)
+	if enriched, ok := resolveTaskGoal(goal, workflow); ok {
+		sb.WriteString(enriched)
+	} else {
+		sb.WriteString(goal)
+	}
 	return sb.String()
+}
+
+// shortContinuationMaxLen bounds what counts as a "bare continuation"
+// ("continue", "yes", "go on") for resolveTaskGoal — mirrors the length
+// heuristic server.needsPlanAmend uses for the identical judgment call on
+// the blueprint-amend side. The two packages can't share the constant
+// directly (server depends on orchestrator, not the reverse) but
+// intentionally agree on scale.
+const shortContinuationMaxLen = 30
+
+// resolveTaskGoal enriches a short/ambiguous goal ("continue") with the
+// concrete next-pending workflow task, when one can be resolved, instead of
+// letting the model guess from context buried in a multi-KB plan dump.
+// Returns (enriched, true) only when the goal looks like a bare
+// continuation AND a pending task was actually found; otherwise ("", false)
+// and the caller falls back to the raw goal. This is what makes "continue"
+// genuinely "aware of the next thing that needs to be fixed" per the
+// local-first upgrade plan, rather than relying on the plan/workflow dump
+// coincidentally containing a keyword the model can latch onto.
+func resolveTaskGoal(goal, workflow string) (string, bool) {
+	if len(strings.TrimSpace(goal)) >= shortContinuationMaxLen {
+		return "", false
+	}
+	id, line, ok := NextPendingWorkflowTask(workflow)
+	if !ok {
+		return "", false
+	}
+	if id != "" {
+		return fmt.Sprintf("Continue with the next pending workflow task: %s — %s. (User said: %q)", id, line, goal), true
+	}
+	return fmt.Sprintf("Continue with the next pending workflow task: %s. (User said: %q)", line, goal), true
+}
+
+// workflowTaskLineRe / workflowLegacyTaskLineRe parse a workflow checklist's
+// pending-task lines. The primary pattern matches the "- [ ] T<n>: <desc>"
+// format written by project.Store.MarkTaskStatus / stamped by
+// server.injectNodeStatus; the legacy fallback matches a bare "- [ ] <desc>"
+// line with no task ID (workflows seeded before the T<n> convention), so
+// they still resolve to *something* actionable rather than nothing.
+var (
+	workflowTaskLineRe       = regexp.MustCompile(`^\s*-\s*\[ \]\s*([A-Za-z0-9_-]+):\s*(.*)$`)
+	workflowLegacyTaskLineRe = regexp.MustCompile(`^\s*-\s*\[ \]\s*(.+)$`)
+)
+
+// NextPendingWorkflowTask returns the first pending ("- [ ]") task line in
+// workflow markdown: its ID (empty for a legacy, ID-less line) and
+// description. Returns ("", "", false) if no pending task line is found —
+// e.g. every task is already done/running, or the workflow is empty.
+// Exported so the server layer can resolve the SAME task ID a loop-mode
+// response was working on, to mark it done after a successful execution
+// (local-first upgrade §7 Fix D) — one shared implementation instead of a
+// second copy of this parser.
+func NextPendingWorkflowTask(workflow string) (id, line string, ok bool) {
+	for _, l := range strings.Split(workflow, "\n") {
+		if m := workflowTaskLineRe.FindStringSubmatch(l); m != nil {
+			return m[1], strings.TrimSpace(m[2]), true
+		}
+	}
+	for _, l := range strings.Split(workflow, "\n") {
+		if m := workflowLegacyTaskLineRe.FindStringSubmatch(l); m != nil {
+			return "", strings.TrimSpace(m[1]), true
+		}
+	}
+	return "", "", false
 }
 
 // truncateMid returns s if it fits within maxBytes, otherwise a prefix +
@@ -605,11 +814,45 @@ func truncateMid(s string, maxBytes int) string {
 func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	k.log("observe", "Processing user goal: "+userGoal)
 
+	// Step 0: Cost governor — enforce optional spend caps before doing any
+	// expensive work. No-op unless a budget is configured (governor == nil or
+	// no cap set). In "block" mode a reached cap refuses the request up front;
+	// in "warn" mode it logs and proceeds.
+	k.mu.Lock()
+	gov := k.governor
+	k.mu.Unlock()
+	if gov != nil {
+		if d := gov.Check(); d.Reason != "" {
+			if !d.Allowed {
+				k.log("budget", "Request blocked: "+d.Reason)
+				return "", fmt.Errorf("cost limit reached: %s (raise the limit or switch to a local model to continue)", d.Reason)
+			}
+			k.log("budget", "Cost limit warning: "+d.Reason)
+		}
+	}
+
 	// Step 1: Observe — add to STM
 	k.memory.STMAdd(core.Message{
 		Role:    core.RoleUser,
 		Content: userGoal,
 	})
+
+	// Step 1.2: Cognition cascade (local-first upgrade Phase A) — try the
+	// cost-ascending retrieval rungs (deterministic tools → answer cache →
+	// knowledge graph) with confidence gates BEFORE any LLM-bound work
+	// (project injection, compression, planning). A confident local hit
+	// answers instantly with zero LLM calls; anything else escalates to the
+	// LLM paths below. This runs on the RAW goal: the cache/graph rungs must
+	// match what the user actually asked, not the plan-injected version (the
+	// previous Step 3.02 ConfidentRecall ran after injection, so an active
+	// project silently disabled the cache). See cascade.go for the rung log.
+	if answer, ok := k.runCascade(ctx, userGoal); ok {
+		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: answer})
+		if k.emitter != nil {
+			k.emitter.EmitFinalOutput(answer)
+		}
+		return answer, nil
+	}
 
 	// Step 1.5: Inject the active project's implementation plan + workflow
 	// architecture (if any) into the goal so every downstream path (general,
@@ -624,10 +867,20 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// so we skip it until the STM window has accumulated meaningful history.
 	if k.cfg.CompressContext && k.compressor != nil {
 		stm := k.memory.STMGet()
-		// Only compress when there's enough history AND enough new growth
-		// since the last compression — avoids re-compressing the same window
-		// twice if two requests land while STM is between thresholds.
-		if len(stm) >= compressionMinHistory && len(stm)-k.lastCompressedLen >= compressionMinGrowth {
+		// Compress when EITHER there's enough message-count growth (the
+		// original heuristic) OR the STM already exceeds ~60% of the primary
+		// client's window (Part 3 token-budget trigger). The token trigger
+		// catches a single giant turn that would overflow a small (local)
+		// window even at message #2 — the message-count rule alone never fired
+		// for it.
+		overTokenBudget := false
+		if win := k.primaryContextWindow(); win > 0 {
+			if compression.EstimateTokens(stm) > win*60/100 {
+				overTokenBudget = true
+			}
+		}
+		countGrown := len(stm) >= compressionMinHistory && len(stm)-k.lastCompressedLen >= compressionMinGrowth
+		if countGrown || (overTokenBudget && len(stm) >= 2) {
 			k.log("compress", "Compressing context")
 			snapshot, err := k.compressor.Compress(ctx, stm, userGoal)
 			if err == nil && snapshot != nil {
@@ -659,33 +912,25 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Step 3.01: Fetch Hybrid Recall (Memory + KG) so all paths can use it
 	recallBlock := k.getRecallBlock(userGoal)
 
-	// Step 3.02: Confident Recall (Semantic Cache, graph-first LLM skip)
-	// Try Confident Recall first: an exact (normalized) match, or a strict
-	// near-duplicate match, against a prior successful no-tool task. If it
-	// hits, we return the cached answer immediately without calling the LLM
-	// at all. This applies globally (including smart mode) because
-	// ConfidentRecall safely filters out any past tool-using tasks and only
-	// matches at a conservative similarity threshold — see its doc comment.
-	if k.retriever != nil {
-		if ans, ok := k.retriever.ConfidentRecall(userGoal, 0); ok {
-			k.log("memory", "Confident recall matched! Returning cached response without LLM call.")
-			k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: ans})
-			if k.emitter != nil {
-				k.emitter.EmitFinalOutput(ans)
-			}
-			return ans, nil
-		}
-	}
+	// Step 3.02 (MOVED): Confident Recall now runs as rung 1 of the cognition
+	// cascade at Step 1.2, before project injection and compression.
 
-	// Step 3.03: Clarification gate — some requests are too vague to act on
-	// safely. Ask for more detail instead of burning turns on speculative
-	// planning or tool use.
-	if needsClarification(userGoal, complexity) {
-		k.log("plan", "Request is ambiguous — requesting clarification")
-		clarification := "I can help, but I need a bit more detail to act safely and accurately. Please specify the target file, expected behavior, and any constraints or examples."
+	// Step 3.03: Clarification gate — only a cold-start vague ACTION request
+	// ("fix it" with no context) gets a clarification, and only when tools
+	// are enabled: the gate exists to avoid burning tool turns on a
+	// speculative action, so in General/no-tools mode it never fires —
+	// questions and statements flow straight to a model. See
+	// classifyGoalIntent for the intent rules (question / continuation /
+	// action / vague-action).
+	k.mu.Lock()
+	hasProjectGuidance := k.projectPlan != "" || k.projectWorkflow != ""
+	k.mu.Unlock()
+	if !k.toolsDisabledForRequest() &&
+		classifyGoalIntent(userGoal, k.memory.STMGet(), hasProjectGuidance) == intentVagueAction {
+		k.log("plan", "Request has no actionable subject — requesting clarification")
+		clarification := "I can help, but your request doesn't name anything to act on. Tell me what you'd like me to work on — the goal or subject, plus any constraints or examples."
 		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: clarification})
-		k.storeEpisodic(userGoal, clarification, nil, false, recallBlock)
-		k.recordLearningAndAudit(userGoal, clarification, nil, false, "clarification", 0)
+		k.recordOutcome(userGoal, clarification, nil, false, "clarification", 0, recallBlock)
 		if k.emitter != nil {
 			k.emitter.EmitFinalOutput(clarification)
 		}
@@ -703,6 +948,19 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
 	}
 
+	// Step 3.055: Cost guard for obvious general questions. Even when tools are
+	// available (e.g. the CLI's default mode), a plain factual/explanatory
+	// question doesn't need the tool pipeline — routing it through workers +
+	// web_search costs several LLM calls for a one-call answer. So an obvious
+	// general question takes the single-call no-tools path, UNLESS the user is
+	// explicitly in Loop mode or an active project (those deliberately want
+	// tools/continuity). This gives the CLI the same lean general-question
+	// behavior the web handler already gets via its heuristic short-circuit.
+	if !k.loopEnabledForRequest() && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
+		k.log("plan", "Obvious general question — direct conversational path (no tools)")
+		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
+	}
+
 	// Step 3.5: Agentic Loop (looping technology) — optional ReAct execution.
 	// When enabled (per-request Loop mode in the web chat, or the master
 	// toggle for the CLI), delegate the whole task to the Sense-Think-Act loop
@@ -716,9 +974,19 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// real tool output with "I cannot create files".
 	if k.loopEnabledForRequest() && k.agenticLoop != nil {
 		k.log("loop", "Agentic loop (ReAct) enabled — running Sense-Think-Act cycle")
-		loopRes, err := k.agenticLoop.Run(ctx, k.injectRecall(userGoal, recallBlock))
+		// Prior conversation, excluding the current turn (STMAdd already
+		// appended it at Step 1, so it's the last element here) — gives the
+		// loop real continuity for a follow-up like "continue" (local-first
+		// upgrade §7 Fix C) instead of starting a brand-new, memoryless
+		// conversation on every Run() call.
+		stm := k.memory.STMGet()
+		var history []core.Message
+		if len(stm) > 0 {
+			history = stm[:len(stm)-1]
+		}
+		loopRes, err := k.agenticLoop.Run(ctx, k.injectRecall(userGoal, recallBlock), history)
 		if err != nil {
-			k.storeEpisodic(userGoal, "", nil, false, recallBlock)
+			k.storeEpisodic(userGoal, "", nil, false, recallBlock, nil)
 			return "", err
 		}
 		output := loopRes.Output
@@ -728,7 +996,11 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// already executed during the loop — this just refines the final answer.
 		// The tool trace is passed in so the reviewers know the tools ran for
 		// real and cannot claim the agent cannot take action.
-		if k.router.GetMode() == core.RouteConsensus && k.router.ModelCount() > 1 {
+		// Gated on PostLoopConsensus (default off): re-synthesizing an
+		// already-complete loop answer is N+1 extra cloud calls purely for
+		// polish. Consensus users who want it opt in; everyone else keeps the
+		// finished answer as-is.
+		if k.cfg.PostLoopConsensus && k.router.GetMode() == core.RouteConsensus && k.router.ModelCount() > 1 {
 			k.log("consensus", "Running post-agentic consensus synthesis")
 			if refined, cerr := k.runConsensusOnOutput(ctx, userGoal, output, loopRes.ToolTrace); cerr == nil {
 				output = refined
@@ -740,8 +1012,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// Record to STM + episodic/learning/audit/KG so the rest of the system
 		// sees the task just like a DAG execution.
 		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
-		k.storeEpisodic(userGoal, output, nil, true, recallBlock)
-		k.recordLearningAndAudit(userGoal, output, nil, true, "agentic-loop", 0)
+		k.recordOutcome(userGoal, output, nil, true, "agentic-loop", 0, recallBlock)
 		if k.emitter != nil {
 			k.emitter.EmitFinalOutput(output)
 		}
@@ -801,8 +1072,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 			return "", fmt.Errorf("DAG execution failed: %w", err)
 		}
 		merged = fmt.Sprintf("[Partial result — DAG execution did not complete: %v]\n\n%s", err, merged)
-		k.storeEpisodic(userGoal, merged, results, false, recallBlock)
-		k.recordLearningAndAudit(userGoal, merged, results, false, "dag", 0)
+		k.recordOutcome(userGoal, merged, results, false, "dag", 0, recallBlock)
 		return merged, nil
 	}
 
@@ -829,15 +1099,13 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		}
 	}
 
-	// Step 8: Store episodic memory
+	// Step 8 + 8.5 + 8.6: Store episodic memory, record learning feedback +
+	// audit + knowledge graph. Step 9 (self-improvement / skill extraction)
+	// is folded into this call via minSkillSuccess=2 — see recordOutcome's
+	// doc comment.
 	k.log("store", "Storing episodic memory")
-	k.storeEpisodic(userGoal, merged, results, true, recallBlock)
-
-	// Step 8.5 + 8.6: Record learning feedback + audit + knowledge graph.
-	// Step 9 (self-improvement / skill extraction) is folded into this call
-	// via minSkillSuccess=2 — see recordLearningAndAudit's doc comment.
 	k.log("improve", "Recording learning feedback and extracting reusable skills")
-	k.recordLearningAndAudit(userGoal, merged, results, true, "dag", 2)
+	k.recordOutcome(userGoal, merged, results, true, "dag", 2, recallBlock)
 
 	// Step 10: Emit final output
 	if k.emitter != nil {
@@ -887,41 +1155,148 @@ func (k *Kernel) resolveSequential() bool {
 	return k.cfg.MaxConcurrent <= 1
 }
 
-func needsClarification(goal string, complexity int) bool {
+// RouteAux is the single decision point for every auxiliary (behind-the-
+// scenes) LLM call — loop self-eval, project-context rewrite, plan/workflow
+// amend. It prefers a local tier ONLY when UseLocalForAux is on, a local model
+// is actually loaded, and promptTokens fits that model's effective window
+// (Part 3 contract); otherwise it returns the cloud route. ok=false means
+// "no model available — skip this aux call". This is what makes the cost
+// saving safe: with no local model it is a pure no-op (cloud, unchanged
+// behavior), so it can never force local on hardware that can't run it.
+func (k *Kernel) RouteAux(task string, promptTokens int) (client core.LLMClient, model string, ok bool) {
+	if k.router == nil {
+		return nil, "", false
+	}
+	if k.cfg.UseLocalForAux {
+		for _, tier := range []core.ModelTier{core.ModelTierMediumLocal, core.ModelTierTinyLocal} {
+			lc, lm, err := k.router.Route(tier, 0, task)
+			if err != nil || lc == nil {
+				continue
+			}
+			// Only use local if the prompt fits its effective window; a bigger
+			// aux prompt goes to cloud rather than overflowing the local model.
+			if w := lc.ModelInfo().Context; promptTokens <= 0 || w <= 0 || promptTokens <= w {
+				return lc, lm, true
+			}
+		}
+	}
+	cc, cm, err := k.router.Route(core.ModelTierCoding, 0, task)
+	if err != nil || cc == nil {
+		return nil, "", false
+	}
+	return cc, cm, true
+}
+
+// primaryContextWindow returns the effective context window (tokens) of the
+// model that will most likely serve this request, for the token-budget
+// compression trigger. Reads the routed client's ModelInfo().Context (the
+// governor's effective window for a local model, the catalogue window for a
+// cloud one), falling back to cfg.ContextLength then 0 ("unknown"). Routing is
+// a cheap table lookup; on any error it returns 0 so the caller simply skips
+// the token trigger and relies on the message-count one.
+func (k *Kernel) primaryContextWindow() int {
+	if k.router == nil {
+		return k.cfg.ContextLength
+	}
+	client, _, err := k.router.Route(core.ModelTierCoding, 0, "")
+	if err != nil || client == nil {
+		return k.cfg.ContextLength
+	}
+	if w := client.ModelInfo().Context; w > 0 {
+		return w
+	}
+	return k.cfg.ContextLength
+}
+
+// goalIntent classifies what kind of message the user sent so the
+// clarification gate only fires for genuinely vague ACTION requests. The old
+// boolean gate defaulted to "ambiguous" unless a coding keyword appeared,
+// which misrouted every non-coding sentence ("what is the name of usa
+// president") into a canned, coding-specific clarification. The classifier
+// inverts that: the default is answerable, and only a cold-start message with
+// no actionable subject gates.
+type goalIntent int
+
+const (
+	// intentQuestion — an interrogative; always answerable, never gated.
+	intentQuestion goalIntent = iota
+	// intentContinuation — an active conversation or project blueprint gives
+	// the model context to interpret even a terse follow-up ("continue").
+	intentContinuation
+	// intentAction — a concrete actionable request (the default).
+	intentAction
+	// intentVagueAction — a cold-start message with no actionable subject
+	// ("fix it", "help me", empty or ultra-short input).
+	intentVagueAction
+)
+
+// interrogativeLeads marks a question by its first word even without a
+// trailing "?" ("what is the name of usa president").
+var interrogativeLeads = map[string]bool{
+	"what": true, "who": true, "whom": true, "whose": true, "when": true,
+	"where": true, "why": true, "which": true, "how": true,
+	"is": true, "are": true, "was": true, "were": true,
+	"do": true, "does": true, "did": true,
+	"can": true, "could": true, "should": true, "would": true, "will": true,
+}
+
+// vagueActionPhrases only make a request vague when they are essentially the
+// whole message — see the remainder check in classifyGoalIntent.
+var vagueActionPhrases = []string{
+	"fix it",
+	"make it better",
+	"improve this",
+	"do something",
+	"help me",
+	"work on it",
+	"handle it",
+	"update it",
+	"make it work",
+}
+
+// QueryIsInformational reports whether goal is a question / read-only request
+// (no state change implied), used by the server to skip the plan/workflow
+// amend for a turn that couldn't change the plan. Deterministic, no LLM call.
+// Reuses the same interrogative detection as the clarification gate so both
+// agree on what "just a question" means.
+func QueryIsInformational(goal string) bool {
+	return classifyGoalIntent(goal, nil, false) == intentQuestion
+}
+
+// classifyGoalIntent is deterministic — no LLM call, so the gate stays free
+// and instant regardless of outcome.
+func classifyGoalIntent(goal string, stm []core.Message, hasProjectGuidance bool) goalIntent {
+	if HasActiveConversation(stm) || hasProjectGuidance {
+		return intentContinuation
+	}
 	goal = strings.TrimSpace(goal)
-	if goal == "" {
-		return true
+	if len(goal) < 8 {
+		return intentVagueAction
 	}
 	goalLower := strings.ToLower(goal)
-	if len(goalLower) < 8 {
-		return true
+	if strings.HasSuffix(goalLower, "?") {
+		return intentQuestion
 	}
-	if complexity >= 5 {
-		return false
+	words := strings.Fields(goalLower)
+	if interrogativeLeads[words[0]] {
+		return intentQuestion
 	}
-	vaguePhrases := []string{
-		"fix it",
-		"make it better",
-		"improve this",
-		"do something",
-		"help me",
-		"work on it",
-		"handle it",
-		"update it",
-		"make it work",
+	// A cold-start action needs a subject: a single word ("continue",
+	// "deploy") names nothing to act on — structural, not a keyword list.
+	if len(words) == 1 {
+		return intentVagueAction
 	}
-	for _, phrase := range vaguePhrases {
+	for _, phrase := range vagueActionPhrases {
 		if strings.Contains(goalLower, phrase) {
-			return true
+			// Vague only when the phrase IS the message: "help me fix the
+			// auth bug in login.go" has a subject and stays actionable
+			// despite containing "help me".
+			if len(goalLower)-len(phrase) < 12 {
+				return intentVagueAction
+			}
 		}
 	}
-	concreteIndicators := []string{"file", "function", "bug", "error", "implement", "add", "create", "debug", "refactor", "test", "route", "endpoint", "json", "go", "python", "sql", "class"}
-	for _, indicator := range concreteIndicators {
-		if strings.Contains(goalLower, indicator) {
-			return false
-		}
-	}
-	return true
+	return intentAction
 }
 
 func (k *Kernel) executeDirect(ctx context.Context, goal string, recallBlock string) (string, error) {
@@ -944,7 +1319,7 @@ func (k *Kernel) executeDirect(ctx context.Context, goal string, recallBlock str
 
 	result, err := agent.Execute(ctx)
 	if err != nil {
-		k.storeEpisodic(goal, "", []*core.SubAgentResult{result}, false, recallBlock)
+		k.storeEpisodic(goal, "", []*core.SubAgentResult{result}, false, recallBlock, nil)
 		return "", err
 	}
 
@@ -952,10 +1327,9 @@ func (k *Kernel) executeDirect(ctx context.Context, goal string, recallBlock str
 		k.emitter.EmitFinalOutput(result.Output)
 	}
 
-	k.storeEpisodic(goal, result.Output, []*core.SubAgentResult{result}, true, recallBlock)
 	// Direct tasks that actually used tools can still yield a simple skill —
-	// minSkillSuccess=1 folds that in, see recordLearningAndAudit.
-	k.recordLearningAndAudit(goal, result.Output, []*core.SubAgentResult{result}, true, "direct", 1)
+	// minSkillSuccess=1 folds that in, see recordOutcome's doc comment.
+	k.recordOutcome(goal, result.Output, []*core.SubAgentResult{result}, true, "direct", 1, recallBlock)
 	return result.Output, nil
 }
 
@@ -988,8 +1362,7 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		output, err := k.runConsensus(ctx, goal, generalModeNoToolsPrompt)
 		if err == nil {
 			k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
-			k.storeEpisodic(goal, output, nil, true, recallBlock)
-			k.recordLearningAndAudit(goal, output, nil, true, "general-consensus", 0)
+			k.recordOutcome(goal, output, nil, true, "general-consensus", 0, recallBlock)
 			if k.emitter != nil {
 				k.emitter.EmitFinalOutput(output)
 			}
@@ -1035,6 +1408,11 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		messages = append(messages, stm...)
 	}
 
+	// Hard context-fit guarantee before dispatch (Part 3 contract): even when
+	// the opt-in ctxengine didn't run, fit to the receiving client's effective
+	// window so a long general-mode turn never overflows a local model.
+	messages = compression.FitClient(messages, client, k.cfg.ContextLength, 0)
+
 	temp := 0.7
 	req := &llm.CompletionRequest{
 		Model:       modelName,
@@ -1052,7 +1430,7 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		},
 	})
 	if err != nil {
-		k.storeEpisodic(goal, "", nil, false, recallBlock)
+		k.storeEpisodic(goal, "", nil, false, recallBlock, nil)
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
@@ -1061,8 +1439,7 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 	output := resp.Choices[0].Message.Content
 
 	k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
-	k.storeEpisodic(goal, output, nil, true, recallBlock)
-	k.recordLearningAndAudit(goal, output, nil, true, "general", 0)
+	k.recordOutcome(goal, output, nil, true, "general", 0, recallBlock)
 	if k.emitter != nil {
 		k.emitter.EmitFinalOutput(output)
 	}
@@ -1153,12 +1530,14 @@ func pluralY(n int) string {
 }
 
 type RouterModelInfo struct {
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	Status    string `json:"status"`
-	Tier      string `json:"tier"`
-	Endpoints int    `json:"endpoints"`
-	IsPrimary bool   `json:"is_primary"`
+	Name          string    `json:"name"`
+	Role          string    `json:"role"`
+	Status        string    `json:"status"`
+	Tier          string    `json:"tier"`
+	Endpoints     int       `json:"endpoints"`
+	IsPrimary     bool      `json:"is_primary"`
+	Disabled      bool      `json:"disabled"`
+	DisabledUntil time.Time `json:"disabled_until,omitempty"`
 }
 
 func (k *Kernel) SequentialMode() bool {
@@ -1178,16 +1557,40 @@ func (k *Kernel) SetModelRole(modelName, role string) {
 	k.router.SetModelRole(modelName, role)
 }
 
+// DisableModel temporarily takes a registered model out of routing/consensus
+// selection until the given time (local-first upgrade §6c). Thin delegation
+// to the router — see router.Router.DisableModel for the actual mechanism
+// (lazy expiry, escalation-only-style routing around the disabled model).
+func (k *Kernel) DisableModel(modelName string, until time.Time) {
+	k.router.DisableModel(modelName, until)
+}
+
+// EnableModel reverses a temporary disable early. A no-op if the model
+// wasn't disabled (lazy expiry already handles the normal "duration
+// elapsed" case with no explicit call needed).
+func (k *Kernel) EnableModel(modelName string) {
+	k.router.EnableModel(modelName)
+}
+
+// IsModelDisabled reports whether modelName is currently temporarily
+// disabled — for CLI/GUI status displays.
+func (k *Kernel) IsModelDisabled(modelName string) bool {
+	return k.router.IsModelDisabled(modelName)
+}
+
 func (k *Kernel) RegisteredModels() []RouterModelInfo {
 	var info []RouterModelInfo
 	// Pull from router
 	if k.router != nil {
+		now := time.Now()
 		for _, m := range k.router.AllModels() {
 			info = append(info, RouterModelInfo{
-				Name:      m.Name,
-				Role:      m.Role,
-				Tier:      string(m.Tier),
-				IsPrimary: m.Role == "synthesizer" || m.Role == "primary", // Basic heuristic
+				Name:          m.Name,
+				Role:          m.Role,
+				Tier:          string(m.Tier),
+				IsPrimary:     m.Role == "synthesizer" || m.Role == "primary", // Basic heuristic
+				Disabled:      !m.DisabledUntil.IsZero() && now.Before(m.DisabledUntil),
+				DisabledUntil: m.DisabledUntil,
 			})
 		}
 	}

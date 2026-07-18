@@ -210,6 +210,20 @@ function updateLoopIndicator(on) {
 function updateLoopModeOption(on) {
   const opt = $("#mode-option-loop");
   if (opt) opt.style.display = on ? "block" : "none";
+  // Phase 5: gate the composer's Loop toggle on the master setting so it never
+  // advertises a loop the user hasn't enabled. Disabled + unchecked when off.
+  const loopToggle = $("#chat-loop-toggle");
+  const loopWrap = $("#chat-loop-wrap");
+  if (loopToggle) {
+    loopToggle.disabled = !on;
+    if (!on) loopToggle.checked = false;
+  }
+  if (loopWrap) {
+    loopWrap.style.opacity = on ? "1" : "0.4";
+    loopWrap.title = on
+      ? "Loop engineering: auto-generate and run tasks"
+      : "Enable Loop engineering in Settings to use this";
+  }
   if (!on) {
     const modeVal = $("#chat-mode-value");
     const modeBtn = $("#chat-mode-btn");
@@ -322,7 +336,20 @@ async function loadConfig() {
       localOffloadChk.checked = d.enable_local_offloading;
       offloadLbl.textContent = d.enable_local_offloading ? "Offloading ON" : "Offloading OFF";
       offloadLbl.style.color = d.enable_local_offloading ? "var(--text-bright)" : "var(--text-mute)";
-    } 
+    }
+
+    // Memory Profile: reflect the saved local-model context/RAM knob.
+    const memProf = $("#cfg-memory-profile");
+    if (memProf && d.memory_profile !== undefined) {
+      memProf.value = d.memory_profile || "";
+    }
+
+    // Force Local: pin routing to the local model (no cloud fallback).
+    const forceChk = $("#cfg-force-local");
+    if (forceChk && d.force_local !== undefined) {
+      forceChk.checked = !!d.force_local;
+      renderForceLocalBadge(!!d.force_local);
+    }
 
     // Resolve auth schemes / pricing from the provider catalogue when rendering
     // the active provider + registered model cards. It is already loaded by
@@ -362,6 +389,17 @@ async function loadConfig() {
           ? (prov.local ? '<span class="provider-badge-local">LOCAL</span>'
                         : `<span class="provider-badge-auth">${esc(prov.auth_scheme)}</span>`)
           : "";
+        // Temporary enable/disable (local-first upgrade §6c) — matched against
+        // the router's live registered-model list by actual model id (v.model),
+        // since that's what RegisterModel was called with, not the config key k.
+        const regModel = (d.registered_models || []).find(m => m.name === v.model || m.name === k);
+        const isDisabled = !!(regModel && regModel.disabled);
+        const untilTxt = isDisabled && regModel.disabled_until
+          ? new Date(regModel.disabled_until).toLocaleTimeString()
+          : "";
+        const disableBtnHtml = isDisabled
+          ? `<button class="btn-glow btn-xs" data-act="enable" data-model="${esc(v.model || k)}">Enable</button>`
+          : `<button class="btn-glow btn-xs" data-act="disable" data-model="${esc(v.model || k)}">Disable</button>`;
         const apiKeyTxt = v.api_key
           ? v.api_key
           : (prov && prov.local ? "local" : "—");
@@ -391,9 +429,11 @@ async function loadConfig() {
         }
         card.innerHTML = `
           <div class="mc-head">
-            <div class="mc-name">${esc(v.model || k)} ${isPrimary ? '<span class="badge accent">★ Primary</span>' : ""}</div>
+            <div class="mc-name">${esc(v.model || k)} ${isPrimary ? '<span class="badge accent">★ Primary</span>' : ""} ${isDisabled ? `<span class="badge" style="color:var(--danger,#f66)" title="${untilTxt ? "Disabled until " + esc(untilTxt) : ""}">⊘ disabled</span>` : ""}</div>
             <div class="mc-actions">
               ${isPrimary ? "" : `<button class="btn-glow btn-xs" data-act="primary" data-model="${esc(k)}">Set Primary</button>`}
+              <input type="text" class="glass-input mc-disable-dur" data-model="${esc(v.model || k)}" placeholder="1h" title="Disable duration (e.g. 30m, 1h, 2h)" style="width:52px;font-size:11px;padding:2px 4px" ${isDisabled ? "disabled" : ""}>
+              ${disableBtnHtml}
               <button class="btn-glow btn-xs danger" data-act="remove" data-model="${esc(k)}">Remove</button>
             </div>
           </div>
@@ -447,6 +487,19 @@ async function loadConfig() {
     initModelsConnToggle();
   } catch (err) {
     console.error("Failed to load config:", err);
+  }
+}
+
+// renderForceLocalBadge toggles the "LOCAL ONLY" badge and the Force Local
+// switch label to reflect whether routing is currently pinned to the local
+// model. Called on load and after the Apply POST returns force_local.
+function renderForceLocalBadge(active) {
+  const badge = $("#cfg-force-local-badge");
+  if (badge) badge.style.display = active ? "inline-block" : "none";
+  const lbl = $("#cfg-force-local-label");
+  if (lbl) {
+    lbl.textContent = active ? "Force Local ON" : "Force Local";
+    lbl.style.color = active ? "var(--text-bright)" : "var(--text-mute)";
   }
 }
 
@@ -599,6 +652,43 @@ async function configAction(action, modelName) {
     await loadConfig();
     if (action === "set_primary") toast("success", `✓ Primary model switched to ${modelName} (hot-reloaded)`);
     else if (action === "remove_model") toast("info", `✓ Removed model ${modelName}`);
+  } catch (err) {
+    toast("error", "Error: " + err.message);
+  }
+}
+
+// modelDisable / modelEnable — GUI counterpart of the CLI's "/models disable"
+// and "/models enable" (local-first upgrade §6c). Hits the dedicated
+// /api/models/disable|enable endpoints (not /api/config — this is a live
+// router-only toggle, not a persisted config change) then reloads the card
+// list so the ⊘ badge and button state reflect the new status.
+async function modelDisable(modelName, duration) {
+  try {
+    const body = { model: modelName };
+    if (duration) body.duration = duration;
+    const res = await fetch(API + "/api/models/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    await loadConfig();
+    toast("success", `✓ Disabled ${modelName}${duration ? " for " + duration : " for 1h"}`);
+  } catch (err) {
+    toast("error", "Error: " + err.message);
+  }
+}
+
+async function modelEnable(modelName) {
+  try {
+    const res = await fetch(API + "/api/models/enable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelName })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    await loadConfig();
+    toast("success", `✓ Re-enabled ${modelName}`);
   } catch (err) {
     toast("error", "Error: " + err.message);
   }

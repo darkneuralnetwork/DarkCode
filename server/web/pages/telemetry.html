@@ -51,14 +51,23 @@
             <div class="kpi-label">Estimated Cost</div>
             <div class="kpi-value" id="kpi-cost">$0.0000</div>
             <div class="kpi-sub">since <span id="kpi-since">—</span></div>
+            <div class="kpi-sub" id="kpi-cache" style="color:var(--accent-3)"></div>
           </div>
         </div>
         <div class="kpi-card">
           <div class="kpi-icon">📡</div>
           <div class="kpi-body">
-            <div class="kpi-label">LLM Requests</div>
+            <div class="kpi-label">LLM Calls</div>
             <div class="kpi-value" id="kpi-requests">0</div>
             <div class="kpi-sub"><span id="kpi-errors">0</span> errors</div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon">💬</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Questions</div>
+            <div class="kpi-value" id="kpi-turns">0</div>
+            <div class="kpi-sub"><span id="kpi-calls-per-turn">0</span> calls/question</div>
           </div>
         </div>
         <div class="kpi-card">

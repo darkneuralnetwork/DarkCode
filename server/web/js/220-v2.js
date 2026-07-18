@@ -121,7 +121,14 @@
     });
     wrap.appendChild(toggle);
     wrap.appendChild(body);
-    msgEl.appendChild(wrap);
+    // Attach INSIDE the message body (the left-aligned column under the
+    // bubble), NOT on the .msg flex row itself — appending to .msg makes the
+    // panel a flex sibling of the avatar+body and it renders to the RIGHT of
+    // the response ("location 1"). finalizeAssistantMessage attaches to
+    // .msg-body, so both paths must agree so every response shows Execution
+    // Details in the same place ("location 2", under the bubble).
+    const bodyEl = msgEl.querySelector(".msg-body") || msgEl;
+    bodyEl.appendChild(wrap);
   }
 
   // ── Consensus State ────────────────────────────────────────────────
@@ -131,18 +138,29 @@
     let contentStr = "";
     let conflict = evt.status === "conflict";
     let modelCount = 0;
-    
+    let strategy = "";
+    let elapsedMs = 0;
+
     if (typeof evt.content === "object" && evt.content !== null) {
       conflict = evt.content.conflict || conflict;
       modelCount = evt.content.model_count || 0;
       contentStr = evt.content.message || JSON.stringify(evt.content);
-      updateExecMetric("cs-model-count", String(modelCount));
+      strategy = evt.content.strategy || "";
+      elapsedMs = evt.content.elapsed_ms || 0;
     } else {
       contentStr = String(evt.content);
     }
 
-    // Update KPIs
-    updateExecMetric("cs-conflict", conflict ? "⚠️ CONFLICT DETECTED" : "✓ no conflict");
+    // Update KPIs — element IDs must match telemetry.html:
+    //   cs-model-count, cs-agreement, cs-total-time, cs-strategy.
+    // (Previously this wrote cs-conflict + rendered history into #cs-history,
+    // neither of which exists in the markup, so the consensus panel showed no
+    // data at all.)
+    updateExecMetric("cs-model-count", String(modelCount));
+    updateExecMetric("cs-agreement", conflict ? "⚠️ Conflict" : "✓ Aligned");
+    if (elapsedMs) updateExecMetric("cs-total-time", elapsedMs >= 1000 ? (elapsedMs / 1000).toFixed(1) + "s" : elapsedMs + "ms");
+    if (strategy) updateExecMetric("cs-strategy", strategy);
+
     const liveEl = document.getElementById("consensus-live");
     if (liveEl) { liveEl.textContent = "● ACTIVE"; liveEl.style.color = conflict ? "var(--red)" : "var(--green)"; }
 
@@ -153,7 +171,7 @@
   }
 
   function renderConsensusHistory() {
-    const el = document.getElementById("cs-history");
+    const el = document.getElementById("consensus-history");
     if (!el) return;
     if (consensusHistory.length === 0) {
       el.innerHTML = '<div class="mem-empty">No consensus history yet.</div>';
@@ -373,11 +391,26 @@
     const content = String(evt.content || "").toLowerCase();
     const status = String(evt.status || "").toLowerCase();
     
-    // Streaming token chunks are NOT execution detail — they are the live
-    // LLM output (removed from the execution-detail per the request).
-    // Skip them so the per-response trace stays a readable orchestration
-    // log (plan / route / compress / tools / verify), not a token spam.
-    if (status === "streaming") return;
+    // Streaming token chunks are the live LLM output — the model composing its
+    // answer in real time ("thinking"). They are NOT part of the orchestration
+    // trace (which stays a readable plan/route/compress/tools/verify log), so
+    // route them to a separate, auto-shown "thinking" panel on the loading
+    // message. finalizeAssistantMessage folds it away (auto-hide) when the final
+    // answer is ready, behind a "💭 Thinking" toggle next to Execution Details.
+    if (status === "streaming") {
+      if (evt.content) {
+        const loadingMsg = document.querySelector(".msg.loading");
+        if (loadingMsg) {
+          const panel = loadingMsg.querySelector(".msg-thinking-live");
+          if (panel) {
+            panel.hidden = false;
+            panel.textContent += evt.content; // OnContent emits per-token deltas
+            panel.scrollTop = panel.scrollHeight;
+          }
+        }
+      }
+      return;
+    }
 
     // Append to timeline
     const timeStr = new Date(evt.timestamp || Date.now()).toLocaleTimeString();
@@ -425,8 +458,32 @@
       setExecStage("planning", "completed");
     }
     if (content.includes("verif")) {
-      if (status === "completed" || status === "done") setExecStage("verification", "completed");
+      if (status === "completed" || status === "done" || status === "passed") setExecStage("verification", "completed");
       else setExecStage("verification", "running");
+
+      // Light up the per-stage Verification Pipeline panel (telemetry). The
+      // backend emits, per stage:
+      //   "Running verification stage: <name>"   → running
+      //   "Stage <name> passed successfully"      → passed
+      //   "Stage <name> failed checks" / "…: err" → failed
+      // Previously updateVerifyStage was never called from events, so the
+      // panel's stages never lit up. content is already lowercased here.
+      let stage = null, state = "running";
+      let m = content.match(/verification stage:\s*([a-z_]+)/);
+      if (m) { stage = m[1]; state = "running"; }
+      else {
+        m = content.match(/stage\s+([a-z_]+)\s+(passed|failed)/);
+        if (m) { stage = m[1]; state = m[2]; }
+      }
+      if (stage) {
+        const nameMap = { security_scan: "security" }; // backend → data-stage
+        updateVerifyStage(nameMap[stage] || stage, state);
+        const vl = document.getElementById("verify-live");
+        if (vl) {
+          vl.textContent = state === "running" ? "● ACTIVE" : "● IDLE";
+          vl.style.color = state === "failed" ? "var(--red)" : (state === "running" ? "var(--green)" : "");
+        }
+      }
     }
     if (content.includes("reflect")) {
       if (status === "completed" || status === "done") setExecStage("reflection", "completed");

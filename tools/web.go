@@ -24,7 +24,10 @@ type WebTool struct {
 
 func NewWebTool(registry *Registry, router core.ModelRouter) *WebTool {
 	return &WebTool{
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		// SafeClient validates every dial (including redirect hops) against the
+		// SSRF rules at connect time, closing the DNS-rebinding/TOCTOU gap that
+		// the pre-flight IsSafeFetchURL check cannot cover on its own.
+		HTTPClient: safeurl.SafeClient(30*time.Second, false),
 		Registry:   registry,
 		Router:     router,
 	}
@@ -87,42 +90,16 @@ func (t *WebTool) WebSearch(ctx context.Context, args map[string]interface{}) *T
 		return &ToolResult{Name: "web_search", Success: false, Error: "query is required"}
 	}
 
-	intent := "web"
+	// Route source deterministically from the query keywords instead of
+	// spending a whole LLM round-trip just to classify it into one word —
+	// that intent-planning call fired on EVERY web_search, so an agent that
+	// searched a dozen times paid a dozen extra classification calls. The
+	// heuristic covers the same four buckets the LLM prompt did.
+	intent := classifySearchIntent(query)
 	var client core.LLMClient
 	if t.Router != nil {
-		// Use TierFast for lightweight planning and summarization
-		client, _, _ = t.Router.Route(core.ModelTierFast, 1, "plan web search intent")
-	}
-
-	if client != nil {
-		if lm, ok := client.(core.LoRAManager); ok {
-			_ = lm.MountLoRA("planner", 1.0)
-			defer lm.MountLoRA("planner", 0.0)
-		}
-		maxTokens10 := 10
-		resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-			Messages: []core.Message{
-				{
-					Role:    core.RoleSystem,
-					Content: "You are an intelligent retrieval planner. Determine the best search source for the user's query:\n1. 'local' (for code, architecture, functions in current repo)\n2. 'docs' (for framework usage, SDKs, APIs)\n3. 'github' (for examples, implementations, open source projects)\n4. 'web' (for general info, news, concepts)\nReturn ONLY the single word (local, docs, github, or web).",
-				},
-				{
-					Role:    core.RoleUser,
-					Content: fmt.Sprintf("Query: '%s'", query),
-				},
-			},
-			MaxTokens: &maxTokens10,
-		})
-		if err == nil && len(resp.Choices) > 0 {
-			content := strings.ToLower(strings.TrimSpace(resp.Choices[0].Message.Content))
-			if strings.Contains(content, "local") {
-				intent = "local"
-			} else if strings.Contains(content, "github") {
-				intent = "github"
-			} else if strings.Contains(content, "docs") {
-				intent = "docs"
-			}
-		}
+		// Fast tier is still used below to summarize the raw results.
+		client, _, _ = t.Router.Route(core.ModelTierFast, 1, "summarize web results")
 	}
 
 	var rawResult string
@@ -166,6 +143,30 @@ func (t *WebTool) WebSearch(ctx context.Context, args map[string]interface{}) *T
 		Name:    "web_search",
 		Success: true,
 		Output:  fmt.Sprintf("[Source: %s]\n\n%s", intent, rawResult),
+	}
+}
+
+// classifySearchIntent picks a retrieval source from query keywords —
+// deterministic, no LLM call. Mirrors the four buckets the old LLM planner
+// prompt used (local repo / github / docs / general web), defaulting to web.
+func classifySearchIntent(query string) string {
+	q := strings.ToLower(query)
+	switch {
+	case strings.Contains(q, "repo") && !strings.Contains(q, "repository") ||
+		strings.Contains(q, "codebase") || strings.Contains(q, "this project") ||
+		strings.Contains(q, "our code") || strings.Contains(q, "local file") ||
+		(strings.Contains(q, "where is") && strings.Contains(q, "defined")):
+		return "local"
+	case strings.Contains(q, "github") || strings.Contains(q, "repository") ||
+		strings.Contains(q, "open source") || strings.Contains(q, "open-source") ||
+		strings.Contains(q, "example implementation"):
+		return "github"
+	case strings.Contains(q, "documentation") || strings.Contains(q, " docs") ||
+		strings.Contains(q, "api reference") || strings.Contains(q, "sdk") ||
+		strings.Contains(q, "how to use"):
+		return "docs"
+	default:
+		return "web"
 	}
 }
 

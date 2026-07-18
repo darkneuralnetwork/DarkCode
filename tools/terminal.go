@@ -4,19 +4,33 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/darkcode/security"
 )
 
 // TerminalTool executes shell commands. It supports timeouts and
 // captures stdout/stderr separately but merges them in output.
 type TerminalTool struct {
 	TimeoutSec int
+	// Sandbox, when non-nil and available, confines each command so it can
+	// only write inside its working directory (the rest of the filesystem is
+	// read-only). It is opt-in via DARKCODE_SANDBOX=1 so the default developer
+	// workflow is unchanged.
+	Sandbox *security.Sandbox
 }
 
 func NewTerminalTool() *TerminalTool {
-	return &TerminalTool{TimeoutSec: 120}
+	t := &TerminalTool{TimeoutSec: 120}
+	if os.Getenv("DARKCODE_SANDBOX") == "1" {
+		if sb := security.NewSandbox(nil); sb.Available() {
+			t.Sandbox = sb
+		}
+	}
+	return t
 }
 
 func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
@@ -34,7 +48,27 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 	toolCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(toolCtx, "bash", "-c", command)
+	// Resolve the working directory first. The LLM may pass an explicit
+	// "workdir"; otherwise default to the active workspace (the project's path
+	// when a project is active) so commands execute in the project the user is
+	// working on — matching where write_file/patch land. When no project is
+	// active, CurrentWorkspace(ctx) returns "" and exec falls back to the
+	// server cwd (the pre-existing behavior).
+	workDir := ""
+	if workdir, ok := args["workdir"].(string); ok && workdir != "" {
+		workDir = workdir
+	} else if ws := CurrentWorkspace(ctx); ws != "" {
+		workDir = ws
+	}
+
+	// Build the argv. When a sandbox is active, the command is confined so it
+	// can only write inside workDir; the rest of the filesystem is read-only.
+	argv := []string{"bash", "-c", command}
+	if t.Sandbox != nil && t.Sandbox.Available() {
+		argv = t.Sandbox.Wrap(workDir, argv[0], argv[1:]...)
+	}
+
+	cmd := exec.CommandContext(toolCtx, argv[0], argv[1:]...)
 	setSysProcAttr(cmd)
 	cmd.Cancel = func() error {
 		return killProcessGroup(cmd)
@@ -45,16 +79,8 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// Set working directory. The LLM may pass an explicit "workdir"; otherwise
-	// default to the active workspace (the project's path when a project is
-	// active) so commands execute in the project the user is working on —
-	// matching where write_file/patch land. When no project is active,
-	// CurrentWorkspace(ctx) returns "" and exec falls back to the server cwd
-	// (the pre-existing behavior).
-	if workdir, ok := args["workdir"].(string); ok && workdir != "" {
-		cmd.Dir = workdir
-	} else if ws := CurrentWorkspace(ctx); ws != "" {
-		cmd.Dir = ws
+	if workDir != "" {
+		cmd.Dir = workDir
 	}
 
 	startTime := time.Now()

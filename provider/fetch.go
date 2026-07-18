@@ -5,11 +5,90 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/darkcode/config"
 )
+
+// sortGeminiModels orders models newest-generation-first (e.g. 2.5 before 2.0),
+// then alphabetically within a generation, so the picker leads with the most
+// current models instead of the provider's arbitrary API order.
+func sortGeminiModels(models []string) {
+	sort.SliceStable(models, func(i, j int) bool {
+		gi := geminiGeneration(strings.ToLower(models[i]))
+		gj := geminiGeneration(strings.ToLower(models[j]))
+		if gi != gj {
+			return gi > gj // higher generation first
+		}
+		return models[i] < models[j]
+	})
+}
+
+// geminiVersionRe pulls the generation number out of a Gemini model id, e.g.
+// "gemini-2.5-flash" → "2.5", "gemini-1.5-pro-002" → "1.5". Legacy ids without
+// a numeric generation ("gemini-pro", "gemini-pro-vision") don't match.
+var geminiVersionRe = regexp.MustCompile(`^gemini-(\d+(?:\.\d+)?)`)
+
+// geminiSpecialized are substrings marking non-chat or vision-only Google
+// models that should never appear in a chat model picker, even if the API
+// reports generateContent support for them.
+var geminiSpecialized = []string{"embedding", "embed", "aqa", "imagen", "-tts", "vision"}
+
+// geminiGeneration returns the generation number encoded in a Gemini model id
+// (e.g. 2.5), or 0 when the id carries no numeric generation (legacy 1.0-era
+// names like "gemini-pro", or experimental ids like "gemini-exp-1206").
+func geminiGeneration(lowerID string) float64 {
+	m := geminiVersionRe.FindStringSubmatch(lowerID)
+	if m == nil {
+		return 0
+	}
+	v, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// keepGeminiModel reports whether a Google model id should be surfaced in the
+// picker. It keeps only current, chat-capable models:
+//   - must support generateContent (drops embeddings, aqa, and other non-chat
+//     models) — but only enforced when the API actually reports methods, so a
+//     future response that omits the field doesn't wipe the whole list;
+//   - drops specialized/vision families by id;
+//   - for the Gemini family, requires generation ≥ 2.0, dropping the
+//     deprecated 1.0/1.5 lines and legacy unversioned names.
+//
+// Non-Gemini chat models the endpoint may return (e.g. learnlm) pass through
+// as long as they are chat-capable and not specialized.
+func keepGeminiModel(id string, methods []string) bool {
+	if len(methods) > 0 && !containsFold(methods, "generateContent") {
+		return false
+	}
+	low := strings.ToLower(id)
+	for _, bad := range geminiSpecialized {
+		if strings.Contains(low, bad) {
+			return false
+		}
+	}
+	if strings.HasPrefix(low, "gemini") {
+		return geminiGeneration(low) >= 2.0
+	}
+	return true
+}
+
+// containsFold reports whether list contains target (case-insensitively).
+func containsFold(list []string, target string) bool {
+	for _, s := range list {
+		if strings.EqualFold(s, target) {
+			return true
+		}
+	}
+	return false
+}
 
 // FetchModels dynamically fetches available models from an OpenAI-compatible provider.
 func FetchModels(p config.Provider, apiKey string, baseURL string) ([]string, error) {
@@ -80,16 +159,24 @@ func FetchModels(p config.Provider, apiKey string, baseURL string) ([]string, er
 	if p.ID == "google" {
 		var result struct {
 			Models []struct {
-				Name string `json:"name"`
+				Name                       string   `json:"name"`
+				SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
 			} `json:"models"`
 		}
 		if err := json.Unmarshal(bodyBytes, &result); err != nil {
 			return nil, fmt.Errorf("failed to parse Google JSON response: %w", err)
 		}
+		// Google's /models endpoint returns its entire historical catalog:
+		// deprecated 1.0/1.5 generations, non-chat models (embeddings, aqa,
+		// imagen, tts), and vision-only variants. Filter to just the usable,
+		// current chat models so the picker isn't flooded with obsolete IDs.
 		for _, m := range result.Models {
 			name := strings.TrimPrefix(m.Name, "models/")
-			models = append(models, name)
+			if keepGeminiModel(name, m.SupportedGenerationMethods) {
+				models = append(models, name)
+			}
 		}
+		sortGeminiModels(models)
 	} else if p.ID == "anthropic" {
 		var result struct {
 			Data []struct {

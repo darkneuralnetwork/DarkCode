@@ -95,17 +95,21 @@ func (h *HybridRetriever) Recall(query string, k int) []RecallHit {
 
 	// Episodic memory.
 	for _, e := range h.mem.EpisodicGet() {
+		// Score with the vector path only when BOTH sides have a vector;
+		// entries written before an embedder was configured fall back to
+		// keyword overlap and must be gated by the overlap threshold, not the
+		// cosine one — previously hasVec alone selected the threshold, so a
+		// legacy vectorless entry scoring 0.25 overlap was silently dropped
+		// by the 0.3 cosine gate the moment an embedder came online.
+		usedVec := hasVec && len(e.Vector) > 0
 		var score float64
-		if hasVec && len(e.Vector) > 0 {
+		if usedVec {
 			score = cosineSimilarity(queryVec, e.Vector)
 		} else {
 			text := e.TaskGoal + " " + e.Summary + " " + strings.Join(e.ToolsUsed, " ")
 			score = overlapScore(qTokens, tokenize(text))
 		}
-		
-		if score <= 0.1 && !hasVec { // threshold for overlap
-			if score <= 0 { continue }
-		} else if score <= 0.3 && hasVec { // threshold for cosine similarity
+		if belowRecallThreshold(score, usedVec) {
 			continue
 		}
 
@@ -121,17 +125,15 @@ func (h *HybridRetriever) Recall(query string, k int) []RecallHit {
 
 	// Semantic memory.
 	for _, s := range h.mem.SemanticAll() {
+		usedVec := hasVec && len(s.Vector) > 0 // see episodic loop comment
 		var score float64
-		if hasVec && len(s.Vector) > 0 {
+		if usedVec {
 			score = cosineSimilarity(queryVec, s.Vector)
 		} else {
 			text := s.Key + " " + s.Content + " " + s.Category + " " + strings.Join(s.Tags, " ")
 			score = overlapScore(qTokens, tokenize(text))
 		}
-		
-		if score <= 0.1 && !hasVec { // threshold for overlap
-			if score <= 0 { continue }
-		} else if score <= 0.3 && hasVec { // threshold for cosine similarity
+		if belowRecallThreshold(score, usedVec) {
 			continue
 		}
 
@@ -265,6 +267,33 @@ func (h *HybridRetriever) ConfidentRecall(query string, maxAge time.Duration) (s
 		}
 	}
 	return "", false
+}
+
+// belowRecallThreshold gates a candidate entry by the scorer that actually
+// ran for it: cosine scores need ≥0.3 to count as semantically related, while
+// keyword-overlap scores only need to be positive (ranking sorts the rest).
+func belowRecallThreshold(score float64, usedVec bool) bool {
+	if usedVec {
+		return score <= 0.3
+	}
+	return score <= 0
+}
+
+// GoalSimilarity returns the bidirectional token-Jaccard similarity between
+// two goal strings in [0,1], using the same tokenizer the retriever scores
+// with. Exported for the cascade's repeat-question detection (a user
+// immediately re-asking a locally-answered question is the negative-label
+// signal for threshold calibration).
+func GoalSimilarity(a, b string) float64 {
+	aTokens := tokenize(a)
+	if len(aTokens) == 0 {
+		return 0
+	}
+	aset := make(map[string]bool, len(aTokens))
+	for _, t := range aTokens {
+		aset[t] = true
+	}
+	return tokenJaccard(aset, tokenize(b))
 }
 
 // tokenJaccard computes intersection-over-union between qset and eTokens.
@@ -418,9 +447,22 @@ func recencyBonus(t, now time.Time, halfLife time.Duration, max float64) float64
 	return max * (1 - float64(age)/float64(halfLife))
 }
 
+// kgQueryMatchCap bounds how many query-matching KG nodes are expanded, and
+// kgNeighborCap how many 1-hop neighbors each contributes. With the code
+// index in the graph (thousands of symbol nodes) an uncapped expansion could
+// turn one generic query token into a huge boost set.
+const (
+	kgQueryMatchCap = 20
+	kgNeighborCap   = 8
+)
+
 // kgQueryMatches returns the tokenized labels of every KG node that overlaps
-// qTokens. Call once per Recall(), not per entry — see the comment at its
-// call site. Returns nil if there's no KG attached.
+// qTokens, PLUS the labels of each matching node's 1-hop neighbors
+// (graph-assisted retrieval, upgrade plan Phase C): a query about "router"
+// also boosts entries that mention the files/symbols/concepts the graph
+// links to router, which neither keyword overlap nor vectors alone surface.
+// Call once per Recall(), not per entry — see the comment at its call site.
+// Returns nil if there's no KG attached.
 func (h *HybridRetriever) kgQueryMatches(qTokens []string) [][]string {
 	if h.kg == nil {
 		return nil
@@ -430,11 +472,45 @@ func (h *HybridRetriever) kgQueryMatches(qTokens []string) [][]string {
 		qset[t] = true
 	}
 	var matches [][]string
+	var matchedIDs []string
 	for _, node := range h.kg.AllNodes() {
 		nodeTokens := tokenize(node.Label)
 		for _, lt := range nodeTokens {
 			if qset[lt] {
 				matches = append(matches, nodeTokens)
+				if len(matchedIDs) < kgQueryMatchCap {
+					matchedIDs = append(matchedIDs, node.ID)
+				}
+				break
+			}
+		}
+	}
+
+	// Neighborhood expansion: include the labels of nodes adjacent to a
+	// direct match, so the boost reflects graph structure, not just label
+	// overlap. Deduped; a neighbor that already matched isn't re-added.
+	seen := make(map[string]bool, len(matchedIDs))
+	for _, id := range matchedIDs {
+		seen[id] = true
+	}
+	for _, id := range matchedIDs {
+		neighbors := 0
+		for _, e := range h.kg.GetEdges(id) {
+			other := e.To
+			if other == id {
+				other = e.From
+			}
+			if seen[other] {
+				continue
+			}
+			seen[other] = true
+			if n, ok := h.kg.GetNode(other); ok {
+				if toks := tokenize(n.Label); len(toks) > 0 {
+					matches = append(matches, toks)
+					neighbors++
+				}
+			}
+			if neighbors >= kgNeighborCap {
 				break
 			}
 		}

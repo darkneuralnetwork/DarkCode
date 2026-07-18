@@ -96,12 +96,16 @@ type jsonRPCError struct {
 
 // StdioMCPClient speaks MCP over a child process's stdin/stdout.
 type StdioMCPClient struct {
+	// nextID is accessed via atomic.AddInt64 and MUST be the first field so
+	// it stays 8-byte aligned on 32-bit platforms (386/arm), where a
+	// misaligned 64-bit atomic panics. See memory/writer.go for the same fix.
+	nextID int64
+
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 
-	mu     sync.Mutex // serializes request/response cycles
-	nextID int64
+	mu     sync.Mutex  // serializes request/response cycles
 	lines  chan string // raw newline-delimited messages from stdout
 	closed chan struct{}
 	once   sync.Once
@@ -347,9 +351,12 @@ func (c *StdioMCPClient) Close() error {
 
 // HTTPMCPClient speaks MCP by POSTing JSON-RPC envelopes to a URL.
 type HTTPMCPClient struct {
+	// nextID is accessed atomically — first field for 8-byte alignment on
+	// 32-bit platforms (see StdioMCPClient/memory.writer for the rationale).
+	nextID int64
+
 	url    string
 	header map[string]string
-	nextID int64
 }
 
 // NewHTTPMCPClient connects to an MCP server reachable at the given URL.

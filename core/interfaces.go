@@ -1,6 +1,18 @@
 package core
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrContextTooLong is the sentinel every provider maps a context-overflow
+// response to (llama-server's "context window exceeded", OpenAI's
+// "context_length_exceeded", etc.), so callers can errors.Is it and react —
+// re-fit the prompt smaller and retry, or fall back to a larger-window model —
+// instead of treating a recoverable overflow as a fatal error. The
+// deterministic FitToWindow guarantee at every dispatch site makes this rare;
+// this is the belt-and-suspenders for tokenizer-estimate drift.
+var ErrContextTooLong = errors.New("context window exceeded")
 
 // ============================================================================
 // INTERFACES — Decouples the kernel from concrete implementations so that
@@ -38,6 +50,48 @@ type LLMClient interface {
 // on local LLM providers that support it (e.g. llama-server).
 type LoRAManager interface {
 	MountLoRA(name string, scale float32) error
+}
+
+// TaskLoRA maps an auxiliary task to the LoRA adapter that specializes the
+// local model for it. Only the summarizer was wired before; coding and
+// planner adapters were downloaded but never mounted (dead weight). The
+// llama-server hot-swap (scale 0↔1, no restart) is already implemented — this
+// registry is what actually routes a task to its adapter.
+var TaskLoRA = map[string]string{
+	"local_compression": "summarizer",
+	"summarize":         "summarizer",
+	"coding":            "coding",
+	"planning":          "planner",
+}
+
+// WithLoRA mounts the adapter registered for task (scale 1.0), runs fn, then
+// unmounts it (scale 0.0) — the single audited path for per-task LoRA
+// switching. A client that isn't a LoRAManager, an unknown task, or a mount
+// failure all fall through to running fn on the base model: LoRA is an
+// enhancement, never a hard dependency. Unlike the old inline `_ =` mounts,
+// mount failures are RETURNED via the logger so a missing/misplaced adapter is
+// visible instead of silently degrading. logf may be nil.
+func WithLoRA(client LLMClient, task string, logf func(format string, args ...interface{}), fn func() error) error {
+	name, ok := TaskLoRA[task]
+	if !ok {
+		return fn()
+	}
+	lm, ok := client.(LoRAManager)
+	if !ok {
+		return fn() // cloud or non-LoRA client — base model
+	}
+	if err := lm.MountLoRA(name, 1.0); err != nil {
+		if logf != nil {
+			logf("lora mount %q for task %q failed, using base model: %v", name, task, err)
+		}
+		return fn() // base-model fallthrough, never fatal
+	}
+	defer func() {
+		if err := lm.MountLoRA(name, 0.0); err != nil && logf != nil {
+			logf("lora unmount %q failed: %v", name, err)
+		}
+	}()
+	return fn()
 }
 
 // ContextCompressor abstracts context compression (Layer 3).
@@ -96,6 +150,8 @@ type MemoryStore interface {
 // KnowledgeGraphStore abstracts the knowledge graph.
 type KnowledgeGraphStore interface {
 	AddNode(node *KGNode) error
+	AddEdge(edge *KGEdge) error
+	GetNode(id string) (*KGNode, bool)
 	Relate(fromID, toID string, relation KGRelationType) error
 	RecordWordRelations(text string) error
 	AllNodes() []*KGNode
@@ -104,6 +160,12 @@ type KnowledgeGraphStore interface {
 	AllEdges() []*KGEdge
 	Stats() (int, int)
 	ConceptRelations(concept string) interface{}
+	// AdjustConfidence changes a node's stored Confidence by delta, clamped
+	// to [floor, 1.0]. Returns the new confidence and whether the node was
+	// found. Used to demote a fact (local-first upgrade Phase D hardening:
+	// write-back governance) when real usage shows it was wrong — see
+	// orchestrator/cascade.go's detectReAsk.
+	AdjustConfidence(id string, delta, floor float64) (float64, bool)
 }
 
 // LearningStore abstracts the learning engine.

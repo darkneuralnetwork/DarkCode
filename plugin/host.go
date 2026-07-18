@@ -23,9 +23,13 @@ import (
 
 // Host represents the main application loading plugins.
 type Host struct {
+	// nextID is accessed via atomic.AddInt64 — first field for 8-byte
+	// alignment on 32-bit platforms (386/arm), where a misaligned 64-bit
+	// atomic panics. See memory/writer.go for the same fix.
+	nextID int64
+
 	mu      sync.Mutex
 	plugins map[string]*managedPlugin
-	nextID  int64
 }
 
 // managedPlugin wraps an external process and its stdin/stdout pipes.

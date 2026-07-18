@@ -16,8 +16,14 @@ type ProviderModel struct {
 	ContextWindow int     `json:"context_window"` // max context in tokens
 	InputPrice    float64 `json:"input_price"`    // USD per 1M input tokens
 	OutputPrice   float64 `json:"output_price"`   // USD per 1M output tokens
-	Tier          string  `json:"tier"`           // reasoning | coding | fast | vision
-	Description   string  `json:"description,omitempty"`
+	// CachedInputPrice is the USD per 1M price for prompt tokens served from
+	// the provider's prefix cache (much cheaper than InputPrice). 0 = not
+	// specified; the cost calculator then falls back to a conservative 50% of
+	// InputPrice (OpenAI's automatic-cache discount), so caching never
+	// over-credits savings.
+	CachedInputPrice float64 `json:"cached_input_price,omitempty"`
+	Tier             string  `json:"tier"` // reasoning | coding | fast | vision
+	Description      string  `json:"description,omitempty"`
 }
 
 // Provider describes an LLM provider endpoint.
@@ -405,6 +411,23 @@ func LookupPricing(providerID, modelID string) (float64, float64, bool) {
 		return 0, 0, false
 	}
 	return m.InputPrice, m.OutputPrice, true
+}
+
+// LookupPricingFull is LookupPricing plus the cached-input price used to
+// discount prefix-cache hits. When a model has no explicit CachedInputPrice,
+// cached tokens are priced at 50% of InputPrice — the conservative floor
+// (OpenAI's automatic-cache rate; Anthropic's is cheaper, so this never
+// over-credits the saving).
+func LookupPricingFull(providerID, modelID string) (in, cachedIn, out float64, ok bool) {
+	m, found := LookupModel(providerID, modelID)
+	if !found {
+		return 0, 0, 0, false
+	}
+	cachedIn = m.CachedInputPrice
+	if cachedIn <= 0 {
+		cachedIn = m.InputPrice * 0.5
+	}
+	return m.InputPrice, cachedIn, m.OutputPrice, true
 }
 
 // ResolveTier returns the tier for a provider+model from the registry, falling

@@ -43,7 +43,27 @@ body {
 }
 
 /* ═══ Glass panels ═══ */
-.glass-container { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
+/* width:100% (not 100vw): 100vw INCLUDES the vertical scrollbar gutter, so on
+   platforms with classic (space-occupying) scrollbars — notably Windows — the
+   root container is ~scrollbar-width too wide, causing horizontal overflow and
+   the whole layout to shift right. Linux/macOS overlay scrollbars hide the bug.
+   width:100% respects the content box and is correct on every platform. */
+.glass-container { display: flex; flex-direction: column; height: 100vh; width: 100%; }
+
+/* scrollbar-gutter:stable reserves space for the scrollbar whether or not it's
+   visible, so a scroll pane's inner content width is identical with and without
+   a scrollbar and identical across platforms. Without this, a Windows classic
+   scrollbar appearing on an overflow:auto dashboard pane shrinks the content
+   width and reflows/misaligns its grid (the telemetry/monitoring panels), while
+   Linux/macOS overlay scrollbars take no space and look fine. Applied to the
+   app's main scrollable section panes. */
+.telemetry-layout,
+.tools-grid,
+.mem-grid,
+.learn-grid,
+.audit-list,
+.provider-list,
+.events-list { scrollbar-gutter: stable; }
 .glass-panel {
   background: linear-gradient(180deg, rgba(22,22,30,0.95), rgba(17,17,23,0.95));
   border: 1px solid var(--border);
@@ -1530,6 +1550,32 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   line-height: 1.6;
 }
 .msg-exec-body > div { margin-bottom: 4px; }
+/* Row holding the "Execution Details" + "💭 Thinking" toggle chips side by
+   side under a finalized message. */
+.msg-trace-toggles {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+
+/* Live "thinking" panel — the LLM token stream shown while the model composes
+   its answer (auto-shown during the run, folded away on completion). Mirrors
+   the execution timeline's look but tinted to read as model output, and
+   preserves newlines from the raw token stream. */
+.msg-thinking-live {
+  display: block; margin-top: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 250px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, 'Fira Code', monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+  box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+}
+.msg-thinking-live[hidden] { display: none; }
 
 /* ════════════════════════════════════════════════════════════════════════
    CONTEXT EXPLORER (Chat Sidebar)
@@ -2027,3 +2073,23 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   display: block; margin-top: 10px;
   border-color: rgba(255,145,0,0.15);
 }
+
+/* Chat/Build mode segmented control (Phase 5). */
+.mode-seg-btn {
+  background: transparent;
+  color: var(--text-mute);
+  border: none;
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.mode-seg-btn + .mode-seg-btn { border-left: 1px solid var(--border); }
+.mode-seg-btn.active {
+  background: var(--accent-3);
+  color: #000;
+  font-weight: 600;
+}
+.mode-seg-btn:not(.active):hover { color: var(--text); }
+.chat-loop-toggle input { accent-color: var(--accent-3); }

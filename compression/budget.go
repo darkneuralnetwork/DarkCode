@@ -155,6 +155,149 @@ func EstimateStringTokens(s string) int {
 	return estimate
 }
 
+// FitToWindow is the deterministic, no-LLM backstop that GUARANTEES a message
+// slice fits window−reserve tokens before it is sent to any model. It is the
+// single choke point every dispatch family calls immediately before building
+// the request, so no code path can hand an over-long prompt to a client —
+// whichever model the router picked, the prompt is fitted to THAT model's
+// effective window (from ModelInfo().Context).
+//
+// The LLM Compressor still runs earlier on STM growth for a semantic summary;
+// this function is the hard final guarantee for the cases the compressor
+// didn't catch (a single giant turn, a large tool result, tokenizer drift).
+// It is pure and synchronous so it can be called cheaply everywhere.
+//
+// Invariants: the system prompt (a leading role=="system" message) and the
+// most recent user turn are NEVER dropped — they are the irreducible request.
+// Everything between them is shed oldest-first, then the largest survivor is
+// middle-truncated, until the estimate fits.
+//
+// window<=0 means "unknown" (a client that can't report its size): the caller
+// should pass a sensible fallback (cfg.ContextLength) rather than 0, but if 0
+// slips through, FitToWindow returns messages unchanged rather than destroying
+// context on a bad signal.
+func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
+	if window <= 0 {
+		return messages
+	}
+	budget := window - reserve
+	if budget < 256 {
+		budget = 256 // never fit to nothing; a tiny window still needs the request
+	}
+	if EstimateTokens(messages) <= budget || len(messages) == 0 {
+		return messages
+	}
+
+	// Identify the protected anchors: a leading system message and the last
+	// message (the current user turn / most recent context).
+	sysIdx := -1
+	if len(messages) > 0 && messages[0].Role == core.RoleSystem {
+		sysIdx = 0
+	}
+	lastIdx := len(messages) - 1
+
+	// Phase 1: drop whole middle messages, oldest first, until we fit.
+	kept := make([]bool, len(messages))
+	for i := range kept {
+		kept[i] = true
+	}
+	for i := 0; i < len(messages); i++ {
+		if i == sysIdx || i == lastIdx {
+			continue
+		}
+		if estimateKept(messages, kept) <= budget {
+			break
+		}
+		kept[i] = false
+	}
+	if estimateKept(messages, kept) <= budget {
+		return collectKept(messages, kept)
+	}
+
+	// Phase 2: still over (system + last turn alone exceed the budget).
+	// Middle-truncate the surviving messages' content, largest first,
+	// preserving head and tail so meaning survives at both ends.
+	out := collectKept(messages, kept)
+	for EstimateTokens(out) > budget {
+		bi, bTok := -1, 0
+		for i := range out {
+			t := EstimateStringTokens(out[i].ContentString())
+			if t > bTok {
+				bTok, bi = t, i
+			}
+		}
+		if bi < 0 || bTok <= 40 {
+			break // nothing left worth truncating; accept the floor
+		}
+		out[bi].Content = truncateMiddle(out[bi].ContentString(), bTok/2)
+	}
+	return out
+}
+
+// estimateKept sums the token estimate of only the messages still flagged kept.
+func estimateKept(messages []core.Message, kept []bool) int {
+	total := 0
+	for i, m := range messages {
+		if kept[i] {
+			total += EstimateStringTokens(m.ContentString()) + 4
+		}
+	}
+	return total
+}
+
+func collectKept(messages []core.Message, kept []bool) []core.Message {
+	out := make([]core.Message, 0, len(messages))
+	for i, m := range messages {
+		if kept[i] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// truncateMiddle keeps the head and tail of s, replacing the middle with an
+// elision marker, so the result is roughly targetTokens. Head+tail preserves
+// the message's opening intent and closing detail — better than a hard tail
+// cut for both instructions and tool output.
+func truncateMiddle(s string, targetTokens int) string {
+	if targetTokens < 20 {
+		targetTokens = 20
+	}
+	// ~4 chars/token is fine here; we re-estimate in the caller's loop.
+	targetChars := targetTokens * 4
+	if len(s) <= targetChars {
+		return s
+	}
+	const marker = "\n…[truncated to fit context window]…\n"
+	half := (targetChars - len(marker)) / 2
+	if half < 1 {
+		return s[:targetChars]
+	}
+	return s[:half] + marker + s[len(s)-half:]
+}
+
+// FitClient is the one-liner every dispatch family calls right before it
+// builds a request: it fits messages to the RECEIVING client's effective
+// window (ModelInfo().Context — the governor's NCtx/NParallel for a local
+// model, the catalogue window for a cloud one), reserving room for the
+// response and the tool schemas. Falls back to cfgContextLength then the
+// package default when a client can't report its window, so cfg.ContextLength
+// finally has a real consumer.
+func FitClient(messages []core.Message, client core.LLMClient, cfgContextLength, toolCount int) []core.Message {
+	window := 0
+	if client != nil {
+		window = client.ModelInfo().Context
+	}
+	if window <= 0 {
+		window = cfgContextLength
+	}
+	if window <= 0 {
+		window = DefaultContextWindow
+	}
+	reserve := window*ResponseReservePercent/100 + toolCount*TokensPerToolSchema + SystemReserveTokens
+	return FitToWindow(messages, window, reserve)
+}
+
 // FitsInBudget checks whether the given messages fit within the token budget.
 func FitsInBudget(messages []core.Message, budget int) bool {
 	return EstimateTokens(messages) <= budget

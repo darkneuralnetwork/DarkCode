@@ -217,7 +217,7 @@ func printHelpScreen() {
 	}
 
 	helpSection("CHAT")
-	helpRow("<message>", "Send a message to the orchestrator (multi-line: end with \\)")
+	helpRow("<message>", "Send a message to the orchestrator (paste multi-line text — the whole block is sent as one message)")
 	helpRow("Ctrl+C", "Interrupt the current request")
 	helpRow("Ctrl+D", "Exit the console")
 	fmt.Println()
@@ -239,6 +239,9 @@ func printHelpScreen() {
 	helpRow("/models add", "Register a model interactively (or via args: <provider> <model> [api_key])")
 	helpRow("/models remove", "Remove a model: /models remove <model>")
 	helpRow("/models primary", "Set primary: /models primary <model>")
+	helpRow("/models test", "Test connectivity: /models test [model] (default: primary)")
+	helpRow("/models disable", "Temporarily disable: /models disable <model> [duration] (default 1h)")
+	helpRow("/models enable", "Reverse a disable early: /models enable <model>")
 	helpRow("/providers", "Browse the 19-provider catalogue")
 	helpRow("/providers <id>", "Show models for a provider (e.g. /providers openai)")
 	helpRow("/model <name>", "Switch the active model on the fly (hot-reload)")

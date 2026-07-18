@@ -46,11 +46,15 @@ type Registry struct {
 	gate     *permission.Gate // optional permission gate
 	recorder *ChangeRecorder  // optional change recorder
 	emitter  *ui.EventEmitter // optional event emitter for file_change events
+	breaker  *toolBreaker     // per-tool circuit breaker (self-healing runtime)
 }
 
 // NewRegistry creates an empty tool registry.
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]*ToolEntry)}
+	return &Registry{
+		tools:   make(map[string]*ToolEntry),
+		breaker: newToolBreaker(),
+	}
 }
 
 // Register adds a tool to the registry. Panics if the name is already taken
@@ -215,6 +219,24 @@ func (r *Registry) DispatchAll(ctx context.Context, calls []core.ToolCall) inter
 			defer wg.Done()
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
+			// Defense-in-depth: a panic inside a single tool must fail only
+			// that tool call, never crash the whole server process (a tool
+			// runs in its own goroutine, so an unrecovered panic would take
+			// the process down and drop every in-flight request — surfacing
+			// in the browser as a bare "NetworkError").
+			defer func() {
+				if rec := recover(); rec != nil {
+					results[idx] = DispatchResult{
+						CallID: tc.ID,
+						Name:   tc.Function.Name,
+						Result: &ToolResult{
+							Name:    tc.Function.Name,
+							Success: false,
+							Error:   fmt.Sprintf("tool panicked: %v", rec),
+						},
+					}
+				}
+			}()
 
 			results[idx] = r.dispatchOne(ctx, tc)
 		}(i, call)
@@ -291,6 +313,20 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 		}
 	}
 
+	// Self-healing runtime: if this tool has been failing repeatedly it is
+	// quarantined — short-circuit instead of running it again. The message
+	// doubles as a steer for the LLM to try a different approach. Reached only
+	// after validation + permission pass, so those never trip the breaker.
+	if ok, remaining := r.breaker.allow(call.Function.Name); !ok {
+		result.Result = &ToolResult{
+			Name:    call.Function.Name,
+			Success: false,
+			Error: fmt.Sprintf("tool %q is temporarily unavailable (quarantined after repeated failures; retry in ~%s, or use a different approach)",
+				call.Function.Name, remaining.Round(time.Second)),
+		}
+		return result
+	}
+
 	// Capture the "before" state for file-mutating tools so we can show a
 	// before→after diff afterwards.
 	beforePath, beforeContent, beforeExists := captureFileBefore(ctx, call.Function.Name, args)
@@ -308,6 +344,15 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 		res.Name = call.Function.Name
 	}
 	result.Result = res
+
+	// Feed the outcome to the circuit breaker: a genuine execution failure
+	// counts toward quarantine; any success fully clears the tool's failure
+	// state (recovery).
+	if res.Success {
+		r.breaker.recordSuccess(call.Function.Name)
+	} else {
+		r.breaker.recordFailure(call.Function.Name)
+	}
 
 	// Record what changed (files, commands, git ops) for the activity log
 	// and the inline after-query summary.
@@ -556,15 +601,44 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("invalid arguments for tool %s: %s", name, msg)
 	}
 
+	// Permission gate: the direct-execute surface (HTTP /api/tools/execute,
+	// /api/htp) must be gated exactly like the ReAct/DAG dispatch path in
+	// dispatchOne — otherwise a dangerous action could run without approval.
+	r.mu.RLock()
+	gate := r.gate
+	r.mu.RUnlock()
+	if gate != nil {
+		allowed, req, feedback := gate.Check(name, args)
+		if !allowed {
+			msg := "permission denied by user" + denySuffix(req)
+			if strings.TrimSpace(feedback) != "" {
+				msg += "\nUser feedback: " + strings.TrimSpace(feedback)
+			}
+			return &ToolResult{Name: name, Success: false, Error: msg}, nil
+		}
+	}
+
+	// Self-healing runtime: honor the circuit breaker here too, so the HTTP/
+	// HTP tool-execution surface can't hammer a quarantined tool.
+	if ok, remaining := r.breaker.allow(name); !ok {
+		return nil, fmt.Errorf("tool %s is temporarily unavailable (quarantined after repeated failures; retry in ~%s)", name, remaining.Round(time.Second))
+	}
+
 	toolCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	result := entry.Handler(toolCtx, args)
 	if result == nil {
+		r.breaker.recordFailure(name)
 		return nil, fmt.Errorf("tool %s returned nil result", name)
 	}
 	if result.Name == "" {
 		result.Name = name
+	}
+	if result.Success {
+		r.breaker.recordSuccess(name)
+	} else {
+		r.breaker.recordFailure(name)
 	}
 	return result, nil
 }

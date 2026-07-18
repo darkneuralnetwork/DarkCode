@@ -33,7 +33,7 @@ func (s *Server) handleSystemResources(w http.ResponseWriter, r *http.Request) {
 // treats a nil/absent field as "not running").
 func (s *Server) embeddedStatus() map[string]interface{} {
 	s.cfgMu.RLock()
-	enabled := s.cfg.EnableLocalLLM
+	enabled := s.cfg.ResolvedLocalMode() != "off"
 	role := s.cfg.LocalModelRole
 	s.cfgMu.RUnlock()
 	if !enabled {
@@ -48,6 +48,10 @@ func (s *Server) embeddedStatus() map[string]interface{} {
 		"base_url":    st.BaseURL,
 		"role":        role,
 		"is_primary":  false,
+		// Why local isn't running, when the resource governor refused it
+		// ("local disabled: needs X GB, Y GB free") — so the GUI can answer
+		// "why is local off?" instead of showing a bare failed/stopped state.
+		"refusal": emb.LoadRefusal(),
 	}
 	// Determine is_primary + effective role from the router's runtime state
 	// (the local model may have been marked primary or assigned a role via

@@ -32,6 +32,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/darkcode/observability"
 )
 
 type ProcessState int
@@ -249,7 +251,17 @@ func (p *ProcessManager) Start(ctx context.Context, modelPath string, opts Launc
 	p.loraMap = make(map[string]int)
 	loraDir := opts.LoRADir
 	if loraDir == "" {
-		loraDir = "./loras"
+		loraDir = defaultLoRADir()
+	}
+	// Migration fallback: the old download_loras.sh wrote adapters to a
+	// CWD-relative ./loras, but the manager scans the system-wide dir. If the
+	// system-wide dir has none and a legacy ./loras does, use it and tell the
+	// user to move them so discovery stops depending on the launch directory.
+	if matches, _ := filepath.Glob(filepath.Join(loraDir, "*.gguf")); len(matches) == 0 {
+		if legacy, _ := filepath.Glob(filepath.Join("loras", "*.gguf")); len(legacy) > 0 {
+			observability.Log().Warn("using LoRA adapters from ./loras — move them to the system-wide dir so discovery no longer depends on the launch directory", map[string]interface{}{"legacy_dir": "./loras", "system_dir": loraDir})
+			loraDir = "loras"
+		}
 	}
 	if loraFiles, err := filepath.Glob(filepath.Join(loraDir, "*.gguf")); err == nil && len(loraFiles) > 0 {
 		sort.Strings(loraFiles)
@@ -603,4 +615,18 @@ func uptime(started time.Time, state ProcessState) time.Duration {
 		return 0
 	}
 	return time.Since(started)
+}
+
+// defaultLoRADir returns the system-wide LoRA directory
+// (~/.darkcode/models/loras) used when LaunchOpts.LoRADir isn't explicitly
+// set, falling back to a CWD-relative path only if the home directory can't
+// be resolved. Consolidates with the app layer's models directory
+// (app_wireup.go's defaultDarkcodeDir("models")) instead of the previous
+// always-CWD-relative "./loras" default.
+func defaultLoRADir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".darkcode", "models", "loras")
+	}
+	cwd, _ := os.Getwd()
+	return filepath.Join(cwd, ".darkcode", "models", "loras")
 }

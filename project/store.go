@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -311,6 +312,62 @@ func (s *Store) SetWorkflow(id, workflow string) error {
 	return os.WriteFile(s.workflowPath(id), []byte(workflow), 0644)
 }
 
+// TaskStatus is a workflow checklist task's state — the local-first upgrade
+// plan's "task list with one line how this is being approached," where each
+// task carries a stable ID (T1, T2, …) shared with the plan's Mermaid graph
+// node IDs so the architecture diagram can render real-time status
+// (see server.injectNodeStatus).
+type TaskStatus string
+
+const (
+	TaskPending TaskStatus = "pending" // "- [ ] T1: ..."
+	TaskRunning TaskStatus = "running" // "- [/] T1: ..."
+	TaskDone    TaskStatus = "done"    // "- [x] T1: ..."
+)
+
+// taskLineRe matches one workflow checklist line in the "- [ ] T1: text"
+// format (any of the three checkbox states), capturing the leading
+// whitespace+dash, the checkbox state, the space(s) before the ID, the task
+// ID itself, and the rest of the line — so MarkTaskStatus can rewrite just
+// the checkbox character and leave everything else byte-for-byte identical.
+var taskLineRe = regexp.MustCompile(`^(\s*-\s*)\[([ x/])\](\s*)([A-Za-z0-9_-]+):(.*)$`)
+
+// MarkTaskStatus flips the checkbox marker for the workflow line whose task
+// ID matches taskID (exact match, e.g. "T3") and persists the change. A
+// no-op (returns nil, not an error) if the workflow has no line for that ID
+// — callers resolving a task ID from a possibly-stale workflow snapshot
+// shouldn't treat a miss as a failure, just nothing to update.
+func (s *Store) MarkTaskStatus(id, taskID string, status TaskStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workflow, err := s.loadWorkflowLocked(id)
+	if err != nil {
+		return err
+	}
+	mark := " "
+	switch status {
+	case TaskDone:
+		mark = "x"
+	case TaskRunning:
+		mark = "/"
+	}
+	lines := strings.Split(workflow, "\n")
+	changed := false
+	for i, line := range lines {
+		m := taskLineRe.FindStringSubmatch(line)
+		if m == nil || m[4] != taskID {
+			continue
+		}
+		lines[i] = m[1] + "[" + mark + "]" + m[3] + m[4] + ":" + m[5]
+		changed = true
+		break
+	}
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(s.workflowPath(id), []byte(strings.Join(lines, "\n")), 0644)
+}
+
 // EnsurePlanSeeded writes a skeleton plan for the project only if no plan
 // exists yet (idempotent). Returns the plan that is now in place (the newly
 // seeded skeleton, or the existing plan if one was already present). This is
@@ -357,6 +414,12 @@ _Status: awaiting first task_
 ## Objective
 _Describe the project goal here._
 
+## Architecture
+` + "```mermaid" + `
+graph TD
+  T1[First task]
+` + "```" + `
+
 ## Milestones
 - [ ] _Milestone 1_
 - [ ] _Milestone 2_
@@ -365,15 +428,17 @@ _Describe the project goal here._
 - _None yet._
 `
 
+// defaultWorkflowSkeleton seeds a single pending task (T1) whose ID matches
+// the Mermaid placeholder node in defaultPlanSkeleton, so the T<n> ID
+// convention — and therefore server.injectNodeStatus's status-linked
+// flowgraph — works from project creation, not only after the first LLM
+// rewrite.
 const defaultWorkflowSkeleton = `# Workflow Architecture
 
 _Status: awaiting first task_
 
-## Components
-- _To be extracted from the first task._
-
-## Data Flow
-- _To be documented as the project evolves._
+## Tasks
+- [ ] T1: _Describe the first task's approach here._
 `
 
 // Touch updates the LastOpened timestamp for a project.

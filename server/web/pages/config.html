@@ -54,7 +54,29 @@
         <p class="cfg-help">Registered models are saved to your configuration and hot-reloaded instantly.</p>
         <div id="models-list" class="models-list custom-scrollbar" style="margin-top: 16px; flex: 1; min-height: 0; max-height: 60vh; overflow-y: auto; padding-right: 8px;"></div>
       </div>
-      
+
+      <!-- ═══ Teach / Knowledge Ingestion ═══ -->
+      <div class="glass-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">📚 Teach the System</h3>
+        <p class="cfg-help" style="margin-top: 4px;">
+          Feed a file, a directory/repo, an http(s) URL, or pasted text. It is chunked, embedded
+          into memory, and (for code) indexed into the knowledge graph — so it can be recalled
+          later, including offline via the local model.
+        </p>
+        <div style="display: flex; gap: 8px; margin-top: 14px; align-items: stretch;">
+          <input type="text" id="cfg-ingest-source" placeholder="/path/to/repo  ·  https://…  ·  or paste text"
+                 style="flex: 1; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px;">
+          <button type="button" class="cfg-secondary-btn" id="cfg-ingest-browse" title="Select a file or directory from the filesystem" style="padding: 8px 12px; white-space: nowrap; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer;">📁 Browse</button>
+          <button type="button" class="btn-glow primary" id="cfg-ingest-btn" style="padding: 8px 16px; white-space: nowrap;">Ingest</button>
+        </div>
+        <button type="button" id="cfg-ingest-content-toggle" style="margin-top: 10px; background: transparent; border: none; color: var(--text-mute); cursor: pointer; font-size: 12px; padding: 0;">▸ Content</button>
+        <div id="cfg-ingest-content" style="display: none; margin-top: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: rgba(0,0,0,0.2);">
+          <div id="cfg-ingest-breadcrumb" style="padding: 6px 10px; font-size: 11px; color: var(--text-mute); border-bottom: 1px solid var(--border); font-family: var(--font-mono);"></div>
+          <div id="cfg-ingest-listing" style="padding: 4px;"></div>
+        </div>
+        <div id="cfg-ingest-status" style="margin-top: 10px; font-size: 12px; font-family: var(--font-mono); color: var(--text-dim); display: none;"></div>
+      </div>
+
     </div>
 
     <!-- RIGHT COLUMN -->
@@ -150,9 +172,9 @@
             <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
           </label>
           <span class="cfg-switch-label" id="cfg-enable-local-llm-label" style="min-width: 60px;">Auto-load</span>
-          
+
           <div style="flex: 1;"></div>
-          
+
           <label class="cfg-switch" style="margin-bottom: 0;">
             <input type="checkbox" id="cfg-enable-local-offload">
             <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
@@ -161,6 +183,31 @@
 
           <div style="flex: 1;"></div>
           <button type="button" class="btn-glow primary" id="cfg-local-llm-btn" style="padding: 6px 12px;">Apply</button>
+        </div>
+
+        <!-- Memory Profile: curated context/RAM knob for the local model. -->
+        <div class="cfg-loop-row" style="display: flex; align-items: center; gap: 16px; margin-top: 12px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+          <div style="flex: 1;">
+            <div style="font-weight: 500; color: var(--text);">Memory Profile</div>
+            <div style="font-size: 12px; color: var(--text-mute); margin-top: 2px;">Local model context window vs RAM. Lean = 8K (lowest RAM), Balanced = 16K (default), Max = 32K. Applies on the next local-model load.</div>
+          </div>
+          <select id="cfg-memory-profile" style="background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px;">
+            <option value="">Auto</option>
+            <option value="lean">Lean · 8K</option>
+            <option value="balanced">Balanced · 16K</option>
+            <option value="max">Max · 32K</option>
+          </select>
+        </div>
+
+        <!-- Force Local: pin routing to the local model, no cloud fallback -->
+        <div class="cfg-loop-row" style="display: flex; align-items: center; gap: 16px; margin-top: 12px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+          <label class="cfg-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="cfg-force-local">
+            <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
+          </label>
+          <span class="cfg-switch-label" id="cfg-force-local-label" style="min-width: 90px;">Force Local</span>
+          <span class="cfg-desc" style="margin: 0; flex: 1;">Pin all requests to the local model — never fall back to a cloud provider. Starts the local model on demand.</span>
+          <span id="cfg-force-local-badge" style="display:none; font-size:11px; font-family:var(--font-mono); color:#0b0f0c; background:#5eead4; padding:3px 8px; border-radius:10px; font-weight:700;">LOCAL ONLY</span>
         </div>
         <div id="cfg-local-llm-status" style="margin-top: 14px; display: none; gap: 16px; flex-wrap: wrap; font-size: 12px; font-family: var(--font-mono); color: var(--text-dim);">
           <div><span style="color:var(--text-mute)">State:</span> <span id="cfg-local-llm-state" style="color:#5eead4">—</span></div>
@@ -207,6 +254,8 @@
           </div>
 
           <div id="model-detail" class="model-detail"></div>
+
+          <button type="button" class="btn-glow" id="cfg-test-connection-btn" style="width:100%; padding: 8px;">🔌 Test Connection</button>
 
           <button type="button" class="btn-glow primary" id="cfg-add-btn" style="width:100%; margin-top: 8px;">Register Model</button>
         </form>

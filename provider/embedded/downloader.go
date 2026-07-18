@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/darkcode/capability"
 	"github.com/darkcode/observability"
 )
 
@@ -38,6 +39,39 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
+// sharedLibsHealthy reports whether destDir holds a usable set of shared
+// libraries for llama-server: at least one non-empty library file, and NO
+// zero-byte library. A zero-byte `.so`/`.so.N`/`.dylib` is always corruption
+// (a broken symlink extraction) and makes the dynamic loader fail with
+// "file too short"; treating it as unhealthy triggers a fresh re-download that
+// re-creates the files correctly. Exported behavior is unit-tested
+// (downloader_health_test.go) without needing a network download.
+func sharedLibsHealthy(destDir string) bool {
+	entries, err := os.ReadDir(destDir)
+	if err != nil {
+		return false
+	}
+	hasNonEmpty := false
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.Contains(name, ".so") && !strings.HasSuffix(name, ".dylib") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return false // can't verify → treat as unhealthy, re-download
+		}
+		if info.Size() == 0 {
+			return false // zero-byte library = corrupt install
+		}
+		hasNonEmpty = true
+	}
+	return hasNonEmpty
+}
+
 // EnsureLlamaServer checks if llama-server exists in destDir or PATH.
 // If not, it attempts to download the latest release for the current OS/Arch.
 func EnsureLlamaServer(ctx context.Context, destDir string) error {
@@ -55,19 +89,16 @@ func EnsureLlamaServer(ctx context.Context, destDir string) error {
 	needsDownload := true
 	if _, err := os.Stat(destPath); err == nil {
 		needsDownload = false
-		// For linux/mac, we also need shared libraries like libllama.so
-		if runtime.GOOS != "windows" {
-			hasLib := false
-			entries, _ := os.ReadDir(destDir)
-			for _, e := range entries {
-				if strings.Contains(e.Name(), ".so") || strings.HasSuffix(e.Name(), ".dylib") {
-					hasLib = true
-					break
-				}
-			}
-			if !hasLib {
-				needsDownload = true
-			}
+		// For linux/mac, we also need the shared libraries (libllama.so etc.).
+		// A prior install can be CORRUPT — the SONAME symlinks
+		// (libllama-common.so.0 →  …so.0.0.9935) can end up as zero-byte files,
+		// which makes llama-server die at load with
+		// "libllama-common.so.0: file too short". The previous check accepted
+		// ANY `.so`-named entry, so it treated a broken install as healthy and
+		// never re-downloaded. Require at least one NON-EMPTY library and no
+		// zero-byte library so a corrupt install self-heals.
+		if runtime.GOOS != "windows" && !sharedLibsHealthy(destDir) {
+			needsDownload = true
 		}
 	}
 
@@ -269,25 +300,31 @@ var modelCatalog = []modelCatalogEntry{
 	{Filename: "qwen2_5-7b-instruct-q4_k_m.gguf", URL: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf", SizeMB: 4700, MinRAMGB: 31.0, ContextWindow: 131072},
 }
 
-// selectModelForResources picks the largest catalog model that (a) fits
-// within 60% of available memory (RAM + VRAM) and (b) the system has enough
-// RAM to run. Returns nil if even the smallest model doesn't fit.
+// selectModelForResources picks the largest catalog model that the Local
+// Resource Governor confirms will actually run here — the FULL bill (weights
+// + KV cache at the planned context + LoRAs + runtime overhead) must fit the
+// safe budget, not just the raw file size. MinRAMGB stays as a download-time
+// comfort filter (room for the OS and the user's apps); launch safety itself
+// is the governor's job, so the two can never disagree about whether a model
+// is loadable. Returns nil if nothing fits.
 func selectModelForResources(ramBytes, vramBytes int64) *modelCatalogEntry {
 	const gb = 1024 * 1024 * 1024
 	ramGB := float64(ramBytes) / float64(gb)
-	maxAllowedMB := int64(float64(ramBytes+vramBytes) * 0.60 / (1024 * 1024))
-	var best *modelCatalogEntry
-	for i := range modelCatalog {
+	caps := &capability.SystemCapabilities{}
+	caps.Memory.TotalBytes = uint64(ramBytes)
+	caps.GPU.VRAMBytes = uint64(vramBytes)
+	loraBytes := LoRADirBytes("")
+	for i := len(modelCatalog) - 1; i >= 0; i-- {
 		m := &modelCatalog[i]
-		if m.SizeMB > maxAllowedMB {
-			break
-		}
 		if m.MinRAMGB > ramGB {
-			break
+			continue
 		}
-		best = m
+		cand := []ModelFile{{Path: m.Filename, Bytes: m.SizeMB << 20}}
+		if PlanLocalLoad(caps, cand, loraBytes, 0).Fits {
+			return m
+		}
 	}
-	return best
+	return nil
 }
 
 // EnsureDefaultModels checks if there are any .gguf files in modelsDir.
@@ -353,5 +390,91 @@ func EnsureDefaultModels(ctx context.Context, modelsDir string, ramBytes, vramBy
 	}
 
 	observability.Log().Info("downloaded default model", map[string]interface{}{"model": model.Filename})
+	return nil
+}
+
+// loraCatalogEntry is a downloadable LoRA adapter and its intended task.
+type loraCatalogEntry struct {
+	Filename string // "<name>.gguf"; the name (sans .gguf) is the mount key
+	URL      string
+	SizeMB   int64
+}
+
+// loraCatalog mirrors download_loras.sh but lets the app fetch adapters into
+// the SAME system-wide dir the manager scans (~/.darkcode/models/loras),
+// fixing the ./loras-vs-scan-dir mismatch that made downloaded adapters
+// invisible. Names match the core.TaskLoRA registry keys.
+var loraCatalog = []loraCatalogEntry{
+	{Filename: "coding.gguf", URL: "https://huggingface.co/ggml-org/LoRA-Qwen2.5-1.5B-Instruct-abliterated-F16-GGUF/resolve/main/LoRA-Qwen2.5-1.5B-Instruct-abliterated-f16.gguf", SizeMB: 3000},
+	{Filename: "summarizer.gguf", URL: "https://huggingface.co/ynanxiu/qwen25-1.5b-coffee-lora-gguf/resolve/main/qwen25_15b_coffee_v2_q4km.gguf", SizeMB: 1000},
+	{Filename: "planner.gguf", URL: "https://huggingface.co/Rajat1327/lora_model_qwen2.5_1.5B_coder_LoRA_New_GGUF/resolve/main/unsloth.Q4_K_M.gguf", SizeMB: 1000},
+}
+
+// EnsureLoRAs downloads any missing catalogue adapters into loraDir (defaulting
+// to ~/.darkcode/models/loras). It checks free disk before fetching (~5 GB) and
+// is idempotent — an already-present adapter is skipped. A single adapter's
+// failure is logged and does not abort the rest (LoRA is an enhancement, never
+// a hard dependency). No-op unless explicitly called, so a user who doesn't
+// want the ~5 GB of adapters never pays for them.
+func EnsureLoRAs(ctx context.Context, loraDir string) error {
+	if loraDir == "" {
+		loraDir = defaultLoRADir()
+	}
+	if err := os.MkdirAll(loraDir, 0755); err != nil {
+		return err
+	}
+
+	var missing []loraCatalogEntry
+	var needMB int64
+	for _, l := range loraCatalog {
+		if _, err := os.Stat(filepath.Join(loraDir, l.Filename)); err != nil {
+			missing = append(missing, l)
+			needMB += l.SizeMB
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	observability.Log().Info("fetching lora adapters", map[string]interface{}{"count": len(missing), "approx_mb": needMB, "dir": loraDir})
+
+	var firstErr error
+	for _, l := range missing {
+		dest := filepath.Join(loraDir, l.Filename)
+		observability.Log().Info("downloading lora adapter", map[string]interface{}{"lora": l.Filename, "size_mb": l.SizeMB})
+		if err := downloadFile(ctx, l.URL, dest); err != nil {
+			observability.Log().Warn("lora download failed", map[string]interface{}{"lora": l.Filename, "error": err.Error()})
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		observability.Log().Info("downloaded lora adapter", map[string]interface{}{"lora": l.Filename})
+	}
+	return firstErr
+}
+
+// downloadFile GETs url into dest (following redirects for HuggingFace).
+func downloadFile(ctx context.Context, url, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "DarkCode-Embedded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return err
+	}
 	return nil
 }

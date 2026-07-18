@@ -10,6 +10,10 @@ import (
 
 	"github.com/darkcode/attach"
 	"github.com/darkcode/core"
+	"github.com/darkcode/metrics"
+	"github.com/darkcode/orchestrator"
+	"github.com/darkcode/project"
+	"github.com/darkcode/router"
 )
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -23,6 +27,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Mode        string              `json:"mode"`        // single, escalation, consensus
 		ChatMode    string              `json:"chat_mode"`   // general, project, auto
 		Safety      string              `json:"safety"`      // strict, normal, relaxed
+		Brain       string              `json:"brain"`       // local, cloud, auto (per-request routing preference)
 		Project     string              `json:"project"`     // optional active project id
 		Attachments []attach.Attachment `json:"attachments"` // optional file/dir/image/url/text refs
 	}
@@ -37,6 +42,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "query is required")
 		return
 	}
+
+	// Count this as one user turn (question). The per-request LLM-call counter
+	// is separate — one turn fans out into several calls — so the telemetry can
+	// show both and their ratio rather than conflating them.
+	metrics.Default.RecordTurn()
 
 	s.cfgMu.RLock()
 	primaryModel := s.cfg.Model
@@ -67,8 +77,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.RUnlock()
 
 	if req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "" {
+		// Cost guard: for a query that is obviously a general question, skip the
+		// LLM intent-classifier call (and the project auto-creation it can
+		// trigger) entirely — route straight to lean General mode. This keeps a
+		// plain question at a single model call instead of classifier + answer
+		// (+ possible project plan/workflow generation). Ambiguous or clearly
+		// tool-worthy queries still fall through to the LLM classifier below.
+		if router.IsGeneralQuestion(req.Query) {
+			req.ChatMode = "general"
+		}
+	}
+
+	if req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "" {
 		client := s.primaryClient()
-		prompt := fmt.Sprintf(`Analyze this user query: %q. 
+		prompt := fmt.Sprintf(`Analyze this user query: %q.
 Determine the required execution mode:
 - "general": A simple question, explanation, or chat that does NOT require using any tools or modifying files.
 - "project": A task that requires using tools (reading/writing files, searching) but is relatively straightforward.
@@ -120,7 +142,7 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	if req.ChatMode == "general" {
 		toolsOverride = "off"
 	}
-	restoreOverrides := s.kernel.ApplyRequestOverrides(req.Mode, req.Safety, loopOverride, toolsOverride)
+	restoreOverrides := s.kernel.ApplyRequestOverrides(req.Mode, req.Safety, loopOverride, toolsOverride, req.Brain)
 	defer restoreOverrides()
 
 	// If an active project is specified, prepend its long-lived context to
@@ -185,39 +207,48 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	ctx = context.WithValue(ctx, core.ProjectKey, req.Project)
 
 	// Inject the active project's implementation plan + workflow architecture
-	// so the kernel's planner follows the plan (previously the plan was a
-	// write-only display artifact generated after execution). Cleared after
+	// so the kernel's planner follows the plan. The plan/workflow are amended
+	// SYNCHRONOUSLY here, before Execute runs, when the incoming message
+	// looks like a new instruction (see needsPlanAmend) — "if a new
+	// instruction comes, first change these, then go through these only"
+	// (local-first upgrade §5). This replaces the previous design where the
+	// rewrite ran in a goroutine launched only AFTER Execute returned
+	// (racing with a separate pre-Execute "mark task running" goroutine), so
+	// execution used to always run against a stale plan. Cleared after
 	// Execute so a subsequent non-project request isn't contaminated.
+	// pendingTaskID is the workflow task this turn is about to work on (if
+	// resolvable) — captured BEFORE Execute so a successful response can
+	// mark it done afterward (local-first upgrade §7 Fix D), closing the
+	// loop between execution and the Blueprint tab's live status. Best
+	// effort: stays "" when there's no active project or nothing pending,
+	// in which case the write-back below is simply skipped.
+	var pendingTaskID string
 	if req.Project != "" && s.projects != nil {
 		plan, _ := s.projects.GetPlan(req.Project)
 		workflow, _ := s.projects.GetWorkflow(req.Project)
-		s.kernel.SetProjectContext(plan, workflow)
+		s.cfgMu.RLock()
+		skipReadOnly := s.cfg.SkipAuxForReadOnly
+		s.cfgMu.RUnlock()
+		amending := needsPlanAmend(req.Query, s.kernel.RecentSTM(), skipReadOnly)
+		if amending {
+			plan, workflow = s.amendPlanWorkflowSync(ctx, req.Project, req.Query, plan, workflow)
+		}
+		if id, _, ok := orchestrator.NextPendingWorkflowTask(workflow); ok {
+			pendingTaskID = id
+		}
+		// Phase 4 — brief-first project memory. On a routine (non-amend) turn the
+		// compact, auto-updated project brief is already prepended to the query by
+		// BuildContextQuery, so inject only the task workflow (needed for task
+		// continuity) instead of the full ~8K implementation plan. The full plan
+		// is injected only when the user is actively shaping it (an amend/planning
+		// turn). This keeps routine turns small and makes resuming a project cheap
+		// — the brief carries "what this project is" without re-feeding the plan.
+		if amending {
+			s.kernel.SetProjectContext(plan, workflow)
+		} else {
+			s.kernel.SetProjectContext("", workflow)
+		}
 		defer s.kernel.ClearProjectContext()
-		
-		go func(pID, uQuery string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			defer func() { recover() }()
-			oldWf, _ := s.projects.GetWorkflow(pID)
-			if oldWf != "" {
-				client := s.primaryClient()
-				temp := 0.0
-				wfPrompt := fmt.Sprintf("Here is the current Task Workflow:\n%s\n\nThe user just requested: %s\n\nRewrite the workflow to mark the task corresponding to the user's request as 'running' by changing its checkbox from '- [ ]' to '- [/]'. Output ONLY the raw markdown checklist.", oldWf, uQuery)
-				wResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-					Messages: []core.Message{
-						{Role: "system", Content: "You are an AI architect. Only output valid markdown checklists. Change the active task checkbox to '- [/]'."},
-						{Role: "user", Content: wfPrompt},
-					},
-					Temperature: &temp,
-				})
-				if err == nil && len(wResp.Choices) > 0 {
-					s.projects.SetWorkflow(pID, wResp.Choices[0].Message.Content)
-					if s.emitter != nil {
-						s.emitter.EmitWorkflowUpdated(pID, wResp.Choices[0].Message.Content)
-					}
-				}
-			}
-		}(req.Project, req.Query)
 	}
 
 	output, err := s.kernel.Execute(ctx, query)
@@ -234,68 +265,46 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 		s.emitter.EmitChatResponse(output)
 	}
 
+	// Write the resolved task's completion back to the workflow (Fix D) —
+	// this is what makes Issue 5's status-linked Mermaid graph reflect real
+	// progress, and what makes a subsequent "continue" (Fix B) genuinely
+	// advance to the NEXT pending task instead of re-resolving the same one.
+	// Synchronous (not fire-and-forget): the response the user is about to
+	// see should be consistent with the workflow state by the time it's
+	// returned. Skipped when nothing was resolved (id == "" — either no
+	// active project, or a legacy ID-less workflow line, which
+	// MarkTaskStatus can't target) OR when tools were disabled for this
+	// turn (General mode is pure conversation — the task genuinely wasn't
+	// worked on, so marking it done would be wrong even if Execute
+	// "succeeded"). A clarification-only response (needsClarification) can
+	// still slip through as a false-positive "done" — Execute doesn't
+	// currently distinguish that case from real work in its return value —
+	// but that's a narrower, lower-stakes gap than the General-mode one.
+	if pendingTaskID != "" && req.Project != "" && s.projects != nil && req.ChatMode != "general" {
+		if err := s.projects.MarkTaskStatus(req.Project, pendingTaskID, project.TaskDone); err != nil {
+			log.Printf("[server] failed to mark task %s done: %v", pendingTaskID, err)
+		} else if updated, err := s.projects.GetWorkflow(req.Project); err == nil && s.emitter != nil {
+			s.emitter.EmitWorkflowUpdated(req.Project, updated)
+		}
+	}
+
 	if req.Project != "" && s.projects != nil {
+		// Plan/workflow are already fresh — amended synchronously above,
+		// BEFORE Execute ran (see needsPlanAmend/amendPlanWorkflowSync). What
+		// remains here is purely passive bookkeeping: append to the raw
+		// context backup and let the existing context-window rewriter trim
+		// it, neither of which needs to block the chat response. Bound with
+		// a timeout + recover so a slow/hung provider or panic can't leak a
+		// goroutine or take down the process.
 		go func(projID, q, out string) {
-			// Bound the background updater: a timeout prevents goroutine
-			// leak / runaway cost when the provider hangs, and a recover
-			// keeps a panic from killing the process. Uses the shared
-			// primary client builder so telemetry records the provider.
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[server] project updater panic: %v", r)
+					log.Printf("[server] project raw-context append panic: %v", r)
 				}
 			}()
-			client := s.primaryClient()
-
-			temp := 0.0
-			// 1. Update Plan
-			oldPlan, _ := s.projects.GetPlan(projID)
-			planPrompt := fmt.Sprintf("Here is the current Implementation Plan and Architecture:\n%s\n\nUser asked: %s\nAgent did: %s\n\nRewrite the implementation plan to reflect the new state. You MUST keep the Mermaid architecture graph and update it if necessary. If you have any confusion or underspecified requirements, add an 'Open Questions' section to ask the user. Output ONLY the raw markdown plan.", oldPlan, q, out)
-			llmReq1 := &core.CompletionRequest{
-				Messages: []core.Message{
-					{Role: "system", Content: "You are an AI architect. Keep the plan detailed but concise. Only output valid markdown. Always include a Mermaid graph."},
-					{Role: "user", Content: planPrompt},
-				},
-				Temperature: &temp,
-			}
-			pResp, err := client.ChatCompletion(ctx, llmReq1)
-			if err == nil && len(pResp.Choices) > 0 {
-				planText := pResp.Choices[0].Message.Content
-				s.projects.SetPlan(projID, planText)
-				if s.emitter != nil {
-					s.emitter.EmitPlanUpdated(projID, planText)
-				}
-			}
-
-			// 2. Update Workflow
-			oldWf, _ := s.projects.GetWorkflow(projID)
-			wfPrompt := fmt.Sprintf("Here is the current Task Workflow:\n%s\n\nUser asked: %s\nAgent did: %s\n\nRewrite the task workflow to reflect the new state. Maintain the markdown checklist format (- [ ], - [x]). Output ONLY the raw markdown.", oldWf, q, out)
-			llmReq2 := &core.CompletionRequest{
-				Messages: []core.Message{
-					{Role: "system", Content: "You are an AI architect. Keep the task workflow concise. Only output valid markdown checkboxes."},
-					{Role: "user", Content: wfPrompt},
-				},
-				Temperature: &temp,
-			}
-			wResp, err := client.ChatCompletion(ctx, llmReq2)
-			if err == nil && len(wResp.Choices) > 0 {
-				wfText := wResp.Choices[0].Message.Content
-				s.projects.SetWorkflow(projID, wfText)
-				if s.emitter != nil {
-					s.emitter.EmitWorkflowUpdated(projID, wfText)
-				}
-			}
-
-			// 3. Append to raw backup and automatically rewrite the project context.
-			// The user specified that context should be rewritten after every user message response,
-			// and to keep a hidden raw backup without using it in conversation.
 			if err := s.projects.AppendRawContext(projID, fmt.Sprintf("## User\n%s\n\n## Assistant\n%s\n", q, out)); err != nil {
 				log.Printf("[server] failed to append to raw context: %v", err)
 			}
-
-			// Trigger a rewrite using the dedicated rewrite logic
 			s.maybeRewriteProjectContext(projID)
 		}(req.Project, req.Query, output)
 	}

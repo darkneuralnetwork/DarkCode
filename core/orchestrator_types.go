@@ -465,6 +465,14 @@ const (
 	KGNodeAgent   KGNodeType = "agent"
 	KGNodeTask    KGNodeType = "task"
 	KGNodeFact    KGNodeType = "fact"
+	// Typed code-fact nodes (local-first upgrade §5): populated from the
+	// deterministic AST index so the graph can answer structural questions
+	// with citations and no LLM.
+	KGNodeSymbol   KGNodeType = "symbol"   // function/type/struct/interface declaration
+	KGNodePackage  KGNodeType = "package"  // an import path
+	KGNodeAPI      KGNodeType = "api"      // an external API/endpoint
+	KGNodeDecision KGNodeType = "decision" // a recorded design decision
+	KGNodeFix      KGNodeType = "fix"      // a proven fix for a problem
 )
 
 // KGRelationType identifies the relationship between two nodes.
@@ -477,6 +485,13 @@ const (
 	KGRelUsedBy     KGRelationType = "used_by"
 	KGRelContains   KGRelationType = "contains"
 	KGRelCausedBy   KGRelationType = "caused_by"
+	// Typed code-fact relations (local-first upgrade §5).
+	KGRelDefines        KGRelationType = "defines"         // file → symbol
+	KGRelReferences     KGRelationType = "references"      // file → symbol
+	KGRelImports        KGRelationType = "imports"         // file → package
+	KGRelFixedBy        KGRelationType = "fixed_by"        // problem → fix
+	KGRelDecidedBecause KGRelationType = "decided_because" // decision → rationale
+	KGRelUsedTool       KGRelationType = "used_tool"       // task → tool
 )
 
 // KGNode is a node in the knowledge graph.
@@ -487,6 +502,17 @@ type KGNode struct {
 	Properties map[string]string `json:"properties,omitempty"`
 	Vector     []float32         `json:"vector,omitempty"`
 	CreatedAt  time.Time         `json:"created_at"`
+	// Provenance records where this fact came from ("file.go:42" for code
+	// facts, a task ID for activity facts). A node whose provenance resolves
+	// to real code is high-confidence by construction — this is what lets a
+	// graph answer skip the LLM safely. Empty for legacy/concept nodes.
+	Provenance string `json:"provenance,omitempty"`
+	// Confidence is the fact's own reliability in [0,1]; 0 means "unscored"
+	// (legacy nodes) and is treated as neutral by consumers.
+	Confidence float64 `json:"confidence,omitempty"`
+	// LastSeen is when the fact was last re-confirmed by an index sync or
+	// task; used for recency weighting and staleness pruning.
+	LastSeen time.Time `json:"last_seen,omitempty"`
 }
 
 // KGEdge is an edge (relationship) between two nodes.
@@ -496,6 +522,23 @@ type KGEdge struct {
 	Relation  KGRelationType `json:"relation"`
 	Weight    float64        `json:"weight,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
+	// Provenance mirrors KGNode.Provenance for the relationship itself
+	// (e.g. the file:line of an import declaration).
+	Provenance string `json:"provenance,omitempty"`
+}
+
+// ============================================================================
+// COGNITION CASCADE TYPES (local-first upgrade §2/§7 Phase A)
+// ============================================================================
+
+// Confidence is the single comparable signal every cascade rung returns.
+// Score is in [0,1]; Reason says how the score was derived (for the rung
+// log/telemetry); Provenance lists the concrete sources (file:line, episodic
+// IDs, KG node IDs) backing the answer so it is verifiable.
+type Confidence struct {
+	Score      float64  `json:"score"`
+	Reason     string   `json:"reason"`
+	Provenance []string `json:"provenance,omitempty"`
 }
 
 // ============================================================================

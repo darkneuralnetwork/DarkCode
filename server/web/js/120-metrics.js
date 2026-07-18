@@ -21,9 +21,27 @@ function renderMetrics(snap) {
   safeSet("#kpi-prompt", fmtNum(snap.total_prompt_tokens || 0));
   safeSet("#kpi-completion", fmtNum(snap.total_completion_tokens || 0));
   safeSet("#kpi-cost", fmtCost(snap.total_cost || 0));
+  // Prompt-cache accounting: show cached prompt tokens and the estimated USD
+  // saved by billing them at the cheaper cached rate. Appended to the cost
+  // KPI's sublabel when present so it needs no new DOM element.
+  const cachedTok = snap.total_cached_tokens || 0;
+  const saved = snap.cache_savings || 0;
+  if (cachedTok > 0) {
+    safeSet("#kpi-cache", `${fmtNum(cachedTok)} cached · ${fmtCost(saved)} saved`);
+  } else {
+    safeSet("#kpi-cache", "");
+  }
   safeSet("#kpi-since", fmtTimeShort(snap.since));
   animateValue("kpi-requests", snap.total_requests || 0, fmtNum);
-  
+
+  // Questions (user turns) vs LLM calls: one question fans out into several
+  // calls, so surface both plus the ratio so the call count isn't mistaken for
+  // "one call per question".
+  const turns = snap.total_turns || 0;
+  animateValue("kpi-turns", turns, fmtNum);
+  const callsPerTurn = turns > 0 ? (snap.total_requests || 0) / turns : 0;
+  safeSet("#kpi-calls-per-turn", callsPerTurn ? callsPerTurn.toFixed(1) : "0");
+
   const errs = snap.total_errors || 0;
   const succRate = snap.total_requests > 0 ? Math.round(((snap.total_requests - errs) / snap.total_requests) * 100) : 100;
   safeSet("#kpi-errors", errs + " errors");

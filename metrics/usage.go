@@ -23,11 +23,15 @@ type RequestRecord struct {
 	Provider         string    `json:"provider"`
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
-	Cost             float64   `json:"cost"`
-	LatencyMs        int64     `json:"latency_ms"`
-	Stream           bool      `json:"stream"`
-	Success          bool      `json:"success"`
+	// CachedTokens is the subset of PromptTokens served from the provider's
+	// prefix cache (billed at the cheaper cached rate). 0 when the provider
+	// doesn't report caching.
+	CachedTokens int     `json:"cached_tokens,omitempty"`
+	TotalTokens  int     `json:"total_tokens"`
+	Cost         float64 `json:"cost"`
+	LatencyMs    int64   `json:"latency_ms"`
+	Stream       bool    `json:"stream"`
+	Success      bool    `json:"success"`
 }
 
 // ModelStat aggregates usage for a single model.
@@ -58,9 +62,19 @@ type Snapshot struct {
 	Since           time.Time       `json:"since"`
 	TotalPrompt     int             `json:"total_prompt_tokens"`
 	TotalCompletion int             `json:"total_completion_tokens"`
+	TotalCached     int             `json:"total_cached_tokens"`
 	TotalTokens     int             `json:"total_tokens"`
 	TotalCost       float64         `json:"total_cost"`
+	// CacheSavings is the estimated USD not spent because TotalCached prompt
+	// tokens were billed at the cached rate instead of full input price.
+	CacheSavings    float64         `json:"cache_savings"`
+	// TotalRequests is the number of LLM API calls. TotalTurns is the number of
+	// user questions/messages. One turn fans out into several requests (routing,
+	// answer, compression, skill extraction, …), so requests ÷ turns is the
+	// average model calls per question — surfaced so the count isn't mistaken
+	// for "one request per question".
 	TotalRequests   int             `json:"total_requests"`
+	TotalTurns      int             `json:"total_turns"`
 	TotalErrors     int             `json:"total_errors"`
 	AvgLatencyMs    float64         `json:"avg_latency_ms"`
 	PerModel        []ModelStat     `json:"per_model"`
@@ -79,9 +93,12 @@ type UsageTracker struct {
 	since           time.Time
 	totalPrompt     int
 	totalCompletion int
+	totalCached     int
 	totalTokens     int
 	totalCost       float64
+	cacheSavings    float64
 	totalRequests   int
+	totalTurns      int
 	totalErrors     int
 	totalLatencyMs  int64
 	perModel        map[string]*ModelStat
@@ -110,6 +127,15 @@ func (u *UsageTracker) SetOnRecord(f func(RequestRecord)) {
 	u.onRecord = f
 }
 
+// RecordTurn increments the user-turn (question) counter. Call once per
+// user-submitted chat message, independent of how many LLM requests that turn
+// fans out into.
+func (u *UsageTracker) RecordTurn() {
+	u.mu.Lock()
+	u.totalTurns++
+	u.mu.Unlock()
+}
+
 // Record logs a single LLM request, computing cost from the provider registry.
 func (u *UsageTracker) Record(rec RequestRecord) {
 	if rec.Timestamp.IsZero() {
@@ -118,11 +144,22 @@ func (u *UsageTracker) Record(rec RequestRecord) {
 	if rec.TotalTokens == 0 && (rec.PromptTokens != 0 || rec.CompletionTokens != 0) {
 		rec.TotalTokens = rec.PromptTokens + rec.CompletionTokens
 	}
-	// Cost from pricing registry; local/unknown models cost nothing.
+	// Cost from pricing registry; local/unknown models cost nothing. Prompt
+	// tokens are split into cached (cheaper prefix-cache reads) and uncached,
+	// so a stable, re-sent system prompt no longer gets charged full input
+	// price — the cost meter reflects the caching saving instead of ignoring
+	// it.
 	if rec.Cost == 0 {
-		in, out, ok := config.LookupPricing(rec.Provider, rec.Model)
+		in, cachedIn, out, ok := config.LookupPricingFull(rec.Provider, rec.Model)
 		if ok {
-			rec.Cost = float64(rec.PromptTokens)/1e6*in + float64(rec.CompletionTokens)/1e6*out
+			cached := rec.CachedTokens
+			if cached > rec.PromptTokens {
+				cached = rec.PromptTokens
+			}
+			uncached := rec.PromptTokens - cached
+			rec.Cost = float64(uncached)/1e6*in +
+				float64(cached)/1e6*cachedIn +
+				float64(rec.CompletionTokens)/1e6*out
 		}
 	}
 
@@ -145,8 +182,16 @@ func (u *UsageTracker) Record(rec RequestRecord) {
 
 	u.totalPrompt += rec.PromptTokens
 	u.totalCompletion += rec.CompletionTokens
+	u.totalCached += rec.CachedTokens
 	u.totalTokens += rec.TotalTokens
 	u.totalCost += rec.Cost
+	// Estimated saving: what the cached tokens would have cost at full input
+	// price minus what they actually cost at the cached rate.
+	if rec.CachedTokens > 0 {
+		if in, cachedIn, _, ok := config.LookupPricingFull(rec.Provider, rec.Model); ok {
+			u.cacheSavings += float64(rec.CachedTokens) / 1e6 * (in - cachedIn)
+		}
+	}
 	u.totalRequests++
 	if !rec.Success {
 		u.totalErrors++
@@ -219,9 +264,12 @@ func (u *UsageTracker) Snapshot() Snapshot {
 		Since:           u.since,
 		TotalPrompt:     u.totalPrompt,
 		TotalCompletion: u.totalCompletion,
+		TotalCached:     u.totalCached,
 		TotalTokens:     u.totalTokens,
 		TotalCost:       u.totalCost,
+		CacheSavings:    u.cacheSavings,
 		TotalRequests:   u.totalRequests,
+		TotalTurns:      u.totalTurns,
 		TotalErrors:     u.totalErrors,
 		AvgLatencyMs:    avg,
 		PerModel:        perModel,
@@ -237,9 +285,12 @@ func (u *UsageTracker) Reset() {
 	u.since = time.Now()
 	u.totalPrompt = 0
 	u.totalCompletion = 0
+	u.totalCached = 0
 	u.totalTokens = 0
 	u.totalCost = 0
+	u.cacheSavings = 0
 	u.totalRequests = 0
+	u.totalTurns = 0
 	u.totalErrors = 0
 	u.totalLatencyMs = 0
 	u.perModel = make(map[string]*ModelStat)

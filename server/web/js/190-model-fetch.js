@@ -94,6 +94,56 @@ async function fetchProviderModels() {
   }
 }
 
+// testModelConnection is the GUI counterpart of the CLI's "/models test"
+// (local-first upgrade §4c): verifies the currently-filled-in provider/key/
+// base_url/model is actually reachable on demand, instead of only finding
+// out at first real chat request. Uses the current form fields — not yet
+// registered/saved — so a user can check connectivity before committing to
+// "Register Model".
+async function testModelConnection() {
+  const provider = $("#cfg-provider")?.value;
+  const apiKey = $("#cfg-api-key")?.value;
+  const baseURL = $("#cfg-base-url")?.value;
+  const model = $("#cfg-model-name")?.value;
+  const btn = $("#cfg-test-connection-btn");
+
+  if (!provider) {
+    toast("info", "Select a provider first.");
+    return;
+  }
+
+  if (btn) {
+    btn.textContent = "🔄 Testing...";
+    btn.disabled = true;
+  }
+
+  try {
+    const res = await fetch(API + "/api/models/ping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, api_key: apiKey, base_url: baseURL, model })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "request failed");
+    }
+    if (data.ok) {
+      toast("success", "Connection successful" + (data.status ? ` (${data.status})` : ""));
+    } else {
+      toast("error", "Connection failed: " + (data.error || data.status || "unreachable"));
+    }
+  } catch (err) {
+    toast("error", "Test failed: " + err.message);
+  } finally {
+    if (btn) {
+      btn.textContent = "🔌 Test Connection";
+      btn.disabled = false;
+    }
+  }
+}
+
+$("#cfg-test-connection-btn")?.addEventListener("click", testModelConnection);
+
 $("#chat-switch-cli")?.addEventListener("click", async () => {
   try {
     const res = await fetch(API + "/api/switch-cli", {

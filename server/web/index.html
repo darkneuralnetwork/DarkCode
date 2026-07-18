@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DarkCode OS</title>
+  <title>DarkCode</title>
   <link rel="stylesheet" href="/css/theme.css" />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/css/animations.css" />
   <link rel="stylesheet" href="/css/layout.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
+  <!-- Fonts + libraries are vendored locally (server/web/fonts, server/web/vendor)
+       and embedded in the binary so the GUI works fully offline / air-gapped —
+       no external CDN or Google Fonts dependency at runtime. -->
+  <link href="/fonts/fonts.css" rel="stylesheet">
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/vendor/mermaid.min.js"></script>
   <script>
     if (window.mermaid) {
       mermaid.initialize({ startOnLoad: false, theme: 'dark' });
@@ -30,9 +31,9 @@
  ██████╔╝██║  ██║██║  ██║██║  ██╗╚██████╗╚██████╔╝██████╔╝███████╗
  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝</pre>
     <div class="splash-title">DarkCode System</div>
-    <div class="splash-sub">Enterprise AI Developer Platform</div>
+    <div class="splash-sub">**Next-Generation Autonomous AI Agent Platform**</div>
     <div class="splash-bar"><div class="splash-bar-fill"></div></div>
-    <div class="splash-status" id="splash-status">Initializing kernel…</div>
+    <div class="splash-status" id="splash-status">Initializing System...</div>
   </div>
 
   <!-- ═══ Ambient Background ═══ -->
@@ -46,7 +47,7 @@
     <!-- ═══ Unified Header (brand + horizontal nav + right cluster) ═══ -->
     <header class="app-header glass-panel">
       <div class="brand brand-compact">
-        <img src="/logo.ico" alt="DarkCode Logo" style="height: 36px; width: auto; object-fit: contain; border-radius: 4px;" />
+        <img src="/logo.png" alt="DarkCode Logo" style="height: 36px; width: auto; object-fit: contain; border-radius: 4px;" />
       </div>
 
       <!-- Section dropdown: trigger shows the active section; click opens a
@@ -84,7 +85,7 @@
         <div class="live-meters" id="live-meters">
           <div class="meter"><span class="meter-ico">🪙</span><span class="meter-val" id="meter-tokens">0</span><span class="meter-lbl">tok</span></div>
           <div class="meter"><span class="meter-ico">💲</span><span class="meter-val" id="meter-cost">$0.00</span><span class="meter-lbl">cost</span></div>
-          <div class="meter"><span class="meter-ico">📡</span><span class="meter-val" id="meter-reqs">0</span><span class="meter-lbl">reqs</span></div>
+          <div class="meter"><span class="meter-ico">📡</span><span class="meter-val" id="meter-reqs">0</span><span class="meter-lbl">calls</span></div>
         </div>
         <div class="model-switcher" id="model-switcher" title="Switch primary model (hot-reload)">
           <span class="model-switcher-label">Model</span>

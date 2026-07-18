@@ -247,6 +247,20 @@ func (g *Gate) Check(tool string, args map[string]interface{}) (bool, ApprovalRe
 	req, dangerous := classify(tool, args)
 	req.Timestamp = time.Now()
 
+	// Secret guard: if the call's arguments carry something that looks like a
+	// credential (API key, token, private key, …), force an approval prompt
+	// even at Normal level and mark it at least Medium risk. This stops a
+	// secret from being silently piped into a tool (e.g. exfiltrated via a
+	// web_fetch URL or echoed into a world-readable file) without the user
+	// seeing it first. Previously the scanner was instantiated but never used.
+	if argsContainSecret(g.scanner, args) {
+		dangerous = true
+		if req.Risk < core.RiskMedium {
+			req.Risk = core.RiskMedium
+		}
+		req.Summary = "⚠ possible secret — " + req.Summary
+	}
+
 	// Normal level: only dangerous actions need approval.
 	if level == LevelNormal && !dangerous {
 		return true, req, ""
@@ -434,6 +448,42 @@ func classify(tool string, args map[string]interface{}) (ApprovalRequest, bool) 
 		req.Preview = ""
 		return req, false
 	}
+}
+
+// argsContainSecret reports whether any string value in the tool arguments
+// looks like a credential, walking nested maps/slices. A nil scanner (e.g. a
+// zero-value Gate in a test) is treated as "no secret" so callers need not
+// guard it.
+func argsContainSecret(scanner *security.SecretScanner, args map[string]interface{}) bool {
+	if scanner == nil {
+		return false
+	}
+	var walk func(v interface{}) bool
+	walk = func(v interface{}) bool {
+		switch t := v.(type) {
+		case string:
+			return scanner.HasSecret(t)
+		case map[string]interface{}:
+			for _, vv := range t {
+				if walk(vv) {
+					return true
+				}
+			}
+		case []interface{}:
+			for _, vv := range t {
+				if walk(vv) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, v := range args {
+		if walk(v) {
+			return true
+		}
+	}
+	return false
 }
 
 func IsGitMutating(action string) bool {

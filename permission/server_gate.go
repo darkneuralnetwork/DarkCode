@@ -42,10 +42,14 @@ type RequestFn func(id string, req ApprovalRequest)
 // ServerApprover is an Approver that defers to a remote UI (the web frontend).
 // It blocks until the UI resolves the request, or until the timeout expires.
 type ServerApprover struct {
+	// counter is accessed via atomic.AddUint64 — first field for 8-byte
+	// alignment on 32-bit platforms (386/arm), where a misaligned 64-bit
+	// atomic panics. See memory/writer.go for the same fix.
+	counter uint64
+
 	mu        sync.Mutex
 	pending   map[string]*pendingEntry
 	onRequest RequestFn
-	counter   uint64
 	timeout   time.Duration
 }
 

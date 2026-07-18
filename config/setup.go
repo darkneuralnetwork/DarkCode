@@ -59,6 +59,7 @@ func RunInteractiveSetup(cfg *Config) error {
 			cfg.BaseURL = ""
 			cfg.Model = ""
 			cfg.APIKey = ""
+			cfg.EnableLocalLLM = askEnableLocalLLM(rl)
 			cfg.Save()
 			return nil
 		}
@@ -96,4 +97,20 @@ func RunInteractiveSetup(cfg *Config) error {
 		fmt.Printf("\033[32mSuccess!\033[0m Configuration saved to %s\n\n", ConfigPath())
 	}
 	return nil
+}
+
+// askEnableLocalLLM prompts whether to enable the local embedded model
+// (llama-server) when the user has no cloud provider configured, so a
+// skipped setup doesn't silently leave them with zero usable models. Defaults
+// to yes on blank input — a user who skipped cloud setup almost certainly
+// wants *some* working model, and local is the only option left.
+func askEnableLocalLLM(rl *readline.Instance) bool {
+	fmt.Println("No cloud model configured.")
+	rl.SetPrompt("Enable the local embedded model (llama-server)? [Y/n] > ")
+	line, err := rl.Readline()
+	if err != nil {
+		return false
+	}
+	line = strings.ToLower(strings.TrimSpace(line))
+	return line == "" || line == "y" || line == "yes"
 }

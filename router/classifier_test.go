@@ -72,3 +72,39 @@ func TestClassifier_Classify(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifier_EntryRung(t *testing.T) {
+	c := NewTaskClassifier()
+
+	tests := []struct {
+		query    string
+		expected int
+	}{
+		// Structural/code navigation → rung 0.
+		{"where is HybridRetriever defined?", RungDeterministic},
+		{"who calls Route?", RungDeterministic},
+		{"which files import the router package", RungDeterministic},
+		{"find references to Kernel", RungDeterministic},
+		// Relational/history → rung 2.
+		{"what tools did we use for auth tasks?", RungGraph},
+		{"what is related to retry logic?", RungGraph},
+		// Explicit memory intent → rung 1.
+		{"have we solved a timeout issue like this?", RungCache},
+		{"what did we decide last time about caching?", RungCache},
+		// Action intent → rung 4 (never served from cache: side effects).
+		{"create a REST endpoint for user signup", RungLLM},
+		{"refactor the payment module for testability", RungLLM},
+		{"fix the flaky integration test", RungLLM},
+		// Explanation questions stay cache-eligible (repeated explains are
+		// the answer cache's main win; ConfidentRecall is no-tool-only).
+		{"explain the difference between mutex and channel", RungCache},
+		// Default → rung 1 (cache check is ~free).
+		{"capital of France", RungCache},
+	}
+
+	for _, tt := range tests {
+		if got := c.EntryRung(tt.query); got != tt.expected {
+			t.Errorf("EntryRung(%q) = %d; want %d", tt.query, got, tt.expected)
+		}
+	}
+}

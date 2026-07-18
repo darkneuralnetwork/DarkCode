@@ -237,3 +237,66 @@ func TestNewKnowledgeGraphUsesGivenDir(t *testing.T) {
 		t.Errorf("expected knowledge_graph.json to be written in %s: %v", dir, err)
 	}
 }
+
+// TestAdjustConfidence covers the write-back governance primitive
+// (local-first upgrade Phase D hardening): demoting a fact's confidence in
+// response to real usage feedback, permanently (no auto-recovery) and
+// clamped so it can never go negative or exceed 1.0.
+func TestAdjustConfidence(t *testing.T) {
+	kg := newTestKG(t)
+	if err := kg.AddNode(&core.KGNode{ID: "fix:x", Label: "x", Type: core.KGNodeFix, Confidence: 0.8}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	newConf, ok := kg.AdjustConfidence("fix:x", -0.15, 0.3)
+	if !ok {
+		t.Fatal("expected the node to be found")
+	}
+	if newConf != 0.65 {
+		t.Fatalf("newConf = %v, want 0.65", newConf)
+	}
+	node, _ := kg.GetNode("fix:x")
+	if node.Confidence != 0.65 {
+		t.Fatalf("stored Confidence = %v, want 0.65 (AdjustConfidence must mutate the stored node)", node.Confidence)
+	}
+}
+
+func TestAdjustConfidenceClampsAtFloor(t *testing.T) {
+	kg := newTestKG(t)
+	if err := kg.AddNode(&core.KGNode{ID: "fix:x", Label: "x", Type: core.KGNodeFix, Confidence: 0.4}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	// A demotion large enough to go negative must clamp at floor, not go
+	// below it — a repeatedly-wrong fact stops answering, it doesn't become
+	// "more wrong."
+	newConf, ok := kg.AdjustConfidence("fix:x", -0.9, 0.3)
+	if !ok {
+		t.Fatal("expected the node to be found")
+	}
+	if newConf != 0.3 {
+		t.Fatalf("newConf = %v, want floor 0.3", newConf)
+	}
+}
+
+func TestAdjustConfidenceClampsAtOne(t *testing.T) {
+	kg := newTestKG(t)
+	if err := kg.AddNode(&core.KGNode{ID: "fix:x", Label: "x", Type: core.KGNodeFix, Confidence: 0.9}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	newConf, ok := kg.AdjustConfidence("fix:x", 0.5, 0.3)
+	if !ok {
+		t.Fatal("expected the node to be found")
+	}
+	if newConf != 1.0 {
+		t.Fatalf("newConf = %v, want ceiling 1.0", newConf)
+	}
+}
+
+func TestAdjustConfidenceUnknownNodeIsNoop(t *testing.T) {
+	kg := newTestKG(t)
+	if _, ok := kg.AdjustConfidence("fix:does-not-exist", -0.15, 0.3); ok {
+		t.Fatal("expected AdjustConfidence on an unknown node to report not-found")
+	}
+}

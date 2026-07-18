@@ -29,6 +29,12 @@ type System struct {
 	stm    []core.Message
 	stmMax int
 
+	// sessionEpoch marks the start of the current chat session. Episodic
+	// recall ignores conversation entries older than this so a "New Chat"
+	// gives a clean conversational slate without deleting long-term memory.
+	// Bumped by StartNewSession (wired to /api/reset and CLI /new).
+	sessionEpoch time.Time
+
 	// Episodic Memory — past task executions
 	episodic       []core.EpisodicEntry
 	episodicPath   string
@@ -177,6 +183,13 @@ func (s *System) SetEmbedder(client core.LLMClient) {
 	}
 }
 
+// embeddingTimeout bounds a single embedding call. GetEmbedding sits on hot
+// paths (every HybridRetriever.Recall embeds the query; every episodic/
+// semantic write embeds the entry) and the underlying llm.Client's HTTP
+// timeout is minutes-long — a wedged local server must degrade recall to the
+// keyword path quickly, not stall every request.
+const embeddingTimeout = 5 * time.Second
+
 // GetEmbedding generates a vector embedding using the registered embedder.
 func (s *System) GetEmbedding(text string) ([]float32, error) {
 	s.mu.RLock()
@@ -186,8 +199,9 @@ func (s *System) GetEmbedding(text string) ([]float32, error) {
 	if client == nil {
 		return nil, fmt.Errorf("no embedder configured")
 	}
-	// We use context.Background() since this is internal to memory ops.
-	return client.CreateEmbedding(context.Background(), text)
+	ctx, cancel := context.WithTimeout(context.Background(), embeddingTimeout)
+	defer cancel()
+	return client.CreateEmbedding(ctx, text)
 }
 
 // ============================================================================
@@ -219,6 +233,27 @@ func (s *System) STMClear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stm = s.stm[:0]
+}
+
+// StartNewSession begins a fresh chat session: it clears short-term memory and
+// advances the session epoch so episodic recall stops surfacing prior-session
+// conversations. Durable semantic/KG/procedural memory is deliberately kept —
+// this is a conversational reset, not a memory wipe. Wired to /api/reset and
+// the CLI /new command.
+func (s *System) StartNewSession() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stm = s.stm[:0]
+	s.sessionEpoch = time.Now()
+}
+
+// SessionEpoch returns the start time of the current chat session (zero if a
+// fresh session was never started). Recall uses it to exclude conversation
+// entries from before the current session.
+func (s *System) SessionEpoch() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sessionEpoch
 }
 
 // STMSetMax adjusts the STM window size.

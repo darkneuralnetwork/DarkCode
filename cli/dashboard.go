@@ -340,10 +340,35 @@ func eventMessage(e core.UIEvent) string {
 	case core.EventConsensus:
 		return fmt.Sprintf("%v", e.Content)
 	case core.EventTokenUsage:
+		if u, ok := e.Content.(core.TokenUsageStats); ok {
+			return formatTokenUsage(u)
+		}
 		return fmt.Sprintf("%v", e.Content)
 	default:
 		return fmt.Sprintf("%v", e.Content)
 	}
+}
+
+// formatTokenUsage renders a token_usage event as a compact, human-readable
+// line. The previous "%v" dumped the raw struct — e.g.
+// "{  428 0 428 0 0 true 428 0 1}" — which is the noise the user reported.
+func formatTokenUsage(u core.TokenUsageStats) string {
+	model := u.Model
+	if model == "" {
+		model = "model"
+	}
+	msg := fmt.Sprintf("%s  +%d tok (in %d / out %d)", model, u.TotalTokens, u.PromptTokens, u.CompletionTokens)
+	if u.Cost > 0 {
+		msg += fmt.Sprintf("  $%.4f", u.Cost)
+	}
+	if u.LatencyMs > 0 {
+		msg += fmt.Sprintf("  %dms", u.LatencyMs)
+	}
+	msg += fmt.Sprintf("  · session %d tok", u.CumulativeTokens)
+	if u.CumulativeCost > 0 {
+		msg += fmt.Sprintf(" / $%.4f", u.CumulativeCost)
+	}
+	return msg
 }
 
 // ---- small numeric helpers ----

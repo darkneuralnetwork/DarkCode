@@ -376,6 +376,11 @@ func (kg *KnowledgeGraph) AddNode(node *core.KGNode) error {
 	kg.mu.Lock()
 	defer kg.mu.Unlock()
 
+	// Re-adding an existing node is an update: keep the original CreatedAt so
+	// fact age survives index re-syncs (LastSeen carries freshness instead).
+	if prev, ok := kg.nodes[node.ID]; ok && !prev.CreatedAt.IsZero() {
+		node.CreatedAt = prev.CreatedAt
+	}
 	if node.CreatedAt.IsZero() {
 		node.CreatedAt = time.Now()
 	}
@@ -392,7 +397,39 @@ func (kg *KnowledgeGraph) GetNode(id string) (*core.KGNode, bool) {
 	return n, ok
 }
 
-// AddEdge creates a relationship between two nodes.
+// AdjustConfidence changes a node's stored Confidence by delta, clamped to
+// [floor, 1.0]. Returns the new confidence and whether the node was found.
+// This is the write-back governance mechanism for episodic-sourced facts
+// (fix/decision nodes, local-first upgrade Phase D hardening): when the
+// cascade sees a fact's answer get rejected (the user immediately re-asks
+// the same question), it demotes that specific fact rather than only
+// bumping the whole rung's threshold — see orchestrator/cascade.go's
+// detectReAsk. Demotion is permanent (no auto-recovery), matching the
+// escalation-only philosophy already used for per-rung thresholds: a
+// confidently-wrong local answer costs trust, so the fix should never
+// silently regain it.
+func (kg *KnowledgeGraph) AdjustConfidence(id string, delta, floor float64) (float64, bool) {
+	kg.mu.Lock()
+	defer kg.mu.Unlock()
+	n, ok := kg.nodes[id]
+	if !ok {
+		return 0, false
+	}
+	n.Confidence += delta
+	if n.Confidence < floor {
+		n.Confidence = floor
+	}
+	if n.Confidence > 1.0 {
+		n.Confidence = 1.0
+	}
+	kg.writer.MarkDirty()
+	return n.Confidence, true
+}
+
+// AddEdge creates a relationship between two nodes. Adding an edge that
+// already exists (same pair + relation) is an upsert: the existing edge's
+// weight is bumped and its provenance refreshed, instead of appending a
+// duplicate — this keeps repeated index syncs / repeated tasks idempotent.
 func (kg *KnowledgeGraph) AddEdge(edge *core.KGEdge) error {
 	kg.mu.Lock()
 	defer kg.mu.Unlock()
@@ -407,6 +444,21 @@ func (kg *KnowledgeGraph) AddEdge(edge *core.KGEdge) error {
 	}
 	if _, ok := kg.nodes[edge.To]; !ok {
 		return fmt.Errorf("target node %s not found", edge.To)
+	}
+
+	// Upsert: an equivalent edge already recorded just gets reinforced.
+	if idx := kg.findEdgeIndexLocked(edge.From, edge.To, edge.Relation); idx >= 0 {
+		existing := kg.edges[idx]
+		if edge.Weight > 0 {
+			existing.Weight += edge.Weight
+		} else {
+			existing.Weight++
+		}
+		if edge.Provenance != "" {
+			existing.Provenance = edge.Provenance
+		}
+		kg.writer.MarkDirty()
+		return nil
 	}
 
 	kg.edges = append(kg.edges, edge)

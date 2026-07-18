@@ -32,6 +32,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -55,6 +56,36 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("API error %d: %s", e.Code, e.Body)
+}
+
+// contextOverflowMarkers are the substrings providers use to signal that the
+// prompt exceeded the model's context window. Covers OpenAI-compatible
+// endpoints (openai/anthropic-shim/gemini) and the embedded llama-server.
+var contextOverflowMarkers = []string{
+	"context_length_exceeded",
+	"context length exceeded",
+	"context window",
+	"maximum context",
+	"too many tokens",
+	"exceeds the context",
+	"n_ctx",
+	"prompt is too long",
+}
+
+// Is lets errors.Is(apiErr, core.ErrContextTooLong) succeed when the provider
+// body indicates a context overflow, so callers can recover (re-fit + retry /
+// larger-window fallback) instead of treating it as fatal. Delegates other
+// targets to the default identity comparison.
+func (e *APIError) Is(target error) bool {
+	if target == core.ErrContextTooLong {
+		body := strings.ToLower(e.Body)
+		for _, m := range contextOverflowMarkers {
+			if strings.Contains(body, m) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseRetryAfter reads the HTTP "Retry-After" response header and returns it as
@@ -337,6 +368,24 @@ func (c *RetryingClient) retryable(err error) bool {
 	// Also catch any net.Error (timeouts, temporary errors) directly.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
+	}
+	// Deterministic URL faults (empty/invalid BaseURL → "unsupported protocol
+	// scheme", missing host, or a parse error) will fail identically on every
+	// attempt. They surface as *url.Error, which ALSO satisfies net.Error — so
+	// without this guard the generic net.Error branch below would retry a
+	// permanently-broken request the full 5×. Match the stable stdlib messages
+	// for permanent URL problems; genuine network timeouts fall through and
+	// still retry. (Belt-and-braces: the client now also rejects an empty
+	// BaseURL up front with a plain non-retryable error — see Client.checkEndpoint.)
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		msg := urlErr.Err.Error()
+		if strings.Contains(msg, "unsupported protocol scheme") ||
+			strings.Contains(msg, "missing protocol scheme") ||
+			strings.Contains(msg, "no Host in request URL") ||
+			strings.Contains(msg, "nil Request.URL") {
+			return false
+		}
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {

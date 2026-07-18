@@ -130,6 +130,26 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// safeUrl vets a markdown link target before it becomes an <a href>. It blocks
+// dangerous schemes (javascript:, data:, vbscript:, file:) that would execute
+// on click — a DOM-XSS vector since chat/tool output (including fetched web
+// pages) can contain attacker-controlled markdown like [x](javascript:...).
+// The input here is already HTML-escaped by renderMarkdown's esc() pass, so we
+// only need to reason about the scheme. Anything not clearly safe becomes "#".
+function safeUrl(url) {
+  const raw = String(url == null ? "" : url).trim();
+  // Relative, anchor, and protocol-relative-safe cases: no scheme means it
+  // inherits the page origin, which is fine.
+  // Reject control chars/whitespace an attacker might use to smuggle a scheme
+  // past the check (e.g. "java\tscript:"). esc() already neutralizes quotes.
+  const stripped = raw.replace(/[\x00-\x20]+/g, "");
+  const m = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
+  if (!m) return raw; // no scheme → relative/anchor, allowed
+  const scheme = m[1].toLowerCase();
+  if (scheme === "http" || scheme === "https" || scheme === "mailto") return raw;
+  return "#";
+}
+
 function renderMarkdown(text) {
   if (!text) return "";
   let html = esc(text);
@@ -146,8 +166,10 @@ function renderMarkdown(text) {
   html = html.replace(/\*\*([^*]+)\*\*/g, `<strong>$1</strong>`);
   // Italics: *text*
   html = html.replace(/\*([^*]+)\*/g, `<em>$1</em>`);
-  // Links: [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, `<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>`);
+  // Links: [text](url) — sanitize the href scheme so a javascript:/data: URL
+  // in model or fetched-page output cannot execute on click (DOM-XSS guard).
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label, url) =>
+    `<a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
   // Line breaks
   html = html.replace(/\n/g, "<br>");
   return html;

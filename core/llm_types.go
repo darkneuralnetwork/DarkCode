@@ -55,6 +55,28 @@ type ResponseUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// PromptTokensDetails carries the provider's breakdown of the prompt
+	// tokens — notably how many were served from the prefix cache. OpenAI and
+	// the Anthropic/Gemini OpenAI-compatible endpoints all report cached
+	// tokens here. Absent (nil) when the provider doesn't report caching.
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// PromptTokensDetails is the provider's prompt-token breakdown; CachedTokens
+// are the (much cheaper) tokens read from the prefix cache instead of being
+// re-processed. Making them visible is what lets the cost meter and governor
+// stop charging full input price for a cached prefix.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
+}
+
+// CachedPromptTokens returns the cached prompt-token count (0 when the
+// provider didn't report caching), so callers don't have to nil-check.
+func (u ResponseUsage) CachedPromptTokens() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
 }
 
 // StreamEvent represents a single SSE event from the streaming API.

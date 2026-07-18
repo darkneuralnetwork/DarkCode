@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/darkcode/capability"
+	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ui"
 )
@@ -22,6 +24,13 @@ type RegisteredModel struct {
 	Tier      core.ModelTier
 	Role      string // consensus role: critic, skeptic, knowledge_booster, ...
 	IsPrimary bool
+
+	// DisabledUntil temporarily takes this model out of routing/consensus
+	// selection when set to a future time — zero value means enabled.
+	// Lazy expiry: no background timer is needed, the model becomes
+	// selectable again the moment time.Now() passes DisabledUntil (see
+	// isModelDisabledLocked). See DisableModel/EnableModel.
+	DisabledUntil time.Time
 }
 
 // Router is Layer 2 — the multi-model routing system.
@@ -52,8 +61,32 @@ type Router struct {
 	// cloud models are registered) so free-tier models with strict RPM limits
 	// don't get hammered in parallel and trip 429s.
 	sequentialConsensus bool
-	
+
 	enableLocalOffloading bool
+
+	// forceLocal pins routing to the local model family (LocalMode "force"):
+	// selectBestAvailable considers ONLY local tiers and returns an empty
+	// tier (→ "no model available" error) when none is registered, so a
+	// force-local request fails loudly instead of silently using a cloud
+	// provider. Consensus fan-out is likewise restricted to local models.
+	// Set from config by the kernel/wireup; see SetForceLocal.
+	forceLocal bool
+}
+
+// localTiers is the local model family, best (largest) first. Shared by the
+// force-local selection path and the prefer-local advisor path.
+var localTiers = []core.ModelTier{
+	core.ModelTierLocal, core.ModelTierMediumLocal, core.ModelTierTinyLocal,
+}
+
+// isLocalTier reports whether t is one of the local model tiers.
+func isLocalTier(t core.ModelTier) bool {
+	for _, lt := range localTiers {
+		if t == lt {
+			return true
+		}
+	}
+	return false
 }
 
 // NewRouter creates a model router with the given model configurations.
@@ -85,6 +118,24 @@ func (r *Router) SetEnableLocalOffloading(enabled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.enableLocalOffloading = enabled
+}
+
+// SetForceLocal pins (or unpins) routing to the local model family. When
+// enabled, no routing decision may select a cloud tier — see the forceLocal
+// field and selectBestAvailable. Safe to call at runtime (e.g. from the
+// /local force command or the GUI toggle) so the change takes effect on the
+// next request without a restart.
+func (r *Router) SetForceLocal(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.forceLocal = enabled
+}
+
+// ForceLocal reports whether routing is currently pinned to local models.
+func (r *Router) ForceLocal() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.forceLocal
 }
 
 // RegisterModel associates a model tier with a client and model name. It
@@ -136,6 +187,58 @@ func (r *Router) SetModelRole(name, role string) {
 	}
 }
 
+// DisableModel temporarily takes the named model out of routing/consensus
+// selection until the given time (local-first upgrade §6c). Route/
+// selectBestAvailable route around it (falling through to the next
+// available tier) and Consensus excludes it from the contributor fan-out.
+// A no-op if no model with that name is registered.
+func (r *Router) DisableModel(name string, until time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.allModels {
+		if r.allModels[i].Name == name {
+			r.allModels[i].DisabledUntil = until
+			return
+		}
+	}
+}
+
+// EnableModel clears a temporary disable, making the model immediately
+// selectable again. A no-op if the model isn't registered or wasn't
+// disabled. Also happens automatically (lazy expiry, no call needed) once
+// the DisableModel duration elapses — this is only for reversing it early.
+func (r *Router) EnableModel(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.allModels {
+		if r.allModels[i].Name == name {
+			r.allModels[i].DisabledUntil = time.Time{}
+			return
+		}
+	}
+}
+
+// isModelDisabledLocked reports whether the named model is currently
+// temporarily disabled. Must be called with r.mu held (a read lock
+// suffices). Lazy expiry: a past DisabledUntil means the model is enabled
+// again, no separate re-enable step required.
+func (r *Router) isModelDisabledLocked(name string) bool {
+	for _, m := range r.allModels {
+		if m.Name == name {
+			return !m.DisabledUntil.IsZero() && time.Now().Before(m.DisabledUntil)
+		}
+	}
+	return false
+}
+
+// IsModelDisabled is the exported, lock-safe form of isModelDisabledLocked,
+// for callers (CLI/GUI status displays) outside the router package.
+func (r *Router) IsModelDisabled(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.isModelDisabledLocked(name)
+}
+
 // AllModels returns a snapshot of all registered models.
 func (r *Router) AllModels() []RegisteredModel {
 	r.mu.RLock()
@@ -181,6 +284,20 @@ func (r *Router) HasModel(tier core.ModelTier) bool {
 	defer r.mu.RUnlock()
 	_, ok := r.clients[tier]
 	return ok
+}
+
+// HasLocalModel reports whether any local-tier model is currently registered.
+// Used by force-local orchestration to decide whether the embedded model
+// still needs to be brought up.
+func (r *Router) HasLocalModel() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, t := range localTiers {
+		if _, ok := r.clients[t]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Route selects the appropriate model for a task and returns the client + model name.
@@ -233,9 +350,16 @@ func (r *Router) Route(tier core.ModelTier, complexity int, taskDesc string) (co
 	r.mu.RLock()
 	client := r.clients[selectedTier]
 	modelName := r.models[selectedTier]
+	forceLocal := r.forceLocal
 	r.mu.RUnlock()
 
 	if client == nil {
+		if forceLocal {
+			// Force-local hard guarantee: never silently fall back to a cloud
+			// provider. Say so explicitly so the user knows local mode is
+			// active and what to do.
+			return nil, "", fmt.Errorf("force-local mode is active but no local model is available — start/enable the local LLM (or run '/local off' to allow cloud models)")
+		}
 		return nil, "", fmt.Errorf("no model available for tier %s", selectedTier)
 	}
 
@@ -265,16 +389,45 @@ func (r *Router) selectBestAvailable(preferred core.ModelTier) core.ModelTier {
 	// solely at medium_local/tiny_local was never preferred and could only be
 	// reached via the exact-tier path — which the fallback hierarchy also
 	// omitted).
+	// tierAvailable reports whether tier has a registered client that isn't
+	// temporarily disabled (local-first upgrade §6c). r.models[tier] holds
+	// the name of whichever model currently occupies that tier slot — a
+	// disabled model's tier is skipped exactly like an unregistered one, so
+	// selection falls through to the next tier in the hierarchy rather than
+	// erroring.
+	tierAvailable := func(t core.ModelTier) bool {
+		if _, ok := r.clients[t]; !ok {
+			return false
+		}
+		return !r.isModelDisabledLocked(r.models[t])
+	}
+
+	// Force-local: routing is pinned to the local model family. Consider ONLY
+	// local tiers and NEVER fall through to the cloud fallback hierarchy
+	// below — when no local model is registered, return an empty tier so
+	// Route()'s nil-client check yields a clear "no model available" error
+	// instead of silently serving a remote model. This is the hard guarantee
+	// behind LocalMode "force"; it overrides the preferred tier entirely
+	// (even a reasoning/critic request stays local).
+	if r.forceLocal {
+		for _, t := range localTiers {
+			if tierAvailable(t) {
+				return t
+			}
+		}
+		return core.ModelTier("")
+	}
+
 	if r.advisor != nil && r.advisor.PreferLocal() && preferred != core.ModelTierReasoning && preferred != core.ModelTierCritic {
-		for _, t := range []core.ModelTier{core.ModelTierLocal, core.ModelTierMediumLocal, core.ModelTierTinyLocal} {
-			if _, ok := r.clients[t]; ok {
+		for _, t := range localTiers {
+			if tierAvailable(t) {
 				return t
 			}
 		}
 	}
 
 	// Try preferred tier
-	if _, ok := r.clients[preferred]; ok {
+	if tierAvailable(preferred) {
 		return preferred
 	}
 
@@ -292,12 +445,22 @@ func (r *Router) selectBestAvailable(preferred core.ModelTier) core.ModelTier {
 	}
 
 	for _, tier := range fallbackOrder {
-		if _, ok := r.clients[tier]; ok {
+		if tierAvailable(tier) {
 			return tier
 		}
 	}
 
-	return preferred // will cause error if nothing registered
+	// Nothing available. If preferred is registered but every check above
+	// rejected it, that can only mean it's temporarily disabled (§6c) — in
+	// that case, deliberately return an empty (unregistered) tier so
+	// Route()'s nil-client check produces a clear "no model available"
+	// error instead of silently falling back to serving the disabled
+	// model. If preferred was never registered at all, return it unchanged
+	// (the original behavior — same clear error, different cause).
+	if _, ok := r.clients[preferred]; ok {
+		return core.ModelTier("")
+	}
+	return preferred
 }
 
 // Consensus runs all registered non-primary models in PARALLEL, each
@@ -313,6 +476,7 @@ func (r *Router) selectBestAvailable(preferred core.ModelTier) core.ModelTier {
 func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal string) (*core.ConsensusResult, error) {
 	r.mu.RLock()
 	mode := r.mode
+	forceLocal := r.forceLocal
 	models := make([]RegisteredModel, len(r.allModels))
 	copy(models, r.allModels)
 	r.mu.RUnlock()
@@ -321,10 +485,36 @@ func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal st
 		return nil, fmt.Errorf("not in consensus mode")
 	}
 
+	// Force-local: restrict the consensus fan-out to local models so no cloud
+	// provider is ever consulted while local mode is pinned. If that leaves
+	// no models, fail loudly rather than silently widening back to cloud.
+	if forceLocal {
+		localOnly := models[:0:0]
+		for _, m := range models {
+			if isLocalTier(m.Tier) {
+				localOnly = append(localOnly, m)
+			}
+		}
+		if len(localOnly) == 0 {
+			return nil, fmt.Errorf("force-local mode is active but no local model is registered for consensus — start/enable the local LLM (or run '/local off' to allow cloud models)")
+		}
+		models = localOnly
+	}
+
+	consensusStart := time.Now()
+
 	// Identify the primary model and the contributing (non-primary) models.
+	// Temporarily disabled models (local-first upgrade §6c) are excluded
+	// from the contributor fan-out — a disabled model's role simply
+	// doesn't participate in this consensus round, same as if it had never
+	// been registered.
+	now := time.Now()
 	var primary *RegisteredModel
 	var others []RegisteredModel
 	for i := range models {
+		if !models[i].DisabledUntil.IsZero() && now.Before(models[i].DisabledUntil) {
+			continue
+		}
 		if models[i].IsPrimary {
 			primary = &models[i]
 		} else {
@@ -523,11 +713,17 @@ func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal st
 	}
 
 	if r.emitter != nil {
+		strategy := "parallel"
+		if r.sequentialConsensus {
+			strategy = "sequential"
+		}
 		r.emitter.EmitConsensus(map[string]interface{}{
 			"message":     fmt.Sprintf("%d models fanned out, primary synthesized, conflict=%v", len(others), result.Conflict),
 			"model_count": len(others),
 			"conflict":    result.Conflict,
 			"primary":     primary.Name,
+			"strategy":    strategy,
+			"elapsed_ms":  time.Since(consensusStart).Milliseconds(),
 		}, result.Conflict)
 	}
 
@@ -563,6 +759,11 @@ func (r *Router) callModel(ctx context.Context, client core.LLMClient, model str
 		Content: systemPrompt,
 	})
 	msgs = append(msgs, messages...)
+
+	// Hard context-fit guarantee before dispatch (Part 3 contract): fit to
+	// this consensus contributor's own effective window, so a persona model
+	// on a smaller (e.g. local) tier never overflows.
+	msgs = compression.FitClient(msgs, client, 0, 0)
 
 	temp := 0.3
 	maxTok := 4000

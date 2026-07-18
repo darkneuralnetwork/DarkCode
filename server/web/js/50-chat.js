@@ -63,9 +63,13 @@ async function sendChat() {
     const res = await fetch(API + "/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        query: text, 
-        project: activeProjectId || "", 
+      body: JSON.stringify({
+        query: text,
+        project: activeProjectId || "",
+        // Phase 5: send the composer's Chat/Build(+Loop) mode and the Brain
+        // selector so the server honors them instead of always auto-detecting.
+        chat_mode: $("#chat-mode-value")?.value || "",
+        brain: $("#chat-brain-value")?.value || "auto",
         attachments
       }),
     });
@@ -132,6 +136,7 @@ function appendMsg(role, text, loading, isError, isHtml = false) {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
               </button>
           </div>
+          <div class="msg-thinking-live custom-scrollbar" hidden></div>
           <div class="inline-exec-timeline custom-scrollbar msg-exec-live" hidden></div>
       `;
       // Wire the stop button via addEventListener (F4) instead of an inline
@@ -209,8 +214,15 @@ function finalizeAssistantMessage(msgEl, output, isError, isHtml) {
   const stopBtn = msgEl.querySelector(".stop-btn");
   if (stopBtn) stopBtn.remove();
 
-  // Swap the loading text for the final output.
+  // Capture the live trace nodes BEFORE swapping textEl.innerHTML below. They
+  // live *inside* textEl during the run, so the innerHTML swap detaches them —
+  // holding a JS reference here keeps the nodes (and their captured content)
+  // alive so we can fold them into the collapsible panels afterwards.
   const textEl = msgEl.querySelector(".msg-text");
+  const liveTimeline = textEl ? textEl.querySelector(".inline-exec-timeline") : null;
+  const thinkingLive = textEl ? textEl.querySelector(".msg-thinking-live") : null;
+
+  // Swap the loading text for the final output.
   if (textEl) {
       if (isError) {
           msgEl.classList.add("error");
@@ -224,39 +236,60 @@ function finalizeAssistantMessage(msgEl, output, isError, isHtml) {
   }
   msgEl.classList.remove("loading");
 
-  // Convert the live .inline-exec-timeline into a collapsible
-  // .msg-exec-details (collapsed by default after completion). If the
-  // timeline has no content, remove it entirely.
-  const liveTimeline = msgEl.querySelector(".inline-exec-timeline");
+  // Auto-hide the live trace panels now that the final answer is ready, folding
+  // each into a collapsed, re-expandable panel. Two panels sit side by side:
+  //   • "Execution Details" — the orchestration event trace (plan/route/tools/…).
+  //   • "💭 Thinking" — the live LLM token stream captured during the run (what
+  //     the model was composing). Both were shown live to keep the user engaged;
+  //     here they collapse so only the clean final answer remains, and the user
+  //     can click either chip to see it in full again.
+  const panels = []; // { label, count|null, content }
   if (liveTimeline) {
-      const hasContent = liveTimeline.children.length > 0;
-      if (!hasContent) {
+      if (liveTimeline.children.length === 0) {
           liveTimeline.remove();
       } else {
           liveTimeline.classList.remove("msg-exec-live");
           liveTimeline.hidden = false;
-          const wrap = document.createElement("div");
-          wrap.className = "msg-exec-details";
-          const toggle = document.createElement("div");
+          panels.push({ label: "Execution Details", count: liveTimeline.children.length, content: liveTimeline });
+      }
+  }
+  if (thinkingLive) {
+      if ((thinkingLive.textContent || "").trim() === "") {
+          thinkingLive.remove();
+      } else {
+          thinkingLive.hidden = false;
+          panels.push({ label: "💭 Thinking", count: null, content: thinkingLive });
+      }
+  }
+
+  if (panels.length && textEl && textEl.parentElement) {
+      const wrap = document.createElement("div");
+      wrap.className = "msg-exec-details";
+      const togglesRow = document.createElement("div");
+      togglesRow.className = "msg-trace-toggles";
+      const bodies = [];
+      panels.forEach((p) => {
+          const toggle = document.createElement("button");
+          toggle.type = "button";
           toggle.className = "msg-exec-toggle";
-          toggle.innerHTML = '<span class="msg-exec-chevron">▶</span> Execution Details <span class="msg-exec-count">(' + liveTimeline.children.length + ')</span>';
+          const cnt = p.count != null ? ' <span class="msg-exec-count">(' + p.count + ')</span>' : "";
+          toggle.innerHTML = '<span class="msg-exec-chevron">▶</span> ' + p.label + cnt;
           const bodyDiv = document.createElement("div");
           bodyDiv.className = "msg-exec-body";
           bodyDiv.style.display = "none";
-          bodyDiv.appendChild(liveTimeline);
+          bodyDiv.appendChild(p.content);
           toggle.addEventListener("click", () => {
               const open = bodyDiv.style.display !== "none";
               bodyDiv.style.display = open ? "none" : "block";
               const ch = toggle.querySelector(".msg-exec-chevron");
               if (ch) ch.textContent = open ? "▶" : "▼";
           });
-          wrap.appendChild(toggle);
-          wrap.appendChild(bodyDiv);
-          // Append the collapsible wrapper where the timeline was.
-          if (textEl && textEl.parentElement) {
-              textEl.parentElement.appendChild(wrap);
-          }
-      }
+          togglesRow.appendChild(toggle);
+          bodies.push(bodyDiv);
+      });
+      wrap.appendChild(togglesRow);
+      bodies.forEach((b) => wrap.appendChild(b));
+      textEl.parentElement.appendChild(wrap);
   }
 
   // Scroll the final message into view.

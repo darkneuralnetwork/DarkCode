@@ -32,7 +32,9 @@ import (
 	"github.com/darkcode/cli/tui"
 	"github.com/darkcode/config"
 	provpkg "github.com/darkcode/provider"
+	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/core"
+	"github.com/darkcode/ingest"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
@@ -114,7 +116,7 @@ func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.Sys
 		HistoryFile:     filepath.Join(os.TempDir(), "darkcode_history"),
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
-		AutoComplete:    buildCompleter(),
+		AutoComplete:    c.buildCompleter(),
 	})
 	if err == nil {
 		c.rl = rl
@@ -192,39 +194,178 @@ func (c *Console) Run() error {
 	// it exits. We re-arm per iteration.
 	ctx := context.Background()
 
+	// Non-interactive / piped stdin (no readline instance): read and submit
+	// line by line as before — there's no paste-vs-typed distinction to make,
+	// and scripted input must NOT be silently merged into one message.
+	if c.rl == nil {
+		for {
+			input, err := c.readLine()
+			if err != nil {
+				if err == readline.ErrInterrupt || err.Error() == "EOF" {
+					fmt.Println()
+					return nil
+				}
+				return err
+			}
+			done, switchGUI := c.dispatchInput(ctx, input)
+			if switchGUI {
+				return ErrSwitchToGUI
+			}
+			if done {
+				return nil
+			}
+		}
+	}
+
+	// Interactive TTY: coalesce a multi-line paste into ONE message. chzyer/
+	// readline has no bracketed-paste support, so every embedded newline in a
+	// paste returns from Readline() separately and would otherwise be submitted
+	// as a separate request. A single background goroutine is the ONLY caller of
+	// Readline() (the library is not concurrency-safe); the main loop treats a
+	// tight burst of back-to-back returns (a paste, whose lines the terminal
+	// delivers instantly) as one message, while a normally typed line — followed
+	// by an idle gap — is submitted on its own.
+	//
+	// Prompt handling: the goroutine sets the prompt right before each read, so
+	// the ">>> " prompt is shown only for a genuine first line; look-ahead reads
+	// used to detect the end of a burst use an empty prompt (no visible clutter
+	// while a response streams). The read outstanding when a burst ends carries
+	// over as the next message's first line; its prompt is restored afterwards.
+	// Tradeoff: a key typed while a response is still streaming echoes into that
+	// carried-over read (and becomes the next message) — desirable capture; only
+	// the inline echo is cosmetic.
+	type lineResult struct {
+		line string
+		err  error
+	}
+	readReq := make(chan string)      // prompt to use for the next Readline()
+	lineCh := make(chan lineResult, 1) // buffered so the final send never leaks
+	go func() {
+		for prompt := range readReq {
+			c.rl.SetPrompt(prompt)
+			line, err := c.readLine()
+			lineCh <- lineResult{line, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	defer close(readReq)
+
+	const burstIdle = 50 * time.Millisecond
+	pending := false // an outstanding look-ahead read → next message's first line
 	for {
-		input, err := c.readLine()
-		if err != nil {
-			if err == readline.ErrInterrupt || err.Error() == "EOF" {
+		if !pending {
+			readReq <- ">>> "
+		}
+		first := <-lineCh
+		pending = false
+		if first.err != nil {
+			if first.err == readline.ErrInterrupt || first.err.Error() == "EOF" {
 				fmt.Println()
 				return nil
 			}
-			return err
+			return first.err
 		}
 
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		c.history = append(c.history, input)
-		c.histIdx = len(c.history)
-
-		if strings.HasPrefix(input, "/") {
-			if input == "/gui" {
+		// Slash commands are always a single typed line and some of them
+		// return from Run() (/gui, /quit). Dispatch them IMMEDIATELY without
+		// issuing the burst-accumulation look-ahead read — otherwise that
+		// extra Readline() sits blocked in the reader goroutine when Run()
+		// returns, which (a) needed a second Enter to flush and (b) left a
+		// goroutine holding the terminal so the GUI→CLI resume couldn't read
+		// input. With no look-ahead outstanding, `defer close(readReq)` parks
+		// and cleanly exits the goroutine. A paste never starts with '/', so
+		// this doesn't affect multi-line paste handling.
+		if strings.HasPrefix(strings.TrimSpace(first.line), "/") {
+			done, switchGUI := c.dispatchInput(ctx, first.line)
+			if switchGUI {
 				return ErrSwitchToGUI
 			}
-			if c.handleSlash(input) {
+			if done {
 				return nil
 			}
 			continue
 		}
 
-		// Parse @Type:ref attachments out of the prompt (e.g. @File:./x,
-		// @Directory:./src, @URL:…, @Text:"…"). The tokens are removed from
-		// the visible query and resolved into a markdown block prepended to it.
-		query, atts := attach.ParseRefs(input)
-		c.runQuery(ctx, query, atts)
+		lines := []string{first.line}
+
+		// Accumulate paste-burst lines: issue a blank-prompt look-ahead read and
+		// wait only burstIdle. Arriving that fast means it's part of a paste;
+		// a timeout means the burst is done (that read carries over).
+		var pendingErr error
+	accumulate:
+		for {
+			readReq <- ""
+			select {
+			case r := <-lineCh:
+				if r.err != nil {
+					pendingErr = r.err
+					break accumulate
+				}
+				lines = append(lines, r.line)
+			case <-time.After(burstIdle):
+				pending = true
+				break accumulate
+			}
+		}
+
+		done, switchGUI := c.dispatchInput(ctx, strings.Join(lines, "\n"))
+		if switchGUI {
+			return ErrSwitchToGUI
+		}
+		if done {
+			return nil
+		}
+
+		if pendingErr != nil {
+			if pendingErr == readline.ErrInterrupt || pendingErr.Error() == "EOF" {
+				fmt.Println()
+				return nil
+			}
+			return pendingErr
+		}
+
+		// Restore the real prompt for the carried-over read now that any
+		// runQuery output is done, so the user sees ">>> " for their next line.
+		if pending {
+			c.rl.SetPrompt(">>> ")
+			c.rl.Refresh()
+		}
 	}
+}
+
+// dispatchInput runs one complete user message (already assembled from one or
+// more read lines) through history + slash-command dispatch or the
+// orchestrator. Returns done=true if the REPL should exit, switchGUI=true if it
+// should hand off to GUI mode.
+func (c *Console) dispatchInput(ctx context.Context, input string) (done bool, switchGUI bool) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return false, false
+	}
+	c.history = append(c.history, input)
+	c.histIdx = len(c.history)
+
+	// A slash command is only recognized when the whole message is a single
+	// line beginning with '/'. A multi-line paste is always message content,
+	// never a command.
+	if !strings.Contains(input, "\n") && strings.HasPrefix(input, "/") {
+		if input == "/gui" {
+			return false, true
+		}
+		if c.handleSlash(input) {
+			return true, false
+		}
+		return false, false
+	}
+
+	// Parse @Type:ref attachments out of the prompt (e.g. @File:./x,
+	// @Directory:./src, @URL:…, @Text:"…"). The tokens are removed from
+	// the visible query and resolved into a markdown block prepended to it.
+	query, atts := attach.ParseRefs(input)
+	c.runQuery(ctx, query, atts)
+	return false, false
 }
 
 func (c *Console) readLine() (string, error) {
@@ -367,8 +508,15 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// write-only display artifact generated after execution). Cleared after
 	// Execute so a subsequent non-project request isn't contaminated.
 	if c.activeProject != "" && c.projects != nil {
-		plan, _ := c.projects.GetPlan(c.activeProject)
 		workflow, _ := c.projects.GetWorkflow(c.activeProject)
+		// Phase 4 — brief-first project memory: prefer the compact, auto-updated
+		// project brief over the full ~8K implementation plan so resuming a
+		// project stays cheap and needs no re-feeding. Fall back to the full plan
+		// only when no brief has been generated yet (new project).
+		plan, _ := c.projects.GetContext(c.activeProject)
+		if strings.TrimSpace(plan) == "" {
+			plan, _ = c.projects.GetPlan(c.activeProject)
+		}
 		c.kernel.SetProjectContext(plan, workflow)
 		defer c.kernel.ClearProjectContext()
 	}
@@ -399,7 +547,7 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 		loopOverride = "on"
 	}
 	toolsOverride := "on"
-	restoreOverrides := c.kernel.ApplyRequestOverrides("", "", loopOverride, toolsOverride)
+	restoreOverrides := c.kernel.ApplyRequestOverrides("", "", loopOverride, toolsOverride, "")
 	defer restoreOverrides()
 
 	result, err := c.kernel.Execute(reqCtx, resolvedQuery)
@@ -570,32 +718,47 @@ func (c *Console) requestApproval(req permission.ApprovalRequest) permission.Ver
 		paint(cRed, "[3]"),
 		paint(cGray, "(default: 1)"))
 	fmt.Printf("%s %s\n", paint(cGray, "│"), paint(cGrayLt, "tip: append feedback, e.g. \"3 use /tmp instead\""))
-	fmt.Print(paint(cGray, "│ ") + paint(cOrange, "> "))
 
-	var input string
 	if c.rl != nil {
 		c.rl.SetPrompt("")
 		defer c.rl.SetPrompt(">>> ")
-		var err error
-		input, err = c.rl.Readline()
-		if err != nil {
-			return permission.Verdict{Decision: permission.DecisionDeny, Feedback: "interrupted"}
-		}
 	}
-	fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
 
-	// Split the choice token from any trailing free-form feedback.
-	first, rest := splitFirstWord(input)
-	first = strings.ToLower(strings.TrimSpace(first))
-	feedback := strings.TrimSpace(rest)
+	// Re-prompt on any unrecognized input instead of silently granting
+	// AllowOnce — the user must actively decide (1/2/3, or blank for the
+	// visibly-advertised default of 1). Only a real interrupt (Ctrl+C/EOF)
+	// or an explicit deny answers on the user's behalf.
+	for {
+		fmt.Print(paint(cGray, "│ ") + paint(cOrange, "> "))
 
-	switch first {
-	case "2", "s", "session", "a":
-		return permission.Verdict{Decision: permission.DecisionAllowSession, Feedback: feedback}
-	case "3", "n", "no", "deny", "d":
-		return permission.Verdict{Decision: permission.DecisionDeny, Feedback: feedback}
-	default:
-		return permission.Verdict{Decision: permission.DecisionAllowOnce, Feedback: feedback}
+		var input string
+		if c.rl != nil {
+			var err error
+			input, err = c.rl.Readline()
+			if err != nil {
+				fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+				return permission.Verdict{Decision: permission.DecisionDeny, Feedback: "interrupted"}
+			}
+		}
+
+		// Split the choice token from any trailing free-form feedback.
+		first, rest := splitFirstWord(input)
+		first = strings.ToLower(strings.TrimSpace(first))
+		feedback := strings.TrimSpace(rest)
+
+		switch first {
+		case "1", "y", "yes", "o", "once", "":
+			fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+			return permission.Verdict{Decision: permission.DecisionAllowOnce, Feedback: feedback}
+		case "2", "s", "session", "a":
+			fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+			return permission.Verdict{Decision: permission.DecisionAllowSession, Feedback: feedback}
+		case "3", "n", "no", "deny", "d":
+			fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+			return permission.Verdict{Decision: permission.DecisionDeny, Feedback: feedback}
+		default:
+			fmt.Printf("%s %s\n", paint(cGray, "│"), paint(cRed, "invalid choice — enter 1, 2, or 3 (blank = 1)"))
+		}
 	}
 }
 
@@ -771,6 +934,27 @@ func (c *Console) handleSlash(input string) bool {
 	case "/memory":
 		fmt.Println(c.mem.Summary())
 
+	case "/ingest":
+		src := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), cmd))
+		if src == "" {
+			fmt.Println(paint(cYellow, "usage: /ingest <file | directory | http(s) url | text>"))
+			break
+		}
+		fmt.Println(paint(cGray, "  ingesting…"))
+		st, err := ingest.New(c.mem, c.mem.KG()).Ingest(context.Background(), src)
+		if err != nil {
+			fmt.Println(paint(cRed, "  ✗ "+err.Error()))
+			break
+		}
+		msg := fmt.Sprintf("  ✓ ingested %d source(s) → %d memory chunk(s)", st.Sources, st.Chunks)
+		if st.KGNodes > 0 {
+			msg += fmt.Sprintf(", %d code nodes", st.KGNodes)
+		}
+		if st.Skipped > 0 {
+			msg += fmt.Sprintf(", %d skipped", st.Skipped)
+		}
+		fmt.Println(paint(cGreen, msg))
+
 	case "/skills":
 		c.printSkills()
 
@@ -785,7 +969,10 @@ func (c *Console) handleSlash(input string) bool {
 		}
 
 	case "/new", "/reset":
-		c.mem.STMClear()
+		// StartNewSession clears STM and advances the session epoch so prior
+		// conversations stop resurfacing via episodic recall (durable memory
+		// is kept). Matches the GUI "New Chat" behavior.
+		c.mem.StartNewSession()
 		if c.gate != nil {
 			c.gate.ResetSession()
 		}
@@ -795,7 +982,7 @@ func (c *Console) handleSlash(input string) bool {
 		if c.recorder != nil {
 			c.recorder.Clear()
 		}
-		fmt.Println(paint(cGreen, "✓") + paint(cGray, " short-term memory cleared — fresh session."))
+		fmt.Println(paint(cGreen, "✓") + paint(cGray, " fresh session started — prior chat context cleared."))
 
 	case "/config":
 		c.printConfig()
@@ -859,18 +1046,36 @@ func (c *Console) handleSlash(input string) bool {
 		if len(parts) > 1 {
 			c.setLocal(parts[1:])
 		} else {
+			resolved := c.cfg.ResolvedLocalMode()
 			status := paint(cRed, "off")
-			if c.cfg.EnableLocalLLM {
-				status = paint(cGreen, "on")
+			switch resolved {
+			case "force":
+				status = paint(cGreen+clrBold, "force")
+			case "off":
+				status = paint(cRed, "off")
+			default:
+				if c.cfg.EnableLocalLLM {
+					status = paint(cGreen, "on")
+				}
 			}
 			offloadStatus := paint(cRed, "off")
 			if c.cfg.EnableLocalOffloading {
 				offloadStatus = paint(cGreen, "on")
 			}
-			fmt.Printf("%s %s  %s %s\n", 
-				paint(cGray, "local llm auto-load:"), status,
+			fmt.Printf("%s %s (%s)  %s %s\n",
+				paint(cGray, "local llm:"), status,
+				resolved,
 				paint(cGray, "offloading:"), offloadStatus,
 			)
+			if resolved == "force" {
+				fmt.Printf("  %s\n", paint(cGray, "routing pinned to local — cloud providers will not be used"))
+			}
+			// When the resource governor refused local, say WHY — "local is
+			// mysteriously off" is exactly the silent degradation the
+			// never-force design forbids.
+			if reason := embedded.Default().LoadRefusal(); reason != "" {
+				fmt.Printf("%s %s\n", paint(cYellow, "⚠"), paint(cGray, reason))
+			}
 		}
 
 	case "/safety":
@@ -1495,23 +1700,52 @@ func (c *Console) setLocal(args []string) {
 
 	arg := strings.ToLower(args[0])
 	switch arg {
+	case "force":
+		// Force-local: pin routing to the local model — no cloud fallback —
+		// and auto-start it now.
+		c.cfg.EnableLocalLLM = true
+		c.cfg.LocalMode = "force"
 	case "on", "true", "enable", "1":
 		c.cfg.EnableLocalLLM = true
+		c.cfg.LocalMode = "on"
+	case "auto":
+		c.cfg.EnableLocalLLM = true
+		c.cfg.LocalMode = "auto"
 	case "off", "false", "disable", "0":
 		c.cfg.EnableLocalLLM = false
+		c.cfg.LocalMode = "off"
 	default:
-		fmt.Printf("%s invalid state %s (on | off)\n", paint(cRed, "✗"), arg)
+		fmt.Printf("%s invalid state %s (force | on | auto | off)\n", paint(cRed, "✗"), arg)
 		return
 	}
 	if err := c.cfg.Save(); err != nil {
 		fmt.Printf("%s %s\n", paint(cRed, "✗"), err)
 		return
 	}
-	state := paint(cRed, "off")
-	if c.cfg.EnableLocalLLM {
-		state = paint(cGreen, "on (requires restart)")
+
+	// Apply the preference immediately (no restart): pin/unpin force-local
+	// routing and, when local is wanted but not yet up, start the embedded
+	// model on demand. In force mode a startup failure is a hard error — the
+	// never-silent-fallback guarantee — so surface it and warn the user their
+	// requests will fail until local is available, rather than quietly using
+	// a cloud model.
+	if c.kernel != nil {
+		if err := c.kernel.ApplyLocalPreference(context.Background(), c.cfg); err != nil {
+			fmt.Printf("%s %s\n", paint(cYellow, "⚠"), err)
+		}
 	}
-	fmt.Printf("%s local llm auto-load → %s\n", paint(cGreen, "✓"), state)
+
+	switch c.cfg.ResolvedLocalMode() {
+	case "force":
+		// ApplyLocalPreference always pins routing first, so force is active
+		// here regardless of whether the model finished loading (any load
+		// failure was already surfaced as the ⚠ diagnostic above).
+		fmt.Printf("%s local llm → %s (%s)\n", paint(cGreen, "✓"), paint(cGreen+clrBold, "force"), paint(cGray, "cloud fallback disabled"))
+	case "off":
+		fmt.Printf("%s local llm auto-load → %s\n", paint(cGreen, "✓"), paint(cRed, "off"))
+	default:
+		fmt.Printf("%s local llm auto-load → %s (%s)\n", paint(cGreen, "✓"), paint(cGreen, "on"), c.cfg.ResolvedLocalMode())
+	}
 }
 
 func (c *Console) setSafety(level string) {
@@ -1542,27 +1776,127 @@ func (c *Console) handleModels(args []string) {
 		c.modelRemove(args[1:])
 	case "primary", "use":
 		c.modelPrimary(args[1:])
+	case "test", "ping":
+		c.modelTest(args[1:])
+	case "disable":
+		c.modelDisable(args[1:])
+	case "enable":
+		c.modelEnable(args[1:])
 	default:
-		fmt.Printf("%s usage: /models [add|remove|primary]\n", paint(cRed, "✗"))
+		fmt.Printf("%s usage: /models [add|remove|primary|test|disable|enable]\n", paint(cRed, "✗"))
 	}
+}
+
+// modelDisable temporarily takes a model out of routing/consensus selection
+// (local-first upgrade §6c). Usage: /models disable <name> [duration]
+// (duration is a Go duration string like "1h", "30m"; default "1h" if
+// omitted).
+func (c *Console) modelDisable(args []string) {
+	if len(args) < 1 {
+		fmt.Printf("%s usage: /models disable <name> [duration] (e.g. /models disable gpt-4 1h)\n", paint(cRed, "✗"))
+		return
+	}
+	name := args[0]
+	durStr := "1h"
+	if len(args) > 1 {
+		durStr = args[1]
+	}
+	dur, err := time.ParseDuration(durStr)
+	if err != nil {
+		fmt.Printf("%s invalid duration %q: %v (try e.g. \"1h\", \"30m\")\n", paint(cRed, "✗"), durStr, err)
+		return
+	}
+	if c.kernel == nil {
+		fmt.Printf("%s no kernel available — cannot disable models\n", paint(cRed, "✗"))
+		return
+	}
+	c.kernel.DisableModel(name, time.Now().Add(dur))
+	fmt.Printf("%s %s disabled for %s\n", paint(cGreen, "✓"), paint(cWhite, name), dur)
+}
+
+// modelEnable reverses a temporary disable early. Usage: /models enable <name>
+func (c *Console) modelEnable(args []string) {
+	if len(args) < 1 {
+		fmt.Printf("%s usage: /models enable <name>\n", paint(cRed, "✗"))
+		return
+	}
+	name := args[0]
+	if c.kernel == nil {
+		fmt.Printf("%s no kernel available — cannot enable models\n", paint(cRed, "✗"))
+		return
+	}
+	c.kernel.EnableModel(name)
+	fmt.Printf("%s %s enabled\n", paint(cGreen, "✓"), paint(cWhite, name))
+}
+
+// modelTest is the explicit "test connection" action (local-first upgrade
+// §4c): unlike the auto-discovered fallback in modelAdd's fetch step, this
+// runs synchronously and reports the actual error, so a user can verify an
+// already-configured model on demand instead of only finding out a
+// connection is broken when a real chat request fails. name is a key from
+// c.cfg.Models, or empty to test the primary (c.cfg.Model).
+func (c *Console) modelTest(args []string) {
+	name := ""
+	if len(args) > 0 {
+		name = args[0]
+	}
+
+	var mc struct {
+		provider, baseURL, apiKey, model string
+	}
+	if name == "" || name == c.cfg.Model {
+		mc.provider, mc.baseURL, mc.apiKey, mc.model = c.cfg.Provider, c.cfg.BaseURL, c.cfg.APIKey, c.cfg.Model
+		name = c.cfg.Model
+	} else if m, ok := c.cfg.Models[name]; ok {
+		mc.provider, mc.baseURL, mc.apiKey, mc.model = m.Provider, m.BaseURL, m.APIKey, m.Model
+	} else {
+		fmt.Printf("%s no configured model named %q (see /models for the list)\n", paint(cRed, "✗"), name)
+		return
+	}
+	if mc.baseURL == "" {
+		fmt.Printf("%s %q has no base URL configured (local/embedded models aren't tested this way — see /local)\n", paint(cRed, "✗"), name)
+		return
+	}
+
+	client := llm.NewClient(mc.baseURL, mc.apiKey, mc.model)
+	client.SetProvider(mc.provider)
+
+	fmt.Printf("%s testing connection to %s...\n", paint(cGray, "›"), paint(cWhite, name))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		fmt.Printf("%s %s: %v\n", paint(cRed, "✗ connection failed"), name, err)
+		return
+	}
+	fmt.Printf("%s %s is reachable\n", paint(cGreen, "✓"), name)
 }
 
 func (c *Console) listModels() {
 	total := len(c.cfg.Models) + 1 // +1 for the primary
 	fmt.Printf("%s %s\n", paint(cAmber+clrBold, "REGISTERED MODELS"), paint(cGray, "("+fmtNum(total)+")"))
+	primaryLabel := paint(cOrange, "primary")
+	if c.kernel != nil && c.kernel.IsModelDisabled(c.cfg.Model) {
+		primaryLabel = paint(cOrange, "primary") + paint(cRed, "  ⊘ disabled")
+	}
 	fmt.Printf("  %s  %s  %s  %s  %s\n",
 		paint(cOrange, "★"),
 		paint(cWhite, padRight(c.cfg.Model, 28)),
 		paint(cBlue, padRight(config.ResolveTier(c.cfg.Provider, c.cfg.Model), 10)),
 		paint(cGray, padRight(c.cfg.Provider, 14)),
-		paint(cOrange, "primary"))
+		primaryLabel)
 	for k, m := range c.cfg.Models {
 		tier := m.Tier
 		if tier == "" {
 			tier = config.ResolveTier(m.Provider, m.Model)
 		}
+		marker := "•"
+		markerColor := cGray
+		if c.kernel != nil && c.kernel.IsModelDisabled(m.Model) {
+			marker = "⊘ disabled"
+			markerColor = cRed
+		}
 		fmt.Printf("  %s  %s  %s  %s  %s\n",
-			paint(cGray, "•"),
+			paint(markerColor, marker),
 			paint(cWhite, padRight(k, 28)),
 			paint(cBlue, padRight(tier, 10)),
 			paint(cGray, padRight(m.Provider, 14)),
@@ -2170,7 +2504,28 @@ func (c *Console) printHistoryFull() {
 	}
 }
 
-func buildCompleter() *readline.PrefixCompleter {
+// completeModelNames returns every known model name — the primary
+// (c.cfg.Model) plus every key in c.cfg.Models — as dynamic completion
+// candidates for "/model <TAB>", "/models remove <TAB>", and
+// "/models primary <TAB>". readline's own prefix machinery narrows this
+// full set against whatever the user has already typed (the same mechanism
+// used for the static PcItem tree), so this doesn't need to filter by the
+// in-progress line itself.
+func (c *Console) completeModelNames(string) []string {
+	var names []string
+	if c.cfg.Model != "" {
+		names = append(names, c.cfg.Model)
+	}
+	for k := range c.cfg.Models {
+		if k != c.cfg.Model {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (c *Console) buildCompleter() *readline.PrefixCompleter {
 	return readline.NewPrefixCompleter(
 		readline.PcItem("/status"),
 		readline.PcItem("/memory"),
@@ -2192,12 +2547,17 @@ func buildCompleter() *readline.PrefixCompleter {
 			readline.PcItem("reset"),
 		),
 		readline.PcItem("/new"),
+		readline.PcItem("/ingest"),
 		readline.PcItem("/reset"),
 		readline.PcItem("/models",
 			readline.PcItem("add"),
-			readline.PcItem("remove"),
+			readline.PcItem("remove", readline.PcItemDynamic(c.completeModelNames)),
+			readline.PcItem("primary", readline.PcItemDynamic(c.completeModelNames)),
+			readline.PcItem("test", readline.PcItemDynamic(c.completeModelNames)),
+			readline.PcItem("disable", readline.PcItemDynamic(c.completeModelNames)),
+			readline.PcItem("enable", readline.PcItemDynamic(c.completeModelNames)),
 		),
-		readline.PcItem("/model"),
+		readline.PcItem("/model", readline.PcItemDynamic(c.completeModelNames)),
 		readline.PcItem("/mode",
 			readline.PcItem("single"),
 			readline.PcItem("escalation"),
@@ -2213,8 +2573,14 @@ func buildCompleter() *readline.PrefixCompleter {
 			readline.PcItem("parallel"),
 		),
 		readline.PcItem("/local",
+			readline.PcItem("force"),
 			readline.PcItem("on"),
+			readline.PcItem("auto"),
 			readline.PcItem("off"),
+			readline.PcItem("offload",
+				readline.PcItem("on"),
+				readline.PcItem("off"),
+			),
 		),
 		readline.PcItem("/safety",
 			readline.PcItem("strict"),

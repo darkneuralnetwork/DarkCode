@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -63,14 +64,61 @@ const (
 	smr = "┤"
 )
 
-// paint wraps s in a color code + reset.
-func paint(c, s string) string { return c + s + clrReset }
+// colorOK caches the once-computed color-support check (supportsColor, in
+// term_unix.go/term_windows.go). Checked once, not per call: on Windows this
+// also has the side effect of enabling VT processing on the console, which
+// only needs to happen once at startup, and repeating a syscall on every
+// single paint() call across a busy render would be wasteful.
+var (
+	colorOnce sync.Once
+	colorOK   bool
+)
+
+func colorEnabled() bool {
+	colorOnce.Do(func() { colorOK = supportsColor() })
+	return colorOK
+}
+
+// EnableTerminalColors performs the one-time terminal-capability check (and,
+// on Windows, the SetConsoleMode call that turns on ANSI interpretation) as
+// early as possible. Console mode is a process-wide setting, so calling this
+// once at the very top of main() — before the interactive console, the
+// first-run setup wizard, or any other startup message prints — fixes
+// garbled ANSI escape codes for every print in the process, not just the
+// ones that go through paint()/bold()/dim(). Safe to call multiple times
+// (idempotent via sync.Once) and safe to skip (paint() etc. still gate
+// correctly on first use if this is never called explicitly).
+func EnableTerminalColors() {
+	colorEnabled()
+}
+
+// paint wraps s in a color code + reset — unless the terminal can't render
+// ANSI (NO_COLOR, redirected output, or a legacy Windows console that
+// couldn't be switched into VT-processing mode), in which case s is
+// returned unmodified so output degrades to plain text instead of garbled
+// escape-code bytes (the Windows symptom this guards against).
+func paint(c, s string) string {
+	if !colorEnabled() {
+		return s
+	}
+	return c + s + clrReset
+}
 
 // bold returns s in bold.
-func bold(s string) string { return clrBold + s + clrReset }
+func bold(s string) string {
+	if !colorEnabled() {
+		return s
+	}
+	return clrBold + s + clrReset
+}
 
 // dim returns s in dim/grey.
-func dim(s string) string { return clrDim + s + clrReset }
+func dim(s string) string {
+	if !colorEnabled() {
+		return s
+	}
+	return clrDim + s + clrReset
+}
 
 // ---- Terminal sizing ----
 

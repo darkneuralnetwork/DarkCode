@@ -31,17 +31,23 @@ type SerializeFunc func() ([]byte, error)
 // a write after the debounce interval. Multiple MarkDirty calls within the
 // interval coalesce into a single write.
 type DebouncedWriter struct {
+	// 64-bit atomic counters. These MUST stay as the first fields of the
+	// struct: on 32-bit platforms (windows/386, arm) atomic.AddInt64 /
+	// LoadInt64 panic with "unaligned 64-bit atomic operation" unless the
+	// operand is 8-byte aligned, and Go only guarantees that alignment for
+	// the first word of a struct. This was a real crash on windows/386
+	// (memory/writer.go:124 in flush()). Do not reorder these below a field
+	// that isn't itself a multiple of 8 bytes wide.
+	writes int64 // atomic: successful writes, for observability
+	errors int64 // atomic: serialize/write errors
+
 	path      string
 	interval  time.Duration
 	serialize SerializeFunc
 
 	mu    sync.Mutex
 	timer *time.Timer
-	dirty int32 // atomic: 1 if dirty
-
-	// stats for observability
-	writes int64
-	errors int64
+	dirty int32 // atomic: 1 if dirty (int32 atomics need no special alignment)
 }
 
 // NewDebouncedWriter creates a writer that flushes at most once every interval.
