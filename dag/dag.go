@@ -34,13 +34,17 @@ func (d *DAG) AddNode(node *core.TaskNode) error {
 	if _, exists := d.nodes[node.ID]; exists {
 		return fmt.Errorf("node %s already exists", node.ID)
 	}
-	d.nodes[node.ID] = node
 
-	// Register edges from dependencies
+	// Validate every dependency exists BEFORE mutating any state — otherwise a
+	// node with a missing dependency is left half-registered on the error path.
 	for _, dep := range node.Dependencies {
 		if _, exists := d.nodes[dep]; !exists {
 			return fmt.Errorf("dependency %s not found for node %s", dep, node.ID)
 		}
+	}
+
+	d.nodes[node.ID] = node
+	for _, dep := range node.Dependencies {
 		d.edges[dep] = append(d.edges[dep], node.ID)
 	}
 
