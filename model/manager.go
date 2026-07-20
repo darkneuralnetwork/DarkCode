@@ -10,12 +10,12 @@ import (
 
 // ModelMetadata represents a model available for download.
 type ModelMetadata struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	SizeMB    int    `json:"size_mb"`
-	Checksum  string `json:"checksum"`
-	Format    string `json:"format"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	SizeMB   int    `json:"size_mb"`
+	Checksum string `json:"checksum"`
+	Format   string `json:"format"`
 }
 
 // Manager is responsible for discovering, downloading, and storing AI models.

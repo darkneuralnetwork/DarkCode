@@ -64,7 +64,7 @@ type System struct {
 	// across a session. Writes should go through ArchitectureAddDecision so
 	// they're persisted; see memory/layers.go for why this is the only
 	// surviving "Phase 9" memory tier.
-	Architecture     *ArchitectureMemory
+	Architecture       *ArchitectureMemory
 	architecturePath   string
 	architectureWriter *DebouncedWriter
 }

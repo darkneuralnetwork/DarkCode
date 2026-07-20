@@ -7,12 +7,12 @@ import (
 
 // CPUInfo represents processor capabilities.
 type CPUInfo struct {
-	Cores      int
-	Arch       string
-	HasAVX2    bool
-	HasAVX512  bool
-	HasNEON    bool // For ARM
-	ModelName  string
+	Cores     int
+	Arch      string
+	HasAVX2   bool
+	HasAVX512 bool
+	HasNEON   bool // For ARM
+	ModelName string
 }
 
 // MemoryInfo represents system RAM.
@@ -34,12 +34,12 @@ const (
 
 // GPUInfo represents graphics capabilities.
 type GPUInfo struct {
-	Vendor       GPUVendor
-	VRAMBytes    uint64
-	HasCUDA      bool
-	HasMetal     bool
-	HasVulkan    bool
-	ModelName    string
+	Vendor    GPUVendor
+	VRAMBytes uint64
+	HasCUDA   bool
+	HasMetal  bool
+	HasVulkan bool
+	ModelName string
 }
 
 // StorageInfo represents disk capabilities.

@@ -45,7 +45,7 @@ func (r *Registry) Get(id string) (Provider, bool) {
 func (r *Registry) ListAvailable(ctx context.Context) []Provider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	var available []Provider
 	for _, p := range r.providers {
 		if p.IsAvailable(ctx) {

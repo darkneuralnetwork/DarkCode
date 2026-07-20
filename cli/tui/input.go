@@ -48,7 +48,7 @@ func (m inputModel) View() string {
 	if m.password && len(displayValue) > 0 {
 		displayValue = strings.Repeat("*", len(displayValue))
 	}
-	
+
 	// Blinking cursor simulation (static for simplicity unless we add a tick, but this is fine)
 	displayValue += "█"
 

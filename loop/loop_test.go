@@ -75,7 +75,7 @@ func (f *fakeLLMClient) ChatCompletionStream(ctx context.Context, req *core.Comp
 func (f *fakeLLMClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return nil, nil
 }
-func (f *fakeLLMClient) ModelInfo() core.ModelMetadata { return core.ModelMetadata{ID: f.name} }
+func (f *fakeLLMClient) ModelInfo() core.ModelMetadata  { return core.ModelMetadata{ID: f.name} }
 func (f *fakeLLMClient) Ping(ctx context.Context) error { return nil }
 func (f *fakeLLMClient) Close() error                   { return nil }
 
@@ -126,7 +126,7 @@ func TestReActLoopCancellationMidRun(t *testing.T) {
 	client := &fakeLLMClient{
 		responses: []string{"first response", "second response", "third response"},
 		delay:     time.Second, // long enough that ctx.Done() always wins after onCall cancels
-		onCall:    cancel,       // cancel the context as soon as the first call begins
+		onCall:    cancel,      // cancel the context as soon as the first call begins
 	}
 	l := New(newTestRouter(client), tools.NewRegistry(), nil, 20)
 

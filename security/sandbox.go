@@ -12,7 +12,7 @@ import (
 type Backend string
 
 const (
-	BackendNone     Backend = "none"     // no sandbox binary available
+	BackendNone     Backend = "none" // no sandbox binary available
 	BackendBwrap    Backend = "bubblewrap"
 	BackendFirejail Backend = "firejail"
 )

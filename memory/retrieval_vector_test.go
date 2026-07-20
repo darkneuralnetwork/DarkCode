@@ -44,7 +44,7 @@ func (f *fakeEmbedder) ChatCompletion(ctx context.Context, req *core.CompletionR
 func (f *fakeEmbedder) ChatCompletionStream(ctx context.Context, req *core.CompletionRequest, cb *core.StreamCallbacks) (*core.CompletionResponse, error) {
 	return nil, context.Canceled
 }
-func (f *fakeEmbedder) ModelInfo() core.ModelMetadata { return core.ModelMetadata{ID: "fake-embed"} }
+func (f *fakeEmbedder) ModelInfo() core.ModelMetadata  { return core.ModelMetadata{ID: "fake-embed"} }
 func (f *fakeEmbedder) Ping(ctx context.Context) error { return nil }
 func (f *fakeEmbedder) Close() error                   { return nil }
 

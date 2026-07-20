@@ -271,9 +271,9 @@ func (c *RateLimitedClient) CreateEmbedding(ctx context.Context, text string) ([
 	return out, err
 }
 
-func (c *RateLimitedClient) ModelInfo() core.ModelMetadata { return c.inner.ModelInfo() }
+func (c *RateLimitedClient) ModelInfo() core.ModelMetadata  { return c.inner.ModelInfo() }
 func (c *RateLimitedClient) Ping(ctx context.Context) error { return c.inner.Ping(ctx) }
-func (c *RateLimitedClient) Close() error                  { return c.inner.Close() }
+func (c *RateLimitedClient) Close() error                   { return c.inner.Close() }
 
 // ProviderID forwards the duck-typed provider accessor so RetryingClient
 // (and the kernel's free-tier detector) still see the provider through this

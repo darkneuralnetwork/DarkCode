@@ -157,7 +157,7 @@ func (t *FileTool) ReplaceFileContent(ctx context.Context, args map[string]inter
 	path, _ := args["path"].(string)
 	oldStr, _ := args["target_content"].(string)
 	newStr, _ := args["replacement_content"].(string)
-	
+
 	if path == "" || oldStr == "" {
 		return &ToolResult{Name: "replace_file_content", Success: false, Error: "path and target_content are required"}
 	}
@@ -173,7 +173,7 @@ func (t *FileTool) ReplaceFileContent(ctx context.Context, args map[string]inter
 
 	content := string(data)
 	count := strings.Count(content, oldStr)
-	
+
 	if count == 0 {
 		return &ToolResult{Name: "replace_file_content", Success: false, Error: "target_content not found in file exactly as provided. Check whitespace/indentation."}
 	}

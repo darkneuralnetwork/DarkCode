@@ -15,7 +15,7 @@ func (d *darwinDetector) Detect(ctx context.Context) (*SystemCapabilities, error
 	caps := &SystemCapabilities{}
 	caps.CPU.Cores = runtime.NumCPU()
 	caps.CPU.Arch = runtime.GOARCH
-	
+
 	if caps.CPU.Arch == "arm64" {
 		caps.CPU.HasNEON = true
 		caps.GPU.Vendor = GPUVendorApple

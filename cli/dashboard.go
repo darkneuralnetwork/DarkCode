@@ -25,10 +25,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/darkcode/capability"
 	"github.com/darkcode/core"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/ui"
-	"github.com/darkcode/capability"
 )
 
 // dashboardEvent is a trimmed event record kept in the ticker ring.
@@ -131,7 +131,7 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 	if err == nil {
 		tier = capability.AssignTier(caps)
 	}
-	
+
 	title := paint(cOrange+clrBold, " DARKCODE ") + paint(cAmber, "· LIVE MONITORING · ")
 	if err == nil {
 		title += paint(cPurple, tier.String())
@@ -204,9 +204,9 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 		}
 	}
 
-	b.WriteString(renderRow(w, "TOKEN THROUGHPUT", 
+	b.WriteString(renderRow(w, "TOKEN THROUGHPUT",
 		fmt.Sprintf("Current: %s/min  |  Peak: %s/min", paint(cOrange, fmtNum(currentTok)), paint(cOrange, fmtNum(peakTok)))))
-	b.WriteString(renderRow(w, "COST TREND", 
+	b.WriteString(renderRow(w, "COST TREND",
 		fmt.Sprintf("Current: %s/min  |  Cumulative: %s", paint(cGreen, fmtCost(currentCost)), paint(cGreen, fmtCost(snap.TotalCost)))))
 
 	b.WriteString(paint(cOrange, ml) + strings.Repeat(hz, w-2) + mr + "\n")

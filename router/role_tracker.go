@@ -39,7 +39,7 @@ func (rt *RoleTracker) GetWeight(role, modelName string) float64 {
 func (rt *RoleTracker) RecordSuccess(role, modelName string, success bool) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	
+
 	if _, ok := rt.weights[role]; !ok {
 		rt.weights[role] = make(map[string]*RoleWeight)
 	}
@@ -50,10 +50,10 @@ func (rt *RoleTracker) RecordSuccess(role, modelName string, success bool) {
 			Weight:    1.0,
 		}
 	}
-	
+
 	rw := rt.weights[role][modelName]
 	rw.TotalCalls++
-	
+
 	var sVal float64
 	if success {
 		sVal = 1.0

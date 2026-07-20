@@ -23,7 +23,7 @@ func (d *windowsDetector) Detect(ctx context.Context) (*SystemCapabilities, erro
 		// Parse output to get TotalBytes, simplified for now
 		// In a real implementation we'd parse the actual output
 		caps.Memory.TotalBytes = 16 * GB // default fallback
-		_ = out // ignore for now to avoid unused variable
+		_ = out                          // ignore for now to avoid unused variable
 	} else {
 		caps.Memory.TotalBytes = 8 * GB // fallback
 	}

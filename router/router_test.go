@@ -19,10 +19,12 @@ func (f *fakeClient) ChatCompletion(ctx context.Context, req *core.CompletionReq
 func (f *fakeClient) ChatCompletionStream(ctx context.Context, req *core.CompletionRequest, cb *core.StreamCallbacks) (*core.CompletionResponse, error) {
 	return f.ChatCompletion(ctx, req)
 }
-func (f *fakeClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) { return nil, nil }
-func (f *fakeClient) ModelInfo() core.ModelMetadata                                       { return core.ModelMetadata{ID: f.name} }
-func (f *fakeClient) Ping(ctx context.Context) error                                      { return nil }
-func (f *fakeClient) Close() error                                                        { return nil }
+func (f *fakeClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	return nil, nil
+}
+func (f *fakeClient) ModelInfo() core.ModelMetadata  { return core.ModelMetadata{ID: f.name} }
+func (f *fakeClient) Ping(ctx context.Context) error { return nil }
+func (f *fakeClient) Close() error                   { return nil }
 
 func TestDisableModel_RouteSkipsDisabledModel(t *testing.T) {
 	r := NewRouter(core.RouteSingle, nil)

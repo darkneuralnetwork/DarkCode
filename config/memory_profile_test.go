@@ -9,8 +9,8 @@ func TestMemoryProfileContext(t *testing.T) {
 		"max":      32768,
 		"Balanced": 16384, // case-insensitive
 		" max ":    32768, // trimmed
-		"":         0,      // auto
-		"weird":    0,      // unknown → auto
+		"":         0,     // auto
+		"weird":    0,     // unknown → auto
 	}
 	for in, want := range cases {
 		if got := MemoryProfileContext(in); got != want {

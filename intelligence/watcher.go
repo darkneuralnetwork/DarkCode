@@ -25,7 +25,7 @@ type FileWatcher struct {
 	mu       sync.Mutex
 	mtimes   map[string]time.Time
 	stop     chan struct{}
-OnChange  func(changed []string)
+	OnChange func(changed []string)
 }
 
 // NewFileWatcher creates a watcher for `root` polling every `interval`.

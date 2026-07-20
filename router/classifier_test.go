@@ -53,8 +53,8 @@ func TestClassifier_Classify(t *testing.T) {
 			expected: TaskTypeSelective,
 		},
 		{
-			name:     "full consensus long query",
-			query:    "This is a very long query. " +
+			name: "full consensus long query",
+			query: "This is a very long query. " +
 				"It goes on and on and on and on and on and on and on and on. " +
 				"It goes on and on and on and on and on and on and on and on. " +
 				"It goes on and on and on and on and on and on and on and on. " +

@@ -22,9 +22,9 @@ func (f *fakeLoRAClient) ChatCompletionStream(ctx context.Context, req *Completi
 func (f *fakeLoRAClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return nil, nil
 }
-func (f *fakeLoRAClient) ModelInfo() ModelMetadata { return ModelMetadata{ID: "fake"} }
+func (f *fakeLoRAClient) ModelInfo() ModelMetadata       { return ModelMetadata{ID: "fake"} }
 func (f *fakeLoRAClient) Ping(ctx context.Context) error { return nil }
-func (f *fakeLoRAClient) Close() error                    { return nil }
+func (f *fakeLoRAClient) Close() error                   { return nil }
 func (f *fakeLoRAClient) MountLoRA(name string, scale float32) error {
 	if f.mountErr != nil {
 		return f.mountErr

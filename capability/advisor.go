@@ -118,13 +118,13 @@ func (a *Advisor) FallbackToCloud() bool {
 // Summary returns a human-readable summary for the dashboard/UI.
 func (a *Advisor) Summary() map[string]interface{} {
 	return map[string]interface{}{
-		"tier":                  a.tier.String(),
-		"can_run_local":         a.CanRunLocalModels(),
-		"max_local_model_gb":    float64(a.MaxLocalModelBytes()) / float64(GB),
-		"preferred_model_size":  a.PreferredModelSize(),
-		"prefer_local":          a.PreferLocal(),
+		"tier":                    a.tier.String(),
+		"can_run_local":           a.CanRunLocalModels(),
+		"max_local_model_gb":      float64(a.MaxLocalModelBytes()) / float64(GB),
+		"preferred_model_size":    a.PreferredModelSize(),
+		"prefer_local":            a.PreferLocal(),
 		"recommended_concurrency": a.RecommendedConcurrency(),
-		"recommended_context":   a.RecommendedContextWindow(),
-		"fallback_to_cloud":     a.FallbackToCloud(),
+		"recommended_context":     a.RecommendedContextWindow(),
+		"fallback_to_cloud":       a.FallbackToCloud(),
 	}
 }

@@ -92,8 +92,8 @@ func (m selectorModel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0ea5e9")).MarginBottom(1)
 	searchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981"))
 	listStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#272c36")).Padding(0, 1)
-	
-	s := titleStyle.Render("? " + m.title) + "\n"
+
+	s := titleStyle.Render("? "+m.title) + "\n"
 	s += searchStyle.Render("🔍 Filter: ") + m.filter + "\n\n"
 
 	var listContent string
@@ -120,12 +120,12 @@ func (m selectorModel) View() string {
 			cursor := "  "
 			itemTitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0"))
 			descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b"))
-			
+
 			if m.cursor == i {
 				cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#0ea5e9")).Render("❯ ")
 				itemTitleStyle = itemTitleStyle.Foreground(lipgloss.Color("#0ea5e9")).Bold(true)
 			}
-			
+
 			listContent += fmt.Sprintf("%s%s %s\n", cursor, itemTitleStyle.Render(item.Title), descStyle.Render(item.Description))
 		}
 		if len(m.filtered) > 10 {

@@ -79,7 +79,7 @@ func (t *BrowserTool) Execute(ctx context.Context, args map[string]interface{}) 
 	// Run the script
 	cmd := exec.CommandContext(ctx, "python3", scriptPath, url, action, selector, value)
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		return &ToolResult{
 			Name:    "browser_subagent",

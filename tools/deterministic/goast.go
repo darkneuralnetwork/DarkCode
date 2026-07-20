@@ -102,7 +102,7 @@ func parseDefinitions(fset *token.FileSet, f goFile) []definition {
 
 // importEntry is one import declaration.
 type importEntry struct {
-	Path string // the import path string literal
+	Path  string // the import path string literal
 	Alias string // alias, if any
 	File  string
 }

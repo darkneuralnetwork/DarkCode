@@ -43,7 +43,7 @@ type CmdVerificationStage struct {
 	args []string
 }
 
-func (c *CmdVerificationStage) Name() string { return c.name }
+func (c *CmdVerificationStage) Name() string                    { return c.name }
 func (c *CmdVerificationStage) IsApplicable(output string) bool { return true }
 func (c *CmdVerificationStage) Verify(ctx context.Context, goal, output string) (*core.VerificationResult, error) {
 	cmd := exec.CommandContext(ctx, c.cmd, c.args...)
@@ -82,7 +82,7 @@ func (v *VerificationPipeline) SetThreshold(t float64) {
 func (v *VerificationPipeline) Verify(ctx context.Context, goal, output string, toolsUsed []string) (*core.VerificationResult, error) {
 	result := &core.VerificationResult{
 		VerifiedAt: time.Now(),
-		Passed:     true, // assume pass until proven otherwise
+		Passed:     true,                                                                 // assume pass until proven otherwise
 		Confidence: core.ConfidenceScore{Overall: 1.0, Evidence: 1.0, Verification: 1.0}, // assume high confidence if deterministic
 	}
 

@@ -8,14 +8,14 @@ import (
 )
 
 var (
-	colorBg       = lipgloss.Color("#0f1115")
-	colorSurface  = lipgloss.Color("#1a1d24")
-	colorPrimary  = lipgloss.Color("#0ea5e9") // Electric Blue
-	colorSuccess  = lipgloss.Color("#10b981") // Green
-	colorWarning  = lipgloss.Color("#f59e0b") // Amber
-	colorText     = lipgloss.Color("#e2e8f0")
-	colorMuted    = lipgloss.Color("#64748b")
-	colorBorder   = lipgloss.Color("#272c36")
+	colorBg      = lipgloss.Color("#0f1115")
+	colorSurface = lipgloss.Color("#1a1d24")
+	colorPrimary = lipgloss.Color("#0ea5e9") // Electric Blue
+	colorSuccess = lipgloss.Color("#10b981") // Green
+	colorWarning = lipgloss.Color("#f59e0b") // Amber
+	colorText    = lipgloss.Color("#e2e8f0")
+	colorMuted   = lipgloss.Color("#64748b")
+	colorBorder  = lipgloss.Color("#272c36")
 
 	styleBase = lipgloss.NewStyle().
 			Foreground(colorText).

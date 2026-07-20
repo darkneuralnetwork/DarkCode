@@ -7,9 +7,9 @@ import (
 
 // ContextBudget manages token allocations per request to prevent context overflow.
 type ContextBudget struct {
-	mu          sync.Mutex
-	MaxTokens   int
-	UsedTokens  int
+	mu         sync.Mutex
+	MaxTokens  int
+	UsedTokens int
 }
 
 func NewContextBudget() *ContextBudget {
@@ -22,7 +22,7 @@ func NewContextBudget() *ContextBudget {
 func (cb *ContextBudget) Check(tokens int) error {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	if cb.UsedTokens + tokens > cb.MaxTokens {
+	if cb.UsedTokens+tokens > cb.MaxTokens {
 		return fmt.Errorf("context budget exceeded")
 	}
 	return nil

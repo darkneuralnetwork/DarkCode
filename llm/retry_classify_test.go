@@ -28,7 +28,7 @@ func (c *countingClient) ChatCompletionStream(ctx context.Context, req *core.Com
 func (c *countingClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return nil, c.err
 }
-func (c *countingClient) ModelInfo() core.ModelMetadata { return core.ModelMetadata{ID: "counting"} }
+func (c *countingClient) ModelInfo() core.ModelMetadata  { return core.ModelMetadata{ID: "counting"} }
 func (c *countingClient) Ping(ctx context.Context) error { return nil }
 func (c *countingClient) Close() error                   { return nil }
 

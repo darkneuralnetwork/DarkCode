@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/darkcode/config"
-	"github.com/darkcode/llm"
 	"github.com/darkcode/cli"
 	"github.com/darkcode/cli/tui"
+	"github.com/darkcode/config"
+	"github.com/darkcode/llm"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
@@ -162,7 +162,6 @@ func runOrchestrator(cfg *config.Config, query string, statusOnly bool, portFlag
 	runner.WireUp()
 	runner.Execute()
 }
-
 
 // === Helpers ===
 

@@ -15,7 +15,7 @@ func TestSortGeminiModels(t *testing.T) {
 	}
 	sortGeminiModels(in)
 	want := []string{
-		"gemini-3-pro",    // newest generation first
+		"gemini-3-pro",     // newest generation first
 		"gemini-2.5-flash", // then 2.5, alphabetical within generation
 		"gemini-2.5-pro",
 		"gemini-2.0-flash",

@@ -85,7 +85,7 @@ func EnsureLlamaServer(ctx context.Context, destDir string) error {
 		return fmt.Errorf("failed to create bin dir: %w", err)
 	}
 	destPath := filepath.Join(destDir, exeName)
-	
+
 	needsDownload := true
 	if _, err := os.Stat(destPath); err == nil {
 		needsDownload = false
@@ -146,7 +146,7 @@ func EnsureLlamaServer(ctx context.Context, destDir string) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "DarkCode-Embedded")
-	
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch latest llama.cpp release: %w", err)

@@ -1,7 +1,5 @@
 package router
 
-
-
 // TieredModelPool extends the existing tier map with purpose-based grouping.
 type TieredModelPool struct {
 	Reasoning []RegisteredModel // complex tasks, architecture

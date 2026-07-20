@@ -33,7 +33,7 @@ func (a *AppRunner) RunGUI() {
 				errCh <- err
 			}
 		}()
-		
+
 		// Wait briefly to see if server crashes immediately (e.g., port in use)
 		select {
 		case err := <-errCh:

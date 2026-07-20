@@ -42,12 +42,12 @@ func (s *Server) embeddedStatus() map[string]interface{} {
 	emb := embedded.Default()
 	st := emb.Status()
 	info := map[string]interface{}{
-		"is_running":  st.State == embedded.StateRunning,
-		"state":       st.State.String(),
-		"model_id":    emb.LoadedModelID(),
-		"base_url":    st.BaseURL,
-		"role":        role,
-		"is_primary":  false,
+		"is_running": st.State == embedded.StateRunning,
+		"state":      st.State.String(),
+		"model_id":   emb.LoadedModelID(),
+		"base_url":   st.BaseURL,
+		"role":       role,
+		"is_primary": false,
 		// Why local isn't running, when the resource governor refused it
 		// ("local disabled: needs X GB, Y GB free") — so the GUI can answer
 		// "why is local off?" instead of showing a bare failed/stopped state.
