@@ -52,6 +52,9 @@ type Server struct {
 	// apiRateLimiter throttles /api/* requests per remote address.
 	apiRateLimiter *rateLimiter
 
+	// idempotency de-duplicates /api/chat POSTs carrying an Idempotency-Key.
+	idempotency *idempotencyStore
+
 	// activeWorkspace is the directory the chat console's file explorer
 	// browses. It is switched automatically when a project is activated
 	activeWorkspace string
@@ -89,6 +92,9 @@ func NewServer(cfg *config.Config, registry *tools.Registry, memSystem *memory.S
 		// 10 requests/sec sustained, burst of 30 — generous for a single local
 		// UI session's normal traffic, but bounds a runaway/malicious client.
 		apiRateLimiter: newRateLimiter(10, 30),
+		// A chat turn can run up to 5 minutes; keep replayable results a bit
+		// longer so a retry after a slow response still de-duplicates.
+		idempotency: newIdempotencyStore(10 * time.Minute),
 	}
 	return s
 }
@@ -502,7 +508,7 @@ func (s *Server) Start(addr string) error {
 	mux := http.NewServeMux()
 
 	// API routes
-	mux.Handle("/api/chat", s.csrfMiddleware(http.HandlerFunc(s.handleChat)))
+	mux.Handle("/api/chat", s.csrfMiddleware(s.idempotencyMiddleware(http.HandlerFunc(s.handleChat))))
 	mux.Handle("/api/chat/cancel", s.csrfMiddleware(http.HandlerFunc(s.handleCancelChat)))
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/tools", s.handleTools)

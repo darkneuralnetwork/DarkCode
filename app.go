@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/darkcode/cli"
 	"github.com/darkcode/compression"
@@ -48,6 +52,8 @@ type AppRunner struct {
 	resumedFromGUI      bool
 	mode                string
 	localLLMPromptShown bool
+
+	shutdownOnce sync.Once
 }
 
 func NewAppRunner(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) *AppRunner {
@@ -62,6 +68,7 @@ func NewAppRunner(cfg *config.Config, query string, statusOnly bool, portFlag st
 }
 
 func (a *AppRunner) Execute() {
+	a.installSignalHandler()
 	if a.StatusOnly {
 		fmt.Println(a.Kernel.Status())
 		fmt.Println("\nRegistered Tools:")
@@ -116,4 +123,35 @@ func (a *AppRunner) Shutdown() {
 	if a.PluginHost != nil {
 		a.PluginHost.Shutdown()
 	}
+}
+
+// installSignalHandler flushes state on SIGINT/SIGTERM before exit. Without it,
+// killing the persistent GUI (SIGTERM on rebuild/restart) dropped the last
+// debounce window of memory/knowledge-graph writes. readline reads an
+// interactive Ctrl-C as a raw byte, not a signal, so this never interferes with
+// the CLI's line-cancel — it only fires on a real delivered signal.
+func (a *AppRunner) installSignalHandler() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-ch
+		a.gracefulShutdown()
+		os.Exit(0)
+	}()
+}
+
+// gracefulShutdown persists memory and tears down resources. Idempotent so the
+// signal path and any normal-exit path can both call it safely.
+func (a *AppRunner) gracefulShutdown() {
+	a.shutdownOnce.Do(func() {
+		if a.Server != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = a.Server.Shutdown(ctx)
+		}
+		if a.MemSystem != nil {
+			a.MemSystem.Shutdown() // flushes episodic/semantic/procedural/KG writers
+		}
+		a.Shutdown()
+	})
 }

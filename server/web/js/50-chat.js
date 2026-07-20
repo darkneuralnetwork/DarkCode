@@ -60,9 +60,13 @@ async function sendChat() {
   // a single post-run refresh; detectFileChanges() does its own fetch.
 
   try {
+    // One key per submission so a network-layer retry of this same request
+    // replays the first result instead of re-running the agent.
+    const idempotencyKey = (crypto.randomUUID && crypto.randomUUID()) ||
+      (Date.now() + "-" + Math.random().toString(16).slice(2));
     const res = await fetch(API + "/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({
         query: text,
         project: activeProjectId || "",
