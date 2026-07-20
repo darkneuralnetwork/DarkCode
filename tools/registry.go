@@ -273,6 +273,42 @@ func (r *Registry) DispatchAll(ctx context.Context, calls []core.ToolCall) inter
 	return results
 }
 
+// defaultToolTimeout bounds a single tool handler's execution. Shared by every
+// dispatch surface so they agree.
+const defaultToolTimeout = 120 * time.Second
+
+// readOnlyDeny returns a blocked result when a read-only (Chat) request targets
+// a mutating tool, else nil. Defense-in-depth behind not offering write tools.
+func readOnlyDeny(ctx context.Context, name string, entry *ToolEntry) *ToolResult {
+	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
+		return &ToolResult{Name: name, Success: false,
+			Error: "blocked: " + name + " is a write/execute tool and this is a read-only (Chat) request — switch to Build mode to modify files"}
+	}
+	return nil
+}
+
+// gateDeny consults the permission gate and returns a denied result (carrying
+// any user feedback) when the call is refused, else nil. Shared so every
+// dispatch surface — ReAct/DAG and the direct /api/tools/execute + /api/htp
+// path — gates identically.
+func (r *Registry) gateDeny(name string, args map[string]interface{}) *ToolResult {
+	r.mu.RLock()
+	gate := r.gate
+	r.mu.RUnlock()
+	if gate == nil {
+		return nil
+	}
+	allowed, req, feedback := gate.Check(name, args)
+	if allowed {
+		return nil
+	}
+	msg := "permission denied by user" + denySuffix(req)
+	if strings.TrimSpace(feedback) != "" {
+		msg += "\nUser feedback: " + strings.TrimSpace(feedback)
+	}
+	return &ToolResult{Name: name, Success: false, Error: msg}
+}
+
 // dispatchOne executes a single tool call with a timeout.
 // It enforces the permission gate (if installed) and records before/after
 // state for mutating tools (file writes, patches, shell commands, git ops).
@@ -316,39 +352,14 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 		return result
 	}
 
-	// Read-only policy (Chat mode): refuse any mutating tool. Defense-in-depth
-	// behind not offering write tools to the model at all.
-	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
-		result.Result = &ToolResult{
-			Name:    call.Function.Name,
-			Success: false,
-			Error:   "blocked: " + call.Function.Name + " is a write/execute tool and this is a read-only (Chat) request — switch to Build mode to modify files",
-		}
+	// Read-only policy + permission gate (shared with the direct-execute path).
+	if blocked := readOnlyDeny(ctx, call.Function.Name, entry); blocked != nil {
+		result.Result = blocked
 		return result
 	}
-
-	// Permission gate: ask before executing dangerous actions.
-	r.mu.RLock()
-	gate := r.gate
-	r.mu.RUnlock()
-	if gate != nil {
-		allowed, req, feedback := gate.Check(call.Function.Name, args)
-		if !allowed {
-			msg := "permission denied by user" + denySuffix(req)
-			// Surface the user's mid-execution feedback (if any) in the tool
-			// result so the LLM sees the steer and adapts — e.g. "use /tmp
-			// instead of /var". This works for both the ReAct loop and the
-			// DAG worker path, which both feed tool results back to the model.
-			if strings.TrimSpace(feedback) != "" {
-				msg += "\nUser feedback: " + strings.TrimSpace(feedback)
-			}
-			result.Result = &ToolResult{
-				Name:    call.Function.Name,
-				Success: false,
-				Error:   msg,
-			}
-			return result
-		}
+	if denied := r.gateDeny(call.Function.Name, args); denied != nil {
+		result.Result = denied
+		return result
 	}
 
 	// Self-healing runtime: if this tool has been failing repeatedly it is
@@ -370,7 +381,7 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 	beforePath, beforeContent, beforeExists := captureFileBefore(ctx, call.Function.Name, args)
 
 	// Per-tool timeout (120s default; can be overridden via context)
-	toolCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	toolCtx, cancel := context.WithTimeout(ctx, defaultToolTimeout)
 	defer cancel()
 
 	started := time.Now()
@@ -639,27 +650,13 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("invalid arguments for tool %s: %s", name, msg)
 	}
 
-	// Read-only policy (Chat mode): refuse mutating tools on this surface too.
-	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
-		return &ToolResult{Name: name, Success: false,
-			Error: "blocked: " + name + " is a write/execute tool and this is a read-only (Chat) request"}, nil
+	// Read-only policy + permission gate (shared with the ReAct/DAG dispatch
+	// path) — the direct-execute surface must gate identically.
+	if blocked := readOnlyDeny(ctx, name, entry); blocked != nil {
+		return blocked, nil
 	}
-
-	// Permission gate: the direct-execute surface (HTTP /api/tools/execute,
-	// /api/htp) must be gated exactly like the ReAct/DAG dispatch path in
-	// dispatchOne — otherwise a dangerous action could run without approval.
-	r.mu.RLock()
-	gate := r.gate
-	r.mu.RUnlock()
-	if gate != nil {
-		allowed, req, feedback := gate.Check(name, args)
-		if !allowed {
-			msg := "permission denied by user" + denySuffix(req)
-			if strings.TrimSpace(feedback) != "" {
-				msg += "\nUser feedback: " + strings.TrimSpace(feedback)
-			}
-			return &ToolResult{Name: name, Success: false, Error: msg}, nil
-		}
+	if denied := r.gateDeny(name, args); denied != nil {
+		return denied, nil
 	}
 
 	// Self-healing runtime: honor the circuit breaker here too, so the HTTP/
@@ -668,7 +665,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("tool %s is temporarily unavailable (quarantined after repeated failures; retry in ~%s)", name, remaining.Round(time.Second))
 	}
 
-	toolCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	toolCtx, cancel := context.WithTimeout(ctx, defaultToolTimeout)
 	defer cancel()
 
 	result := entry.Handler(toolCtx, args)
