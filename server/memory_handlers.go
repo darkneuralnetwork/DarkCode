@@ -43,11 +43,7 @@ func (s *Server) handleEpisodicMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
 		return
 	}
-	episodes := s.memSystem.EpisodicGet()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"episodes": episodes,
-		"count":    len(episodes),
-	})
+	writePage(w, "episodes", s.memSystem.EpisodicGet(), parsePage(r))
 }
 
 // handleSemanticMemory returns semantic memory (facts).
@@ -56,11 +52,7 @@ func (s *Server) handleSemanticMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
 		return
 	}
-	facts := s.memSystem.SemanticAll()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"facts": facts,
-		"count": len(facts),
-	})
+	writePage(w, "facts", s.memSystem.SemanticAll(), parsePage(r))
 }
 
 // handleProceduralMemory returns procedural memory (skills).
@@ -69,11 +61,7 @@ func (s *Server) handleProceduralMemory(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
 		return
 	}
-	skills := s.memSystem.ProceduralAll()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"skills": skills,
-		"count":  len(skills),
-	})
+	writePage(w, "skills", s.memSystem.ProceduralAll(), parsePage(r))
 }
 
 // handleSkills is an alias for procedural memory.
@@ -82,11 +70,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
 		return
 	}
-	skills := s.memSystem.ProceduralAll()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"skills": skills,
-		"count":  len(skills),
-	})
+	writePage(w, "skills", s.memSystem.ProceduralAll(), parsePage(r))
 }
 
 // handleEpisodes is an alias for episodic memory.
@@ -95,11 +79,7 @@ func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
 		return
 	}
-	episodes := s.memSystem.EpisodicGet()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"episodes": episodes,
-		"count":    len(episodes),
-	})
+	writePage(w, "episodes", s.memSystem.EpisodicGet(), parsePage(r))
 }
 
 // handleConfig returns the current configuration (minus secrets) or updates it.

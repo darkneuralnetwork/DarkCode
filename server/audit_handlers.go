@@ -37,16 +37,15 @@ func (s *Server) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kg := s.memSystem.KG()
-	nodes := kg.AllNodes()
-	edges := kg.AllEdges()
 	nodeCount, edgeCount := kg.Stats()
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"nodes":      nodes,
-		"edges":      edges,
-		"node_count": nodeCount,
-		"edge_count": edgeCount,
-	})
+	// Nodes grow with the system-wide KG, so they paginate (default: all).
+	page, meta := paginate(kg.AllNodes(), parsePage(r))
+	meta["nodes"] = page
+	meta["edges"] = kg.AllEdges()
+	meta["node_count"] = nodeCount
+	meta["edge_count"] = edgeCount
+	writeJSON(w, http.StatusOK, meta)
 }
 
 // handleLearningStats returns the learning engine statistics.
