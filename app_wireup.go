@@ -43,8 +43,14 @@ func (a *AppRunner) initObservabilityAndSecurity() {
 	// 1. Boot Core Observability
 	observability.InitLogger(!a.Cfg.UIMode)
 
-	// 2. Initialize Enterprise Sandbox
-	a.Sandbox = security.NewSandbox(a.Emitter)
+	// 2. Build the one process sandbox from config and report its status, so it
+	// is never a silent no-op. It's wired into the terminal tool in initTools.
+	a.Sandbox = security.NewSandboxForMode(
+		security.ParseMode(a.Cfg.ResolvedSandboxMode()), a.Cfg.SandboxWritable, a.Emitter)
+	observability.Log().Info(a.Sandbox.Status(), nil)
+	if a.Sandbox.Mode != security.ModeOff && !a.Sandbox.Available() {
+		observability.Log().Warn("sandbox requested but no backend (bwrap/firejail) found — shell commands run unconfined; install bubblewrap or set sandbox to off to silence", nil)
+	}
 
 	// 3. Discover and Load External Plugins
 	a.PluginHost = plugin.NewHost()
@@ -122,7 +128,7 @@ func (a *AppRunner) initTools(memDir string) {
 	if err != nil {
 		oldStore = nil
 	}
-	tools.RegisterBuiltinTools(a.Registry, oldStore, a.Router)
+	tools.RegisterBuiltinTools(a.Registry, oldStore, a.Router, a.Sandbox)
 	tools.RegisterMemoryTool(a.Registry, tools.NewSemanticMemoryTool(oldStore, a.MemSystem))
 	tools.RegisterProjectTools(a.Registry, a.ProjectStore)
 	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG()))

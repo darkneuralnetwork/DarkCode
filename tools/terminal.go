@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -16,27 +15,28 @@ import (
 // captures stdout/stderr separately but merges them in output.
 type TerminalTool struct {
 	TimeoutSec int
-	// Sandbox, when non-nil and available, confines each command so it can
-	// only write inside its working directory (the rest of the filesystem is
-	// read-only). It is opt-in via DARKCODE_SANDBOX=1 so the default developer
-	// workflow is unchanged.
+	// Sandbox, when non-nil and active, confines each command so it can only
+	// write inside its working directory (plus configured cache dirs); the rest
+	// of the filesystem is read-only. Injected at startup from config so there
+	// is exactly one sandbox for the process. nil means no confinement.
 	Sandbox *security.Sandbox
 }
 
-func NewTerminalTool() *TerminalTool {
-	t := &TerminalTool{TimeoutSec: 120}
-	if os.Getenv("DARKCODE_SANDBOX") == "1" {
-		if sb := security.NewSandbox(nil); sb.Available() {
-			t.Sandbox = sb
-		}
-	}
-	return t
+// NewTerminalTool builds the terminal tool with the process sandbox (may be nil).
+func NewTerminalTool(sb *security.Sandbox) *TerminalTool {
+	return &TerminalTool{TimeoutSec: 120, Sandbox: sb}
 }
 
 func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return &ToolResult{Name: "terminal", Success: false, Error: "command is required"}
+	}
+
+	// Strict sandbox with no backend fails closed rather than running unconfined.
+	if t.Sandbox != nil && t.Sandbox.MustRefuse() {
+		return &ToolResult{Name: "terminal", Success: false,
+			Error: "blocked: sandbox mode is 'strict' but no sandbox backend (bwrap/firejail) is installed — install one, or set sandbox to 'auto'/'on'/'off'"}
 	}
 
 	timeoutSec, _ := args["timeout"].(float64)

@@ -113,6 +113,16 @@
           </div>
 
           <div class="cfg-field" style="margin-bottom: 0;">
+            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Shell Sandbox (needs bwrap/firejail; applies on restart)</label>
+            <select id="cfg-sandbox" class="custom-select">
+              <option value="off">Off — never confine</option>
+              <option value="auto">Auto — confine when a backend is installed</option>
+              <option value="on">On — confine; warn if no backend</option>
+              <option value="strict">Strict — refuse to run without a backend</option>
+            </select>
+          </div>
+
+          <div class="cfg-field" style="margin-bottom: 0;">
             <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Context Compressor Model</label>
             <select id="cfg-compressor-model" class="custom-select">
               <option value="">(primary model)</option>

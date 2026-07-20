@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/darkcode/security"
 )
 
 func (c *Console) printConfig() {
@@ -287,4 +289,37 @@ func (c *Console) setSafety(level string) {
 		return
 	}
 	fmt.Printf("%s safety level → %s\n", paint(cGreen, "✓"), paint(cYellow, c.cfg.SafetyLevel))
+}
+
+// printSandboxStatus reports the real, resolved sandbox mode and whether a
+// backend is actually installed — replacing the old hardcoded "Active" lie.
+func (c *Console) printSandboxStatus() {
+	mode := c.cfg.ResolvedSandboxMode()
+	sb := security.NewSandboxForMode(security.ParseMode(mode), c.cfg.SandboxWritable, nil)
+	backend := string(sb.Backend)
+	state := paint(cRed, "not confining")
+	if sb.Available() {
+		state = paint(cGreen, "confining via "+backend)
+	} else if mode != "off" {
+		state = paint(cYellow, "requested but no backend (install bwrap/firejail)")
+	}
+	fmt.Printf("%s sandbox mode=%s — %s\n", paint(cPurple, "🛡"), paint(cYellow, mode), state)
+}
+
+// setSandbox changes the shell-command sandbox mode. Takes effect on the next
+// run, since the terminal tool's sandbox is wired at startup.
+func (c *Console) setSandbox(mode string) {
+	switch strings.ToLower(mode) {
+	case "off", "auto", "on", "strict":
+		c.cfg.Sandbox = strings.ToLower(mode)
+	default:
+		fmt.Printf("%s invalid mode %s (off | auto | on | strict)\n", paint(cRed, "✗"), mode)
+		return
+	}
+	if err := c.cfg.Save(); err != nil {
+		fmt.Printf("%s %s\n", paint(cRed, "✗"), err)
+		return
+	}
+	fmt.Printf("%s sandbox → %s %s\n", paint(cGreen, "✓"), paint(cYellow, c.cfg.Sandbox),
+		paint(cGray, "(applies on restart)"))
 }

@@ -50,6 +50,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	hasKey := s.cfg.APIKey != ""
 	routingMode := s.cfg.RoutingMode
 	safetyLevel := s.cfg.SafetyLevel
+	sandboxMode := s.cfg.ResolvedSandboxMode()
 	maxTurns := s.cfg.MaxTurns
 	compressContext := s.cfg.CompressContext
 	agenticLoop := s.cfg.AgenticLoop
@@ -70,6 +71,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"base_url":          baseURL,
 		"routing_mode":      routingMode,
 		"safety_level":      safetyLevel,
+		"sandbox":           sandboxMode,
 		"max_turns":         maxTurns,
 		"compress_context":  compressContext,
 		"agentic_loop":      agenticLoop,
@@ -102,7 +104,11 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		Action      string `json:"action"` // update_settings | add_model | remove_model | set_primary
 		RoutingMode string `json:"routing_mode,omitempty"`
 		SafetyLevel string `json:"safety_level,omitempty"`
-		MaxTurns    int    `json:"max_turns,omitempty"`
+		// Sandbox mode: "off"|"auto"|"on"|"strict". Pointer so an unset field
+		// leaves the current value unchanged. Takes effect on next restart (the
+		// terminal tool's sandbox is wired at startup).
+		Sandbox  *string `json:"sandbox,omitempty"`
+		MaxTurns int     `json:"max_turns,omitempty"`
 
 		// Agentic loop (looping technology) toggle.
 		AgenticLoop *bool `json:"agentic_loop,omitempty"`
@@ -296,6 +302,12 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.SafetyLevel != "" {
 			s.cfg.SafetyLevel = req.SafetyLevel
+		}
+		if req.Sandbox != nil {
+			switch v := strings.ToLower(strings.TrimSpace(*req.Sandbox)); v {
+			case "off", "auto", "on", "strict":
+				s.cfg.Sandbox = v
+			}
 		}
 		if req.MaxTurns > 0 {
 			s.cfg.MaxTurns = req.MaxTurns

@@ -50,11 +50,6 @@ func (c *Console) handleSlash(input string) bool {
 		fmt.Println(paint(cBlue, "📦 Enterprise Plugin System"))
 		fmt.Println(paint(cGray, "   (Connected via gRPC to dynamic loader)"))
 
-	case "/sandbox":
-		fmt.Println(paint(cPurple+clrBold, "🛡️ SECURITY SANDBOX STATUS"))
-		fmt.Println(paint(cWhite, "   Mode: ") + paint(cGreen, "Active"))
-		fmt.Println(paint(cGray, "   (All tool executions are strictly isolated via firejail/namespaces)"))
-
 	case "/pipeline":
 		fmt.Println(paint(cGreen+clrBold, "✔️ VERIFICATION PIPELINE"))
 		fmt.Println(paint(cGray, "   1. ") + paint(cWhite, "Syntax Check ") + paint(cGray, "(Deterministic Tree-sitter)"))
@@ -262,6 +257,22 @@ func (c *Console) handleSlash(input string) bool {
 			})
 			if safe != "" {
 				c.setSafety(safe)
+			}
+		}
+
+	case "/sandbox":
+		if len(parts) > 1 {
+			c.setSandbox(parts[1])
+		} else {
+			c.printSandboxStatus()
+			m := tui.Select("Select Sandbox Mode:", []tui.SelectorItem{
+				{Title: "off", Description: "Never confine shell commands", Value: "off"},
+				{Title: "auto", Description: "Confine when bwrap/firejail is installed", Value: "auto"},
+				{Title: "on", Description: "Confine; warn but run if no backend", Value: "on"},
+				{Title: "strict", Description: "Require confinement; refuse without a backend", Value: "strict"},
+			})
+			if m != "" {
+				c.setSandbox(m)
 			}
 		}
 

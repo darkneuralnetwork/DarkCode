@@ -25,10 +25,25 @@ type Config struct {
 	RoutingMode string                 `json:"routing_mode,omitempty"` // single, escalation, consensus
 
 	// --- Orchestrator settings ---
-	UIMode          bool   `json:"ui_mode,omitempty"`
-	SafetyLevel     string `json:"safety_level,omitempty"` // strict, normal, relaxed
-	MaxConcurrent   int    `json:"max_concurrent,omitempty"`
-	CompressContext bool   `json:"compress_context,omitempty"`
+	UIMode      bool   `json:"ui_mode,omitempty"`
+	SafetyLevel string `json:"safety_level,omitempty"` // strict, normal, relaxed
+
+	// Sandbox confines shell commands run by the terminal tool so they can only
+	// write inside the workspace (plus a small set of build-cache dirs); the
+	// rest of the filesystem is read-only. Needs bwrap or firejail installed.
+	//   "off"    — never confine.
+	//   "auto"   — confine when a backend is available, else run unconfined (default).
+	//   "on"     — confine; if no backend is available, warn but still run.
+	//   "strict" — require confinement; refuse to run commands when no backend.
+	// The DARKCODE_SANDBOX env var overrides this (0=off, 1=on).
+	Sandbox string `json:"sandbox,omitempty"`
+	// SandboxWritable lists extra absolute paths the sandbox keeps writable
+	// (e.g. a module cache like ~/go). The workspace and common caches are
+	// always writable.
+	SandboxWritable []string `json:"sandbox_writable,omitempty"`
+
+	MaxConcurrent   int  `json:"max_concurrent,omitempty"`
+	CompressContext bool `json:"compress_context,omitempty"`
 
 	// UseCtxEngine enables the intelligent context-assembly engine
 	// (dedup + TF-IDF ranking + budget trimming) for the General-mode
@@ -221,6 +236,7 @@ func DefaultConfig() *Config {
 		SystemPrompt:          DefaultSystemPrompt,
 		RoutingMode:           "single",
 		SafetyLevel:           "normal",
+		Sandbox:               "auto",
 		MaxConcurrent:         3,
 		CompressContext:       true,
 		ExecutionProfile:      "auto",
@@ -267,6 +283,25 @@ func (cfg *Config) ResolvedLocalMode() string {
 			return "auto"
 		}
 		return "off"
+	}
+}
+
+// ResolvedSandboxMode returns the effective sandbox mode
+// ("off"|"auto"|"on"|"strict"). The DARKCODE_SANDBOX env var overrides the
+// config (1 → on, 0 → off) for back-compat with the old opt-in flag.
+// Unrecognized config values fall back to "auto".
+func (cfg *Config) ResolvedSandboxMode() string {
+	switch os.Getenv("DARKCODE_SANDBOX") {
+	case "1":
+		return "on"
+	case "0":
+		return "off"
+	}
+	switch cfg.Sandbox {
+	case "off", "auto", "on", "strict":
+		return cfg.Sandbox
+	default:
+		return "auto"
 	}
 }
 

@@ -31,6 +31,7 @@ var commandRegistry = []cmdInfo{
 	{"/brain", "Chat & Modes", "Routing brain: auto (local-first) / local (offline) / cloud"},
 	{"/mode", "Chat & Modes", "Routing mode: single / escalation / consensus"},
 	{"/safety", "Chat & Modes", "Approval level: strict / normal / relaxed"},
+	{"/sandbox", "Chat & Modes", "Shell sandbox: off / auto / on / strict"},
 	{"/profile", "Chat & Modes", "Execution profile: auto / sequential / parallel"},
 
 	// Models & local
@@ -58,7 +59,6 @@ var commandRegistry = []cmdInfo{
 	// Tools & system
 	{"/tools", "Tools & System", "List / inspect available tools"},
 	{"/plugins", "Tools & System", "List loaded plugins"},
-	{"/sandbox", "Tools & System", "Show the security sandbox status"},
 	{"/pipeline", "Tools & System", "Show the verification pipeline"},
 	{"/permissions", "Tools & System", "Show permission-gate settings"},
 

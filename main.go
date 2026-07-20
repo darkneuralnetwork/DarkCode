@@ -309,7 +309,7 @@ func listModelsStandalone(cfg *config.Config) {
 
 func listToolsStandalone() {
 	registry := tools.NewRegistry()
-	tools.RegisterBuiltinTools(registry, nil, nil)
+	tools.RegisterBuiltinTools(registry, nil, nil, nil)
 	tools.RegisterMemoryTool(registry, tools.NewSemanticMemoryTool(nil, nil))
 	entries := registry.List()
 	fmt.Printf("Registered Tools (%d):\n", len(entries))

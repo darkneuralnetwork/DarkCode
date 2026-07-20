@@ -1,12 +1,16 @@
 package tools
 
-import "github.com/darkcode/core"
+import (
+	"github.com/darkcode/core"
+	"github.com/darkcode/security"
+)
 
 // RegisterBuiltinTools registers all built-in tools into the given registry.
 // This is called once at agent startup. Each tool gets its schema and handler
-// wired up so the LLM can discover and call them.
-func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router core.ModelRouter) {
-	terminal := NewTerminalTool()
+// wired up so the LLM can discover and call them. sandbox (may be nil) confines
+// the terminal tool's shell commands.
+func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router core.ModelRouter, sandbox *security.Sandbox) {
+	terminal := NewTerminalTool(sandbox)
 	fileTool := NewFileTool()
 	searchTool := NewSearchTool()
 	webTool := NewWebTool(registry, router)

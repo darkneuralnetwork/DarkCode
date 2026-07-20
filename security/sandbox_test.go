@@ -1,9 +1,26 @@
 package security
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
+
+// TestSandboxRealConfinement proves end-to-end that an active sandbox actually
+// blocks writes outside the workspace. Skips where no backend is installed.
+func TestSandboxRealConfinement(t *testing.T) {
+	s := NewSandboxForMode(ModeAuto, nil, nil)
+	if !s.Available() {
+		t.Skip("no sandbox backend (bwrap/firejail) available")
+	}
+	ws := t.TempDir()
+	if _, err := s.Run(context.Background(), ws, "bash", "-c", "echo hi > inside.txt"); err != nil {
+		t.Fatalf("write inside the workspace should succeed: %v", err)
+	}
+	if _, err := s.Run(context.Background(), ws, "bash", "-c", "echo x > /etc/darkcode-should-not-write"); err == nil {
+		t.Error("write to /etc should be blocked by the read-only sandbox")
+	}
+}
 
 func containsSeq(argv []string, want ...string) bool {
 	for i := 0; i+len(want) <= len(argv); i++ {
@@ -69,5 +86,57 @@ func TestSandboxWrapEmptyWriteDir(t *testing.T) {
 	argv := s.Wrap("", "bash", "-c", "ls")
 	if containsSeq(argv, "--bind") {
 		t.Error("empty writeDir should produce a fully read-only sandbox (no --bind)")
+	}
+}
+
+func TestParseMode(t *testing.T) {
+	for in, want := range map[string]Mode{
+		"off": ModeOff, "auto": ModeAuto, "on": ModeOn, "strict": ModeStrict,
+		"": ModeAuto, "garbage": ModeAuto,
+	} {
+		if got := ParseMode(in); got != want {
+			t.Errorf("ParseMode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSandboxMustRefuse(t *testing.T) {
+	// strict + no backend must fail closed.
+	strictNone := &Sandbox{Mode: ModeStrict, Backend: BackendNone}
+	if !strictNone.MustRefuse() {
+		t.Error("strict mode with no backend must refuse")
+	}
+	// strict + backend present does not refuse.
+	strictOK := &Sandbox{Mode: ModeStrict, Backend: BackendBwrap, Enabled: true}
+	if strictOK.MustRefuse() {
+		t.Error("strict mode with a backend must not refuse")
+	}
+	// auto never refuses (best-effort).
+	if (&Sandbox{Mode: ModeAuto, Backend: BackendNone}).MustRefuse() {
+		t.Error("auto mode must never refuse")
+	}
+}
+
+func TestSandboxModeOffPassthrough(t *testing.T) {
+	// mode off => Enabled false => Wrap is a pass-through even with a backend.
+	s := &Sandbox{Mode: ModeOff, Backend: BackendBwrap, binPath: "/usr/bin/bwrap", Enabled: false}
+	if s.Available() {
+		t.Error("mode off must not be Available")
+	}
+	got := s.Wrap("/work", "bash", "-c", "ls")
+	if got[0] != "bash" {
+		t.Errorf("mode off should pass through, got %v", got)
+	}
+}
+
+func TestSandboxWritableBinds(t *testing.T) {
+	s := &Sandbox{Backend: BackendBwrap, binPath: "/usr/bin/bwrap", Enabled: true,
+		writable: []string{"/home/u/.cache"}}
+	argv := s.Wrap("/home/u/proj", "bash", "-c", "make")
+	if !containsSeq(argv, "--bind", "/home/u/.cache", "/home/u/.cache") {
+		t.Error("configured writable dir should be bound writable")
+	}
+	if !containsSeq(argv, "--bind", "/home/u/proj", "/home/u/proj") {
+		t.Error("workspace should still be bound writable")
 	}
 }
