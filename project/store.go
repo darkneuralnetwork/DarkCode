@@ -300,6 +300,24 @@ func (s *Store) SetPlan(id, plan string) error {
 	return os.WriteFile(s.planPath(id), []byte(plan), 0644)
 }
 
+// SetPlanGraph persists the typed execution plan graph (plan.Graph JSON) for
+// a project — the machine-readable source of truth alongside the rendered
+// plan.md/workflow.md caches. Stored raw so this package doesn't depend on
+// the plan package.
+func (s *Store) SetPlanGraph(id string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return os.WriteFile(s.graphPath(id), data, 0644)
+}
+
+// GetPlanGraph loads the persisted plan graph JSON. Returns os.ErrNotExist
+// (wrapped) when the project has no graph yet.
+func (s *Store) GetPlanGraph(id string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return os.ReadFile(s.graphPath(id))
+}
+
 func (s *Store) GetWorkflow(id string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -466,13 +484,14 @@ func (s *Store) Delete(id string) error {
 
 // --- internal helpers (must be called with the appropriate lock held) ---
 
-func (s *Store) dir(id string) string          { return filepath.Join(s.root, id) }
-func (s *Store) metaPath(id string) string     { return filepath.Join(s.dir(id), "project.json") }
-func (s *Store) contextPath(id string) string  { return filepath.Join(s.dir(id), "context.md") }
+func (s *Store) dir(id string) string            { return filepath.Join(s.root, id) }
+func (s *Store) metaPath(id string) string       { return filepath.Join(s.dir(id), "project.json") }
+func (s *Store) contextPath(id string) string    { return filepath.Join(s.dir(id), "context.md") }
 func (s *Store) rawContextPath(id string) string { return filepath.Join(s.dir(id), "context_raw.md") }
-func (s *Store) planPath(id string) string     { return filepath.Join(s.dir(id), "plan.md") }
-func (s *Store) workflowPath(id string) string { return filepath.Join(s.dir(id), "workflow.md") }
-func (s *Store) summaryPath(id string) string  { return filepath.Join(s.dir(id), "summary.md") }
+func (s *Store) planPath(id string) string       { return filepath.Join(s.dir(id), "plan.md") }
+func (s *Store) workflowPath(id string) string   { return filepath.Join(s.dir(id), "workflow.md") }
+func (s *Store) graphPath(id string) string      { return filepath.Join(s.dir(id), "graph.json") }
+func (s *Store) summaryPath(id string) string    { return filepath.Join(s.dir(id), "summary.md") }
 
 func (s *Store) saveMetaLocked(p *Project) error {
 	// Never persist the large bodies inside project.json — they live in their

@@ -28,16 +28,40 @@ func confineWrite(ctx context.Context, resolved string) error {
 	if err != nil {
 		return fmt.Errorf("cannot resolve workspace root: %w", err)
 	}
+	wsAbs = resolveSymlinks(wsAbs)
 	target, err := filepath.Abs(resolved)
 	if err != nil {
 		return fmt.Errorf("cannot resolve target path: %w", err)
 	}
-	// filepath.Abs already applies Clean, collapsing any "..". A path is inside
-	// the workspace iff its relative path from the root neither is ".." nor
-	// starts with "../".
+	// Resolve symlinks so a link inside the workspace pointing at, say, /etc
+	// can't smuggle a write outside it. filepath.Abs only collapses "..".
+	target = resolveSymlinks(target)
+	// A path is inside the workspace iff its relative path from the root is
+	// neither ".." nor starts with "../".
 	rel, err := filepath.Rel(wsAbs, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path %q is outside the active workspace %q (blocked by path confinement)", resolved, wsAbs)
 	}
 	return nil
+}
+
+// resolveSymlinks returns p with symlinks resolved. A write target usually
+// doesn't exist yet, so EvalSymlinks would fail on the whole path; instead we
+// resolve the longest existing ancestor and re-attach the not-yet-created
+// remainder. Falls back to the cleaned absolute path if nothing resolves.
+func resolveSymlinks(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	dir, rest := filepath.Split(p)
+	dir = filepath.Clean(dir)
+	for dir != "" && dir != string(filepath.Separator) && dir != "." {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(dir)
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
+	return filepath.Clean(p)
 }

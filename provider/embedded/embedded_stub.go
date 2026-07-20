@@ -2,19 +2,6 @@
 
 package embedded
 
-// embedded_stub.go — the default (no-CGo) embedded provider.
-//
-// Previously this was a dead stub: IsAvailable() always returned false and
-// CreateClient returned nil. It is now a real, functional provider that:
-//   1. Checks whether the llama-server binary is available (PATH or binaryDir)
-//   2. Spawns it via ProcessManager when a model is loaded
-//   3. Proxies chat completions through llama-server's OpenAI-compatible API
-//
-// This lets DarkCode run fully offline (spec §3: "Local-First Execution")
-// without requiring CGo / native llama.cpp bindings — just the llama-server
-// binary on the system. If the binary isn't present, the provider reports
-// unavailable and the router falls back to other providers.
-
 import (
 	"context"
 	"fmt"
@@ -61,8 +48,8 @@ type Provider struct {
 	pm            *ProcessManager
 	modelsDir     string
 	binaryDir     string
-	loadedModel   string // resolved filesystem path of the running model
-	loadedModelID string // original caller ref (e.g. "embedded/foo.gguf") for client/router naming
+	loadedModel   string                         // resolved filesystem path of the running model
+	loadedModelID string                         // original caller ref (e.g. "embedded/foo.gguf") for client/router naming
 	caps          *capability.SystemCapabilities // optional; drives GPU offload
 	// contextSizeOverride is a user-configured context-window override (from
 	// config.embedded_context_size). 0 = auto (RAM-aware default from
@@ -571,6 +558,7 @@ func (p *Provider) ContextSize() int {
 //     prefix and joins modelsDir;
 //   - a bare filename "foo.gguf" → joins modelsDir;
 //   - an existing filesystem path → used as-is (pass-through).
+//
 // Returns a clear error naming both attempted locations when the file is
 // missing, so a bad model dir or typo is obvious instead of manifesting as a
 // 60s health-timeout.

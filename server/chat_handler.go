@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/darkcode/attach"
 	"github.com/darkcode/core"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/orchestrator"
+	"github.com/darkcode/plan"
 	"github.com/darkcode/project"
 	"github.com/darkcode/router"
 )
@@ -89,7 +91,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "" {
-		client := s.primaryClient()
+		client, clientModel := s.primaryClientModel()
 		prompt := fmt.Sprintf(`Analyze this user query: %q.
 Determine the required execution mode:
 - "general": A simple question, explanation, or chat that does NOT require using any tools or modifying files.
@@ -99,6 +101,7 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 
 		temp := 0.0
 		llmReq := &core.CompletionRequest{
+			Model: clientModel,
 			Messages: []core.Message{
 				{Role: "system", Content: "You are an orchestration classifier. Output only valid JSON."},
 				{Role: "user", Content: prompt},
@@ -108,8 +111,20 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 
 		// If local LLM is enabled and a classifier LoRA exists, we could mount it here.
 		// For now, we rely on the primary model's intelligence.
-		resp, err := client.ChatCompletion(r.Context(), llmReq)
-		if err == nil && len(resp.Choices) > 0 {
+		//
+		// Hard cap the classifier: it is a best-effort routing optimization,
+		// not the actual work, so it must fail FAST to the deterministic
+		// fallback. Without this bound, a rate-limit 429 (whose Retry-After can
+		// be ~46s) sent the retry layer into a multi-minute backoff chain
+		// while the user's build request just hung. 12s is enough for a healthy
+		// call and short enough that a throttled provider surrenders quickly.
+		classifyCtx, cancelClassify := context.WithTimeout(r.Context(), 12*time.Second)
+		resp, err := client.ChatCompletion(classifyCtx, llmReq)
+		cancelClassify()
+		classified := false
+		if err != nil {
+			log.Printf("[server] auto-mode classifier call failed: %v", err)
+		} else if len(resp.Choices) > 0 {
 			text := resp.Choices[0].Message.Content
 			var result struct {
 				Mode         string `json:"mode"`
@@ -117,18 +132,51 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 				ProjectName  string `json:"project_name"`
 				ProjectDesc  string `json:"project_description"`
 			}
-			if err := json.Unmarshal([]byte(text), &result); err == nil {
+			// Models routinely wrap the JSON in ```json fences or prose —
+			// extract the outermost object instead of failing silently (the
+			// silent failure disabled auto mode-detection AND project
+			// auto-creation whenever the primary model used fences).
+			if jerr := json.Unmarshal([]byte(extractJSONObject(text)), &result); jerr == nil && result.Mode != "" {
+				classified = true
 				req.ChatMode = result.Mode // switch to the detected mode
+				log.Printf("[server] auto-mode classified query → mode=%s is_new_project=%v", result.Mode, result.IsNewProject)
 
-				if result.IsNewProject && req.Project == "" && s.projects != nil {
-					if proj, err := s.projects.Create(result.ProjectName, result.ProjectDesc, s.ActiveWorkspace(), nil); err == nil {
-						req.Project = proj.ID
-						if s.emitter != nil {
-							s.emitter.EmitTaskUpdate("project_auto_created", proj.ID, proj.Name)
-						}
-						s.seedProjectPlanWorkflow(proj.ID, proj.Name, proj.Description, "")
+				// Project auto-creation is deterministic-first: any build-shaped
+				// task (mode loop, or mode project with a creation verb) gets a
+				// project so context accumulation, plan/workflow, and the
+				// Blueprint tab all work — the classifier's is_new_project
+				// opinion alone proved too flaky to carry the feature.
+				if req.Project == "" && (result.IsNewProject || isBuildIntent(req.Query, result.Mode)) {
+					if id := s.autoCreateProject(req.Query, result.ProjectName, result.ProjectDesc); id != "" {
+						req.Project = id
 					}
 				}
+			} else {
+				log.Printf("[server] auto-mode classifier output unparsable: %v", jerr)
+			}
+		}
+
+		// Deterministic fallback: when the classifier call failed or its output
+		// was unusable (e.g. the free-tier daily quota is exhausted, so no LLM
+		// call succeeds), don't abandon auto mode — infer intent from the query
+		// itself so a build task still gets loop mode AND a project. Without
+		// this, a rate-limited classifier silently downgraded every build to a
+		// project-less single turn (the reported "auto project creation not
+		// working" symptom).
+		if !classified {
+			if isBuildIntent(req.Query, "project") || looksLikeBuild(req.Query) {
+				req.ChatMode = "loop"
+				log.Printf("[server] classifier unavailable — deterministic fallback → loop mode (build intent)")
+				if req.Project == "" {
+					if id := s.autoCreateProject(req.Query, "", ""); id != "" {
+						req.Project = id
+					}
+				}
+			} else {
+				// No build signal and no classification → treat as a plain
+				// question so a rate-limited classifier doesn't strand the
+				// turn in tool-enabled auto mode.
+				req.ChatMode = "general"
 			}
 		}
 	}
@@ -140,7 +188,8 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	}
 	toolsOverride := "on"
 	if req.ChatMode == "general" {
-		toolsOverride = "off"
+		// Chat mode: read-only tools (read/list/search/web), never writes.
+		toolsOverride = "readonly"
 	}
 	restoreOverrides := s.kernel.ApplyRequestOverrides(req.Mode, req.Safety, loopOverride, toolsOverride, req.Brain)
 	defer restoreOverrides()
@@ -222,7 +271,7 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	// loop between execution and the Blueprint tab's live status. Best
 	// effort: stays "" when there's no active project or nothing pending,
 	// in which case the write-back below is simply skipped.
-	var pendingTaskID string
+	var pendingTaskID, pendingTaskLine string
 	if req.Project != "" && s.projects != nil {
 		plan, _ := s.projects.GetPlan(req.Project)
 		workflow, _ := s.projects.GetWorkflow(req.Project)
@@ -233,16 +282,10 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 		if amending {
 			plan, workflow = s.amendPlanWorkflowSync(ctx, req.Project, req.Query, plan, workflow)
 		}
-		if id, _, ok := orchestrator.NextPendingWorkflowTask(workflow); ok {
+		if id, line, ok := orchestrator.NextPendingWorkflowTask(workflow); ok {
 			pendingTaskID = id
+			pendingTaskLine = line
 		}
-		// Phase 4 — brief-first project memory. On a routine (non-amend) turn the
-		// compact, auto-updated project brief is already prepended to the query by
-		// BuildContextQuery, so inject only the task workflow (needed for task
-		// continuity) instead of the full ~8K implementation plan. The full plan
-		// is injected only when the user is actively shaping it (an amend/planning
-		// turn). This keeps routine turns small and makes resuming a project cheap
-		// — the brief carries "what this project is" without re-feeding the plan.
 		if amending {
 			s.kernel.SetProjectContext(plan, workflow)
 		} else {
@@ -280,11 +323,53 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	// still slip through as a false-positive "done" — Execute doesn't
 	// currently distinguish that case from real work in its return value —
 	// but that's a narrower, lower-stakes gap than the General-mode one.
-	if pendingTaskID != "" && req.Project != "" && s.projects != nil && req.ChatMode != "general" {
-		if err := s.projects.MarkTaskStatus(req.Project, pendingTaskID, project.TaskDone); err != nil {
+	// Subtask verification + completeness auto-continue (ChatManager). Build
+	// executes one workflow subtask per turn; before ticking it [x] we VERIFY
+	// its implied deliverable actually exists — a subtask that says "create
+	// index.html" isn't done until an .html file is present. Then, if the whole
+	// request's expected artifacts are still incomplete, auto-continue once to
+	// finish (bounded), so "make a website" can't stop having skipped the .js.
+	cm := orchestrator.NewChatManager()
+	// A plan-proposal turn produced no artifacts — the output is the plan
+	// preview awaiting the user's approve/revise/reject. Running the build
+	// completeness check against it would find "gaps" and auto-continue,
+	// re-entering the kernel and mangling the pending plan, so both the
+	// completeness pass and the subtask tick are skipped on proposal turns.
+	awaitingPlan := s.kernel != nil && s.kernel.PlanAwaitingApproval()
+	buildTurn := req.ChatMode != "general" && !awaitingPlan // Chat is read-only; it never "builds"
+	if buildTurn {
+		output = s.completeBuild(ctx, cm, req.Query, ws, output)
+	}
+	if pendingTaskID != "" && req.Project != "" && s.projects != nil && buildTurn {
+		// Only mark the subtask done when its own deliverable is verified present.
+		taskDone, taskGaps := cm.CheckCompleteness(pendingTaskLine, ws)
+		if !taskDone {
+			log.Printf("[server] task %s left pending — unmet: %v", pendingTaskID, taskGaps)
+		} else if err := s.projects.MarkTaskStatus(req.Project, pendingTaskID, project.TaskDone); err != nil {
 			log.Printf("[server] failed to mark task %s done: %v", pendingTaskID, err)
 		} else if updated, err := s.projects.GetWorkflow(req.Project); err == nil && s.emitter != nil {
 			s.emitter.EmitWorkflowUpdated(req.Project, updated)
+		}
+	}
+
+	// Persist the plan graph to the active project. An EXECUTED graph (with
+	// final node statuses) is saved as graph.json — the typed source of
+	// truth — and, when the project's blueprint is still the seed skeleton
+	// (or empty), the graph is also rendered into plan.md/workflow.md so the
+	// Blueprint tab shows the real plan instead of "Awaiting plan
+	// generation". A hand-shaped blueprint is never clobbered. A PENDING
+	// proposal gets the same render treatment so the user can review the
+	// plan in the Blueprint tab while it awaits approval in chat.
+	if s.kernel != nil && req.Project != "" && s.projects != nil {
+		if g, ok := s.kernel.ConsumeApprovedPlan(); ok {
+			if b := g.Bytes(); b != nil {
+				if err := s.projects.SetPlanGraph(req.Project, b); err != nil {
+					log.Printf("[server] failed to persist plan graph: %v", err)
+				}
+			}
+			s.upgradeBlueprintFromGraph(req.Project, g)
+		} else if g, ok := s.kernel.PendingPlanGraph(); ok && awaitingPlan {
+			s.upgradeBlueprintFromGraph(req.Project, g)
 		}
 	}
 
@@ -316,6 +401,191 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	})
 }
 
+// maxCompletePasses bounds the ChatManager's auto-continue so a stuck build
+// can't loop forever; cost is incurred only when a real gap is detected.
+const maxCompletePasses = 2
+
+// completeBuild runs bounded completeness auto-continue: while the goal's
+// expected artifacts are missing from the workspace, it re-invokes the kernel
+// with a focused corrective goal so a Build finishes what it started instead of
+// stopping with skipped deliverables (the "made a website but no .js" failure).
+// Appends each corrective result to the output. No-op when nothing is missing.
+func (s *Server) completeBuild(ctx context.Context, cm *orchestrator.ChatManager, goal, workspace, output string) string {
+	for pass := 0; pass < maxCompletePasses; pass++ {
+		done, gaps := cm.CheckCompleteness(goal, workspace)
+		if done {
+			break
+		}
+		if s.emitter != nil {
+			s.emitter.EmitTaskUpdate("complete", "auto-continue", "Incomplete — creating: "+strings.Join(gaps, ", "))
+		}
+		corrective := fmt.Sprintf("The work so far is INCOMPLETE for the goal %q. It is still missing: %s. Create ONLY the missing file(s) now, with real, working content — do not repeat what already exists.",
+			goal, strings.Join(gaps, ", "))
+		more, err := s.kernel.Execute(ctx, corrective)
+		if err != nil {
+			log.Printf("[server] completeness auto-continue failed: %v", err)
+			break
+		}
+		output += "\n\n" + strings.TrimSpace(more)
+	}
+	return output
+}
+
+// autoCreateProject creates a project for a build task, seeds its blueprint
+// skeleton, and returns the new project id (or "" on failure). Name/desc fall
+// back to values derived from the query when the classifier didn't supply
+// them.
+func (s *Server) autoCreateProject(query, name, desc string) string {
+	if s.projects == nil {
+		return ""
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = deriveProjectName(query)
+	}
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		desc = query
+	}
+	proj, err := s.projects.Create(name, desc, s.ActiveWorkspace(), nil)
+	if err != nil {
+		log.Printf("[server] project auto-creation failed: %v", err)
+		return ""
+	}
+	log.Printf("[server] auto-created project %s (%q) for build task", proj.ID, proj.Name)
+	if s.emitter != nil {
+		s.emitter.EmitTaskUpdate("project_auto_created", proj.ID, proj.Name)
+	}
+	s.seedProjectPlanWorkflow(proj.ID, proj.Name, proj.Description, "")
+	return proj.ID
+}
+
+// looksLikeBuild is the classifier-free build detector used by the
+// deterministic fallback: a build verb anywhere plus an artifact-ish noun, or
+// an explicit "app/website/api/..." mention. Deliberately broader than
+// isBuildIntent (which trusts the classifier's mode) since here there is no
+// mode to lean on.
+func looksLikeBuild(query string) bool {
+	q := strings.ToLower(query)
+	hasVerb := false
+	for _, v := range buildVerbs {
+		if strings.Contains(q, v+" ") {
+			hasVerb = true
+			break
+		}
+	}
+	if !hasVerb {
+		return false
+	}
+	for _, noun := range []string{"app", "website", "web page", "webpage", "site", "api", "service", "server", "script", "program", "tool", "page", "dashboard", "bot", "game", "cli"} {
+		if strings.Contains(q, noun) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildVerbs are the creation verbs that mark a query as a build task for
+// deterministic project auto-creation (see the auto-mode classifier block).
+var buildVerbs = []string{
+	"create", "build", "make", "implement", "develop", "write", "generate",
+	"scaffold", "set up", "setup", "bootstrap", "design and",
+}
+
+// isBuildIntent reports whether a query is build-shaped: loop mode always is;
+// project mode is when the query leads with (or contains early) a creation
+// verb. Questions and read-only tasks stay project-less.
+func isBuildIntent(query, mode string) bool {
+	switch mode {
+	case "loop":
+		return true
+	case "project":
+		q := strings.ToLower(strings.TrimSpace(query))
+		head := q
+		if len(head) > 80 {
+			head = head[:80]
+		}
+		for _, v := range buildVerbs {
+			if strings.HasPrefix(q, v+" ") || strings.Contains(head, " "+v+" ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// deriveProjectName builds a short human project name from the query when
+// the classifier didn't supply one: the first few meaningful words, minus
+// leading creation verbs and articles.
+func deriveProjectName(query string) string {
+	words := strings.Fields(strings.TrimSpace(query))
+	skip := map[string]bool{
+		"create": true, "build": true, "make": true, "implement": true,
+		"develop": true, "write": true, "generate": true, "scaffold": true,
+		"please": true, "a": true, "an": true, "the": true, "me": true,
+		"new": true, "set": true, "up": true, "setup": true,
+	}
+	var kept []string
+	for _, w := range words {
+		lw := strings.ToLower(strings.Trim(w, ".,!?:;\"'"))
+		if len(kept) == 0 && skip[lw] {
+			continue
+		}
+		if lw == "" {
+			continue
+		}
+		kept = append(kept, strings.Trim(w, ".,!?:;\"'"))
+		if len(kept) >= 5 {
+			break
+		}
+	}
+	name := strings.Join(kept, " ")
+	if len(name) > 48 {
+		name = name[:48]
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "Untitled Build"
+	}
+	return name
+}
+
+// upgradeBlueprintFromGraph renders a plan graph into the project's
+// plan.md/workflow.md — but only over an empty or still-skeleton blueprint,
+// so a hand-shaped project plan is never clobbered by a per-request graph.
+func (s *Server) upgradeBlueprintFromGraph(projID string, g *plan.Graph) {
+	if cur, _ := s.projects.GetPlan(projID); isSkeletonBlueprint(cur) {
+		planMD := plan.RenderMarkdown(g)
+		if err := s.projects.SetPlan(projID, planMD); err == nil && s.emitter != nil {
+			s.emitter.EmitPlanUpdated(projID, planMD)
+		}
+	}
+	if cur, _ := s.projects.GetWorkflow(projID); isSkeletonBlueprint(cur) {
+		wf := plan.RenderWorkflow(g)
+		if err := s.projects.SetWorkflow(projID, wf); err == nil && s.emitter != nil {
+			s.emitter.EmitWorkflowUpdated(projID, wf)
+		}
+	}
+}
+
+// isSkeletonBlueprint reports whether a stored plan/workflow is still the
+// idempotent seed skeleton (or empty) — i.e. safe to overwrite with a real
+// rendered plan.
+func isSkeletonBlueprint(content string) bool {
+	c := strings.TrimSpace(content)
+	return c == "" || strings.Contains(c, "_Status: awaiting first task_")
+}
+
+// extractJSONObject returns the outermost {...} substring of s, tolerating
+// markdown fences and surrounding prose. Returns s unchanged when no object
+// braces are found (json.Unmarshal then produces the error it would have
+// anyway).
+func extractJSONObject(s string) string {
+	if i, j := strings.Index(s, "{"), strings.LastIndex(s, "}"); i >= 0 && j > i {
+		return s[i : j+1]
+	}
+	return s
+}
+
 func (s *Server) handleCancelChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		writeError(w, http.StatusMethodNotAllowed, "use POST")
@@ -327,7 +597,7 @@ func (s *Server) handleCancelChat(w http.ResponseWriter, r *http.Request) {
 		s.activeChatCancel = nil
 	}
 	s.activeChatCancelMu.Unlock()
-	
+
 	if s.approver != nil {
 		s.approver.CancelAll()
 	}

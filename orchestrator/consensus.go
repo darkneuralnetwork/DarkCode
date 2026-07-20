@@ -48,15 +48,6 @@ func (k *Kernel) runConsensusOnOutput(ctx context.Context, userGoal, output, too
 		k.emitter.EmitTaskUpdate("consensus", "synthesis", "Multi-model consensus synthesis on agentic output")
 	}
 
-	// Build messages: prior conversation history + the original question +
-	// the agentic loop's answer + a review request. Each non-primary model
-	// sees these and responds from its role persona; the primary then
-	// synthesizes all reviews into the final. STM is prepended (matching
-	// runConsensus's pattern above) so a persona model reviewing a later
-	// turn — e.g. a short follow-up referencing something from earlier in
-	// the conversation — is grounded in the actual history instead of only
-	// this one isolated exchange, which previously produced confused
-	// "I don't understand" reviews on legitimate context-dependent follow-ups.
 	reviewReq := "Review the above answer from your assigned role's perspective. Provide your assessment, corrections, or enhancements."
 	if strings.TrimSpace(toolTrace) != "" {
 		reviewReq = "The agent has ALREADY executed these tools with REAL results during this task:\n" +

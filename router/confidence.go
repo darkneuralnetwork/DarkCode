@@ -1,18 +1,5 @@
 package router
 
-// confidence.go — ConfidenceScorer evaluates how confident a model's response
-// appears. Previously this returned a hardcoded 0.9 for any response that
-// didn't contain a hedge phrase. It now performs a multi-signal analysis:
-//
-//   - Hedge phrases ("I'm not sure", "might be", "approximately") → penalty
-//   - Confidence markers ("definitely", "the answer is", "certainly") → boost
-//   - Question marks in the response (uncertainty) → penalty
-//   - Code blocks / structured output (decisiveness) → boost
-//   - Response length: very short or very long → slight penalty
-//   - Refusal markers ("I can't", "I cannot") → low confidence
-//
-// The final score is clamped to [0.0, 1.0].
-
 import (
 	"math"
 	"strings"

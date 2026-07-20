@@ -3,6 +3,7 @@ package memory
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,7 +120,7 @@ func (w *DebouncedWriter) flush() {
 		return
 	}
 
-	if err := os.WriteFile(w.path, data, 0644); err != nil {
+	if err := atomicWriteFile(w.path, data, 0600); err != nil {
 		atomic.AddInt64(&w.errors, 1)
 		log.Printf("[memory] debounced writer: write error for %s: %v", w.path, err)
 		// Re-mark dirty so we retry on next interval.
@@ -128,6 +129,37 @@ func (w *DebouncedWriter) flush() {
 	}
 
 	atomic.AddInt64(&w.writes, 1)
+}
+
+// atomicWriteFile writes data to a sibling temp file, fsyncs it, then renames
+// it over path. The rename is atomic on POSIX, so a crash mid-write can never
+// leave the shared memory/knowledge-graph file half-written — a reader always
+// sees either the old complete file or the new complete file, never a truncated
+// one. Mode 0600 keeps stored project/memory content owner-only.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // FlushNow forces an immediate synchronous flush, bypassing the debounce.

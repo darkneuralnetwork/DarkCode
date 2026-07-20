@@ -1,10 +1,5 @@
 package intelligence
 
-// index.go — ProjectIndex orchestrates a workspace scan, populating the symbol,
-// dependency, import, call, and class graphs from Go AST. This is the real
-// implementation of spec §7 (Project Intelligence); previously only the
-// symbol graph was populated and the rest were empty structs.
-
 import (
 	"os"
 	"path/filepath"
@@ -128,27 +123,27 @@ func (p *ProjectIndex) Stats() map[string]interface{} {
 		}
 	}
 	return map[string]interface{}{
-		"total_symbols":   p.symbols.Count(),
-		"functions":       funcCount,
-		"types":           typeCount,
-		"packages":        p.deps.PackageCount(),
-		"indexed_files":   p.imports.FileCount(),
-		"call_edges":      p.calls.EdgeCount(),
-		"class_types":     p.classes.TypeCount(),
-		"language":        p.workspace.Language,
-		"lsp_connected":   p.lsp.Available(),
-		"health":          "Online",
+		"total_symbols": p.symbols.Count(),
+		"functions":     funcCount,
+		"types":         typeCount,
+		"packages":      p.deps.PackageCount(),
+		"indexed_files": p.imports.FileCount(),
+		"call_edges":    p.calls.EdgeCount(),
+		"class_types":   p.classes.TypeCount(),
+		"language":      p.workspace.Language,
+		"lsp_connected": p.lsp.Available(),
+		"health":        "Online",
 	}
 }
 
 // Graphs exposes the individual graphs for tool/UI consumption.
-func (p *ProjectIndex) Symbols() *SymbolGraph   { return p.symbols }
+func (p *ProjectIndex) Symbols() *SymbolGraph          { return p.symbols }
 func (p *ProjectIndex) Dependencies() *DependencyGraph { return p.deps }
-func (p *ProjectIndex) Calls() *CallGraph        { return p.calls }
-func (p *ProjectIndex) Imports() *ImportGraph    { return p.imports }
-func (p *ProjectIndex) Classes() *ClassGraph     { return p.classes }
-func (p *ProjectIndex) Workspace() *WorkspaceMetadata { return p.workspace }
-func (p *ProjectIndex) Watcher() *FileWatcher    { return p.watcher }
+func (p *ProjectIndex) Calls() *CallGraph              { return p.calls }
+func (p *ProjectIndex) Imports() *ImportGraph          { return p.imports }
+func (p *ProjectIndex) Classes() *ClassGraph           { return p.classes }
+func (p *ProjectIndex) Workspace() *WorkspaceMetadata  { return p.workspace }
+func (p *ProjectIndex) Watcher() *FileWatcher          { return p.watcher }
 
 // packageOf derives the Go package path from a file path (directory).
 func packageOf(file string) string {

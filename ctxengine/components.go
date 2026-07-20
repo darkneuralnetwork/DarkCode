@@ -1,16 +1,5 @@
 package ctxengine
 
-// components.go — real context-intelligence components (spec §6, "the core
-// innovation"). Previously these were stubs: Summarize() returned
-// "[Summarized Context]" and Rank() was a no-op. They now implement:
-//   - IncrementalSummarizer: extractive summarization (top sentences by score)
-//     with an optional LLM fast-path.
-//   - ContextRanker: TF-IDF relevance scoring + recency boost.
-//   - Deduplicator: exact + near-duplicate (shingle hash) dedup.
-//   - TokenBudgetManager: real ~4 chars/token estimation, keep newest +
-//     highest-ranked, summarize the rest.
-//   - AdaptiveCompressor: truncate-with-reference fallback.
-
 import (
 	"context"
 	"math"

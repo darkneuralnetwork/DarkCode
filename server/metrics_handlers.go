@@ -10,10 +10,10 @@ import (
 	"github.com/darkcode/capability"
 	"github.com/darkcode/config"
 	"github.com/darkcode/llm"
-	"github.com/darkcode/provider"
-	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/observability"
+	"github.com/darkcode/provider"
+	"github.com/darkcode/provider/embedded"
 )
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
@@ -78,13 +78,6 @@ func (s *Server) handleModelsFetch(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if p.ID == "embedded" {
-		// Use the shared singleton (embedded.Default) exactly as startup
-		// configured it — do NOT call Configure here with a CWD-relative
-		// "./models": that unconditionally overwrites the singleton's
-		// modelsDir on every call, clobbering the system-wide
-		// ~/.darkcode/models path app_wireup.go set at startup (local-first
-		// upgrade §6b) with a stale per-directory path the moment a user
-		// opens the GUI's model picker for local models.
 		embProv := embedded.Default()
 		ggufModels, mErr := embProv.ListModels(r.Context())
 		if mErr != nil {
@@ -286,7 +279,7 @@ func (s *Server) handleCapability(w http.ResponseWriter, r *http.Request) {
 	}
 	tier := capability.AssignTier(caps)
 	hw := observability.GetHardwareStats()
-	
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"hardware": hw,
 		"tier":     tier.String(),

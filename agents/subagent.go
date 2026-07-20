@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
-	"github.com/darkcode/dag"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
@@ -325,11 +323,15 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				content = "(tool returned nil result)"
 			}
 
+			toolName := result.Name
+			if toolName == "" {
+				toolName = "unknown_tool"
+			}
 			a.messages = append(a.messages, core.Message{
 				Role:       core.RoleTool,
 				Content:    content,
 				ToolCallID: result.CallID,
-				Name:       result.Name,
+				Name:       toolName,
 			})
 		}
 	}
@@ -447,278 +449,6 @@ func buildAgentSystemPrompt(role core.AgentRole, goal, context string) string {
 	}
 
 	return sb.String()
-}
-
-// ============================================================================
-// PLANNER AGENT — Specialized for DAG creation
-// ============================================================================
-
-// PlannerResult is the structured output of a planner agent.
-type PlannerResult struct {
-	Tasks []PlannerTask `json:"tasks"`
-}
-
-// PlannerTask is a single task parsed from the planner's output.
-type PlannerTask struct {
-	Name     string            `json:"name"`
-	Goal     string            `json:"goal"`
-	Deps     []string          `json:"dependencies"`
-	Agent    core.AgentRole    `json:"agent"`
-	Priority core.TaskPriority `json:"priority"`
-}
-
-// ParsePlannerOutput extracts structured tasks from the planner agent's
-// output. It prefers a JSON array (the format the planner prompt now
-// requests — far more robust to LLM formatting drift than delimited text,
-// especially on smaller local models), and falls back to the legacy
-// pipe-delimited `TASK: … | GOAL: …` format so a model that ignores the JSON
-// instruction, or a persisted older plan, still parses.
-func ParsePlannerOutput(text string) []PlannerTask {
-	if tasks := parsePlannerJSON(text); len(tasks) > 0 {
-		return tasks
-	}
-	return parsePlannerPipe(text)
-}
-
-// plannerJSONTask is the wire shape the planner emits: all fields are plain
-// strings so role/priority go through the same normalization as the legacy
-// parser (rather than requiring the model to emit exact enum values).
-type plannerJSONTask struct {
-	Name     string   `json:"name"`
-	Goal     string   `json:"goal"`
-	Deps     []string `json:"dependencies"`
-	Agent    string   `json:"agent"`
-	Priority string   `json:"priority"`
-}
-
-// parsePlannerJSON extracts a JSON array of tasks from the planner output,
-// tolerating surrounding prose or ```json fences by scanning for the first
-// balanced top-level [...] block. Returns nil if no valid task array is found.
-func parsePlannerJSON(text string) []PlannerTask {
-	raw := extractJSONArray(text)
-	if raw == "" {
-		return nil
-	}
-	var wire []plannerJSONTask
-	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
-		return nil
-	}
-	var tasks []PlannerTask
-	for _, w := range wire {
-		name := strings.TrimSpace(w.Name)
-		if name == "" {
-			continue
-		}
-		var deps []string
-		for _, d := range w.Deps {
-			if d = strings.TrimSpace(d); d != "" && !strings.EqualFold(d, "none") {
-				deps = append(deps, d)
-			}
-		}
-		tasks = append(tasks, PlannerTask{
-			Name:     name,
-			Goal:     strings.TrimSpace(w.Goal),
-			Deps:     deps,
-			Agent:    roleFromString(w.Agent),
-			Priority: priorityFromString(w.Priority),
-		})
-	}
-	return tasks
-}
-
-// extractJSONArray returns the first balanced top-level [...] substring of s,
-// or "" if none. This tolerates a model wrapping the array in prose or a
-// markdown code fence.
-func extractJSONArray(s string) string {
-	start := strings.IndexByte(s, '[')
-	if start < 0 {
-		return ""
-	}
-	depth := 0
-	inStr := false
-	esc := false
-	for i := start; i < len(s); i++ {
-		c := s[i]
-		if inStr {
-			switch {
-			case esc:
-				esc = false
-			case c == '\\':
-				esc = true
-			case c == '"':
-				inStr = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inStr = true
-		case '[':
-			depth++
-		case ']':
-			depth--
-			if depth == 0 {
-				return s[start : i+1]
-			}
-		}
-	}
-	return ""
-}
-
-// parsePlannerPipe parses the legacy pipe-delimited planner format.
-func parsePlannerPipe(text string) []PlannerTask {
-	var tasks []PlannerTask
-	lines := strings.Split(text, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "TASK:") {
-			continue
-		}
-		if strings.Contains(line, "PLAN_END") {
-			break
-		}
-
-		task := parseTaskLine(line)
-		if task.Name != "" {
-			tasks = append(tasks, task)
-		}
-	}
-
-	return tasks
-}
-
-// roleFromString maps a free-text agent label to an AgentRole, defaulting to
-// RoleWorker. Shared by the JSON and pipe planner parsers.
-func roleFromString(s string) core.AgentRole {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "critic":
-		return core.RoleCritic
-	case "planner":
-		return core.RolePlanner
-	case "executive":
-		return core.RoleExecutive
-	case "research":
-		return core.RoleResearch
-	case "qa":
-		return core.RoleQA
-	case "security":
-		return core.RoleSecurity
-	case "ops":
-		return core.RoleOps
-	default:
-		return core.RoleWorker
-	}
-}
-
-// priorityFromString maps a free-text priority label to a TaskPriority,
-// defaulting to PriorityNormal. Shared by the JSON and pipe planner parsers.
-func priorityFromString(s string) core.TaskPriority {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "critical":
-		return core.PriorityCritical
-	case "high":
-		return core.PriorityHigh
-	case "low":
-		return core.PriorityLow
-	default:
-		return core.PriorityNormal
-	}
-}
-
-func parseTaskLine(line string) PlannerTask {
-	task := PlannerTask{
-		Agent:    core.RoleWorker,
-		Priority: core.PriorityNormal,
-	}
-
-	// Parse: TASK: <name> | GOAL: <desc> | DEPS: <deps> | AGENT: <type> | PRIORITY: <level>
-	parts := strings.Split(line, "|")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "TASK:") {
-			task.Name = strings.TrimSpace(strings.TrimPrefix(part, "TASK:"))
-		} else if strings.HasPrefix(part, "GOAL:") {
-			task.Goal = strings.TrimSpace(strings.TrimPrefix(part, "GOAL:"))
-		} else if strings.HasPrefix(part, "DEPS:") {
-			depsStr := strings.TrimSpace(strings.TrimPrefix(part, "DEPS:"))
-			if depsStr != "" && depsStr != "none" {
-				for _, d := range strings.Split(depsStr, ",") {
-					d = strings.TrimSpace(d)
-					if d != "" {
-						task.Deps = append(task.Deps, d)
-					}
-				}
-			}
-		} else if strings.HasPrefix(part, "AGENT:") {
-			task.Agent = roleFromString(strings.TrimPrefix(part, "AGENT:"))
-		} else if strings.HasPrefix(part, "PRIORITY:") {
-			task.Priority = priorityFromString(strings.TrimPrefix(part, "PRIORITY:"))
-		}
-	}
-
-	return task
-}
-
-// PlannerTasksToDAG converts planner output into a DAG.
-func PlannerTasksToDAG(tasks []PlannerTask) *dag.DAG {
-	d := dag.NewDAG()
-
-	// First pass: create all nodes (so dependencies can be found)
-	nameToID := make(map[string]string)
-	for i, task := range tasks {
-		id := fmt.Sprintf("task_%d", i+1)
-		nameToID[task.Name] = id
-	}
-
-	// Second pass: add nodes with resolved dependencies
-	for i, task := range tasks {
-		id := fmt.Sprintf("task_%d", i+1)
-
-		var deps []string
-		for _, depName := range task.Deps {
-			if depID, ok := nameToID[depName]; ok {
-				deps = append(deps, depID)
-			}
-		}
-
-		node := &core.TaskNode{
-			ID:           id,
-			Name:         task.Name,
-			Goal:         task.Goal,
-			Status:       core.TaskPending,
-			Priority:     task.Priority,
-			Dependencies: deps,
-			AgentRole:    task.Agent,
-			ModelTier:    tierForAgent(task.Agent),
-		}
-
-		_ = d.AddNode(node) // error only on duplicate/missing dep, which we handle
-	}
-
-	return d
-}
-
-// tierForAgent selects the appropriate model tier for an agent role.
-func tierForAgent(role core.AgentRole) core.ModelTier {
-	switch role {
-	case core.RoleExecutive, core.RolePlanner:
-		return core.ModelTierReasoning
-	case core.RoleCritic, core.RoleQA:
-		return core.ModelTierCritic
-	case core.RoleSecurity:
-		return core.ModelTierReasoning
-	case core.RoleResearch:
-		return core.ModelTierCoding
-	case core.RoleOps:
-		return core.ModelTierCoding
-	case core.RoleCompression:
-		return core.ModelTierFast
-	case core.RoleUI:
-		return core.ModelTierFast
-	default:
-		return core.ModelTierCoding
-	}
 }
 
 // ============================================================================

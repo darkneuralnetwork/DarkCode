@@ -1,6 +1,9 @@
 package core
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Role represents the role of a message sender.
 type Role string
@@ -85,3 +88,17 @@ type ContextKey string
 // WorkspaceKey is the key used to store the active workspace path in the context.
 const WorkspaceKey ContextKey = "workspace"
 const ProjectKey ContextKey = "project"
+
+// ReadOnlyToolsKey marks a Chat (read-only) request: only read-only tools are
+// offered to the model and mutating tools are refused. Shared by the tool
+// registry (enforcement) and the ReAct loop (schema selection).
+const ReadOnlyToolsKey ContextKey = "readonly_tools"
+
+// IsReadOnlyTools reports whether ctx carries the read-only tools policy.
+func IsReadOnlyTools(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ReadOnlyToolsKey).(bool)
+	return v
+}

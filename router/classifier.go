@@ -1,21 +1,16 @@
 package router
 
-// classifier.go — TaskClassifier categorizes incoming requests by type so the
-// router can pick the right execution mode. Previously this had only 2
-// keyword checks (rename/find references → deterministic; explain/review →
-// selective). It now covers a broader vocabulary and structural patterns.
-
 import "strings"
 
 // TaskType categorizes the incoming user request.
 type TaskType string
 
 const (
-	TaskTypeDeterministic TaskType = "deterministic" // no LLM needed (rename, refs, imports)
-	TaskTypeSelective     TaskType = "selective"     // single fast model (explain, summarize)
-	TaskTypeFullConsensus TaskType = "full_consensus" // multi-model reasoning (design, debug)
-	TaskTypeTinyLocal     TaskType = "tiny_local"     // run on tiny local model
-	TaskTypeMediumLocal   TaskType = "medium_local"   // run on medium local model
+	TaskTypeDeterministic     TaskType = "deterministic"       // no LLM needed (rename, refs, imports)
+	TaskTypeSelective         TaskType = "selective"           // single fast model (explain, summarize)
+	TaskTypeFullConsensus     TaskType = "full_consensus"      // multi-model reasoning (design, debug)
+	TaskTypeTinyLocal         TaskType = "tiny_local"          // run on tiny local model
+	TaskTypeMediumLocal       TaskType = "medium_local"        // run on medium local model
 	TaskTypeMediumLocalCoding TaskType = "medium_local_coding" // run on medium local model with coding LoRA
 )
 
@@ -89,21 +84,6 @@ func (c *TaskClassifier) Classify(query string) TaskType {
 
 	return TaskTypeSelective
 }
-
-// ============================================================================
-// ENTRY-POINT CLASSIFIER (local-first upgrade §2, Phase A)
-//
-// Maps a query to the cascade rung it should ENTER at, so a rigid waterfall
-// doesn't waste latency probing rungs that obviously can't answer:
-//
-//	rung 0 — deterministic tools (structural/code-navigation intent)
-//	rung 1 — answer cache / near-duplicate recall ("did we", cheap default)
-//	rung 2 — knowledge-graph query (relational/factual: imports, refs, tools)
-//	rung 4 — LLM synthesis (explain/why/design/action — skip retrieval rungs)
-//
-// A query entering at rung N still escalates upward normally on low
-// confidence; the entry point only skips rungs BELOW it.
-// ============================================================================
 
 // Cascade rung indices (§2 of the upgrade plan). Rung 3 (ranked recall) is
 // context injection rather than a direct answerer, so EntryRung never returns

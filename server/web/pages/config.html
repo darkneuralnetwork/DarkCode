@@ -137,6 +137,27 @@
         <div id="cfg-exec-profile-hint" style="font-size: 11px; color: var(--text-dim); margin-top: 10px; line-height: 1.5;">—</div>
       </div>
 
+      <!-- ═══ Planning Phase ═══ -->
+      <div class="glass-panel" style="padding: 24px;">
+        <h3 class="cfg-h3" style="margin-top: 0;">🧭 Planning Phase</h3>
+        <p class="cfg-desc" style="margin-bottom: 16px;">
+          Non-trivial tasks are decomposed into a task graph by the primary model before execution. Approval pauses the plan for your review — reply <b>approve</b>, <b>reject</b>, or describe changes in chat.
+        </p>
+        <div style="font-size: 11px; color: var(--text-mute); margin-bottom: 6px;">Plan approval</div>
+        <div style="display: flex; gap: 8px; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+          <button type="button" class="cfg-plan-seg" data-key="plan_approval" data-value="auto" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Auto <span style="opacity:.6">(deep only)</span></button>
+          <button type="button" class="cfg-plan-seg" data-key="plan_approval" data-value="always" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Always</button>
+          <button type="button" class="cfg-plan-seg" data-key="plan_approval" data-value="never" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Never</button>
+        </div>
+        <div style="font-size: 11px; color: var(--text-mute); margin: 12px 0 6px;">Planning depth</div>
+        <div style="display: flex; gap: 8px; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+          <button type="button" class="cfg-plan-seg" data-key="plan_depth" data-value="auto" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Auto <span style="opacity:.6">(smart)</span></button>
+          <button type="button" class="cfg-plan-seg" data-key="plan_depth" data-value="light" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Light</button>
+          <button type="button" class="cfg-plan-seg" data-key="plan_depth" data-value="deep" style="flex: 1; padding: 8px 4px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 12px; transition: all .15s;">Deep</button>
+        </div>
+        <div id="cfg-plan-hint" style="font-size: 11px; color: var(--text-dim); margin-top: 10px; line-height: 1.5;">—</div>
+      </div>
+
       <!-- ═══ Agentic Loop ═══ -->
       <div class="glass-panel" style="padding: 24px;">
         <h3 class="cfg-h3" style="margin-top: 0;">🔁 Agentic Loop</h3>

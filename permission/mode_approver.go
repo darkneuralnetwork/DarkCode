@@ -1,37 +1,5 @@
 package permission
 
-// ============================================================================
-// MODE-AWARE APPROVER
-//
-// The single source of truth for HOW approval prompts are delivered to the
-// user. It is installed ONCE on the permission gate and delegates each prompt
-// to the right sub-approver based on the currently active UI mode:
-//
-//   • GUI mode → ServerApprover (blocks the tool goroutine, broadcasts an
-//                SSE "approval/request" event, the browser shows a popup,
-//                the user's choice comes back via /api/approvals/decide).
-//   • CLI mode → a terminal Approver (Console.requestApproval) that reads
-//                from stdin with a colored prompt.
-//
-// WHY THIS EXISTS
-//
-// Previously the gate held a single Approver function pointer. main.go set it
-// to ServerApprover.Approve at startup; the CLI console overwrote it with the
-// terminal approver on entry. The bug: switching CLI → GUI never restored the
-// ServerApprover, so in GUI mode (after a CLI session) destructive tool calls
-// invoked the terminal approver, which blocked on a readline that nobody was
-// reading — the GUI popup never appeared, the request hung for 5 minutes, and
-// then auto-denied. "Permission taken in the wrong mode."
-//
-// The ModeAwareApprover fixes this at the root: there is ONE approver on the
-// gate, and it consults an atomic mode flag to decide where the prompt goes.
-// Switching modes just flips the flag (SetMode) — no approver re-installation,
-// no stale function pointers, no race between the two modes.
-//
-// It is safe for concurrent use: the gate serializes prompts (promptMu), and
-// the mode flag is read atomically.
-// ============================================================================
-
 import "sync/atomic"
 
 // UIMode identifies which surface is currently driving interaction.

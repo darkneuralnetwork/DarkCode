@@ -313,7 +313,7 @@ func (c *Compressor) AssembleContext(ctx context.Context, messages []core.Messag
 
 	// 1. Score messages for importance (heuristics from importance.go)
 	_, pinnedIdxs := ScoreMessages(messages)
-	
+
 	// 2. Determine recent sliding window (up to 40% of budget)
 	recentTokens := 0
 	recentStart := len(messages)
@@ -346,7 +346,6 @@ func (c *Compressor) AssembleContext(ctx context.Context, messages []core.Messag
 
 	var result []core.Message
 
-	// 3. Compress the old unpinned messages to reduce cloud burden
 	if len(oldUnpinned) > 0 {
 		snap, err := c.Compress(ctx, oldUnpinned, goal)
 		if err == nil {

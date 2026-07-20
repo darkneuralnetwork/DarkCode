@@ -9,17 +9,6 @@ import (
 	"github.com/darkcode/capability"
 )
 
-// governor.go — the Local Resource Governor: the single decision point for
-// whether and how the local llama-server may be launched. It owns EVERY byte
-// the process will consume — model weights + KV cache (grows with the context
-// window) + pre-loaded LoRA adapters + a fixed runtime overhead — and checks
-// the sum against the machine's FREE memory. Previously three independent
-// checks (downloader model-size budget, loadLocalLLM's 60% cap, and
-// computeLaunchOpts' RAM-tiered context) each looked at one slice of the cost
-// and none saw the total, so model+KV could jointly exceed RAM and swap-thrash
-// the machine. All three now consume one LoadPlan; their private arithmetic is
-// gone, so no second opinion can disagree.
-
 // LoadPlan is the governor's verdict: which model to run, with what context
 // window and parallel slots, and the full memory bill — or a refusal with a
 // human-readable reason. A refusal is surfaced (log, /local, GUI status), not

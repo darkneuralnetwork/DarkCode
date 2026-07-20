@@ -1,18 +1,5 @@
 package memory
 
-// embed_check.go — embedding quality gate (local-first upgrade §9 risk item).
-//
-// The default embedder is the loaded local *chat* model's pooled embeddings
-// via llama-server's --embedding endpoint. Some chat models produce usable
-// sentence embeddings this way; others produce near-degenerate vectors that
-// would make cosine recall WORSE than the keyword fallback. Since a bad
-// embedder fails silently (recall just gets noisier), the wiring layer must
-// not trust one blindly: ValidateEmbedder runs a small built-in probe suite
-// and only passes when the model's vectors actually separate known-similar
-// from known-dissimilar text by a margin. On failure the caller leaves the
-// embedder unset and recall keeps its proven keyword behavior — the fallback
-// guarantees vectors can only ever ADD recall quality, never lose it.
-
 import (
 	"context"
 	"fmt"

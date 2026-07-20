@@ -90,17 +90,8 @@ func NewServer(cfg *config.Config, registry *tools.Registry, memSystem *memory.S
 		// UI session's normal traffic, but bounds a runaway/malicious client.
 		apiRateLimiter: newRateLimiter(10, 30),
 	}
-	// Install the workspace resolver so file/terminal/git tools resolve
-	// relative paths against the active project's path.
-	// We no longer use tools.SetWorkspaceResolver(s.ActiveWorkspace) here,
-	// as workspace is now resolved via context.Context per-request.
 	return s
 }
-
-// buildProjectContextQuery was centralized into project.Store.BuildContextQuery
-// so the CLI and server share one summary-aware implementation (the CLI
-// previously injected raw context and diverged from the server's
-// summary-aware path).
 
 // summaryThreshold is the minimum raw context size (bytes) before the server
 // bothers generating a compressed summary. Below this the raw context is small
@@ -169,16 +160,27 @@ func (s *Server) maybeRewriteProjectContext(projID string) {
 // (auto-classifier, project plan/workflow updater) that don't go through the
 // router but should still report accurate metrics. Reads s.cfg under the
 // config lock so it stays consistent with concurrent /api/config writes.
-func (s *Server) primaryClient() *llm.Client {
+func (s *Server) primaryClient() core.LLMClient {
+	c, _ := s.primaryClientModel()
+	return c
+}
+
+// primaryClientModel returns the primary aux client AND its model id. The
+// model id must be threaded onto requests: the router's wrapped client and
+// the local embedded client don't all bake in a default model, so an aux
+// request that omits Model triggers a provider "model is not specified"
+// error. Callers building their own CompletionRequest should set req.Model
+// to the returned id.
+func (s *Server) primaryClientModel() (core.LLMClient, string) {
+	if s.kernel != nil {
+		if c, model, err := s.kernel.PlannerClient(); err == nil && c != nil {
+			return c, model
+		}
+	}
 	s.cfgMu.RLock()
 	baseURL, apiKey, model, provider := s.cfg.BaseURL, s.cfg.APIKey, s.cfg.Model, s.cfg.Provider
 	enableLocal := s.cfg.EnableLocalLLM
 	s.cfgMu.RUnlock()
-	// Local-only setup: no cloud model configured but the embedded llama-server
-	// is running. Route the auxiliary calls (auto-classifier, plan/workflow
-	// rewriter) through it instead of returning a client with an empty BaseURL
-	// — which previously produced silent failures (requests to "/chat/completions"
-	// with no host). This mirrors how the router serves the main chat path.
 	if model == "" && baseURL == "" && enableLocal {
 		if emb := embedded.Default(); emb != nil {
 			if st := emb.Status(); st.State == embedded.StateRunning && st.BaseURL != "" {
@@ -186,25 +188,19 @@ func (s *Server) primaryClient() *llm.Client {
 					c := llm.NewClient(st.BaseURL, "no-key-required", id)
 					c.SetProvider("embedded")
 					c.SetAuthScheme("none")
-					return c
+					return c, id
 				}
 			}
 		}
 	}
 	c := llm.NewClient(baseURL, apiKey, model)
 	c.SetProvider(provider)
-	return c
+	return c, model
 }
 
-// seedProjectPlanWorkflow ensures a freshly created/opened project has a
-// non-empty plan + workflow so the GUI "Plan & Workflow" tab never shows the
-// "Awaiting plan generation…" placeholder indefinitely. It first writes an
-// idempotent skeleton (instant, always succeeds), then kicks off an async
-// LLM generation that rewrites the skeleton from the project's description +
-// context. If the LLM call fails, the skeleton remains — the tab is still
-// populated. This is the root-cause fix for the empty plan/workflow tabs:
-// previously generation only ran after the first chat exchange AND only when
-// req.Project was non-empty, so a new project sat empty until first chat.
+// seedProjectPlanWorkflow gives a new project a non-empty plan + workflow so
+// the GUI tab is never blank: it writes an idempotent skeleton immediately,
+// then kicks off an async LLM rewrite. If the rewrite fails, the skeleton stays.
 func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody string) {
 	if s.projects == nil || strings.TrimSpace(projID) == "" {
 		return
@@ -218,7 +214,10 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 	}
 	// 2. Async LLM rewrite from description + context (best-effort).
 	go func(projID, name, description, ctxBody string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// One combined call (plan + architecture + workflow) replaces the old
+		// two calls — cheaper, and no half-generated state. 60s: the single call
+		// does more work than either half did.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		ctx = context.WithValue(ctx, core.WorkspaceKey, s.ActiveWorkspace())
 		defer func() {
@@ -226,8 +225,7 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 				log.Printf("[server] plan/workflow seed panic: %v", r)
 			}
 		}()
-		client := s.primaryClient()
-		temp := 0.2
+		client, clientModel := s.primaryClientModel()
 		desc := strings.TrimSpace(description)
 		if desc == "" {
 			desc = name
@@ -236,14 +234,20 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 		if strings.TrimSpace(ctxBody) != "" {
 			ctxNote = "\n\nExisting project context:\n" + strutil.TruncateForPrompt(ctxBody, 4000)
 		}
-		planPrompt := fmt.Sprintf("You are an AI architect. Generate a comprehensive Implementation Plan in raw markdown for a project named %q.\nDescription: %s%s\n\nInclude sections like Goal Description, Proposed Changes, and Verification Plan. You MUST also include an Architecture section featuring a Mermaid graph (`graph TD`) visualizing the data flow and project architecture, where every node ID exactly matches a Workflow task ID (format T1, T2, T3, ...). If you have any confusion or underspecified requirements, add an 'Open Questions' section to ask the user.\n\nOutput ONLY the markdown plan, and ensure the mermaid graph is wrapped in ```mermaid ... ```.", name, desc, ctxNote)
-		wfPrompt := fmt.Sprintf("You are an AI architect. Generate a concise Task Workflow in raw markdown for a project named %q.\nDescription: %s%s\n\nFormat every step strictly as \"- [ ] T<n>: <one-line approach>\" (pending) or \"- [x] T<n>: ...\" (done) — assign each task a stable ID (T1, T2, T3, ...) matching the Implementation Plan's Mermaid node IDs. Group steps under ## phase headings.\n\nOutput ONLY the markdown.", name, desc, ctxNote)
-		var planText, wfText string
-		if pResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{Messages: []core.Message{{Role: "system", Content: "You are an AI architect. Keep the plan detailed but concise. You MUST include a Mermaid architecture graph whose node IDs match the workflow's task IDs (T1, T2, ...). Only output valid markdown."}, {Role: "user", Content: planPrompt}}, Temperature: &temp}); err == nil && len(pResp.Choices) > 0 {
-			planText = strings.TrimSpace(pResp.Choices[0].Message.Content)
-		}
-		if wResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{Messages: []core.Message{{Role: "system", Content: "You are an AI architect. Keep the workflow architecture concise. Use \"- [ ] T<n>: ...\" / \"- [x] T<n>: ...\" checkboxes with stable task IDs. Only output valid markdown."}, {Role: "user", Content: wfPrompt}}, Temperature: &temp}); err == nil && len(wResp.Choices) > 0 {
-			wfText = strings.TrimSpace(wResp.Choices[0].Message.Content)
+		planText, wfText, genErr := s.generatePlanWorkflow(ctx, client, clientModel, name, desc, ctxNote)
+		if planText == "" && wfText == "" {
+			// Surface the SPECIFIC failure so the Blueprint tab shows why (e.g.
+			// the clean quota message) plus Regenerate, instead of a generic
+			// error. The skeleton stays visible underneath.
+			reason := "Plan/workflow generation failed — click Regenerate to retry"
+			if genErr != nil {
+				reason = "Plan/workflow generation failed: " + genErr.Error() + " — click Regenerate to retry"
+			}
+			log.Printf("[server] plan/workflow generation produced nothing for %s: %v", projID, genErr)
+			if s.emitter != nil {
+				s.emitter.EmitTaskUpdate("blueprint", "error", reason)
+			}
+			return
 		}
 		if planText != "" {
 			if wfText != "" {
@@ -261,6 +265,65 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 			}
 		}
 	}(projID, name, description, ctxBody)
+}
+
+// generatePlanWorkflow produces the Implementation Plan (with a mermaid
+// architecture graph) AND the Task Workflow in a SINGLE LLM call, split by a
+// stable delimiter. Retries once on failure/empty/parse-miss. Returns
+// ("","",err) when generation genuinely failed so the caller can surface a
+// specific reason (e.g. a clean quota message) instead of a generic error.
+func (s *Server) generatePlanWorkflow(ctx context.Context, client core.LLMClient, model, name, desc, ctxNote string) (plan, workflow string, genErr error) {
+	temp := 0.2
+	sys := "You are an AI software architect. Output ONLY raw markdown, in TWO sections separated by a line containing exactly ===WORKFLOW===\n" +
+		"Section 1 = Implementation Plan: Goal Description, Proposed Changes, Verification Plan, and an Architecture section containing a ```mermaid\\ngraph TD``` whose node IDs are T1, T2, T3, ...\n" +
+		"Section 2 = Task Workflow: every step as \"- [ ] T<n>: <one-line approach>\" grouped under ## phase headings, with task IDs T1, T2, ... matching the mermaid node IDs."
+	user := fmt.Sprintf("Project: %q\nDescription: %s%s", name, desc, ctxNote)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
+			Model:       model,
+			Messages:    []core.Message{{Role: "system", Content: sys}, {Role: "user", Content: user}},
+			Temperature: &temp,
+		})
+		if err != nil || len(resp.Choices) == 0 {
+			log.Printf("[server] plan/workflow call failed (attempt %d): %v", attempt, err)
+			if err != nil {
+				genErr = err
+			}
+			// A non-retryable failure (e.g. daily-quota exhaustion) won't
+			// improve on a second attempt — stop immediately so we surface the
+			// real reason fast instead of trying twice.
+			if err != nil && !llm.IsRetryable(err) {
+				break
+			}
+			continue
+		}
+		plan, workflow = splitPlanWorkflow(strings.TrimSpace(resp.Choices[0].Message.Content))
+		if plan != "" || workflow != "" {
+			return plan, workflow, nil
+		}
+	}
+	return "", "", genErr
+}
+
+// splitPlanWorkflow tolerantly splits a combined plan+workflow response into
+// its two parts, preferring the explicit ===WORKFLOW=== delimiter and falling
+// back to the first checkbox section when the model omits it.
+func splitPlanWorkflow(text string) (plan, workflow string) {
+	for _, delim := range []string{"===WORKFLOW===", "=== WORKFLOW ===", "==WORKFLOW=="} {
+		if i := strings.Index(text, delim); i >= 0 {
+			return strings.TrimSpace(text[:i]), strings.TrimSpace(text[i+len(delim):])
+		}
+	}
+	// No delimiter: split at the section heading that precedes the first
+	// workflow checkbox, if any; otherwise treat the whole thing as the plan.
+	if idx := strings.Index(text, "- [ ]"); idx >= 0 {
+		if head := strings.LastIndex(text[:idx], "\n## "); head >= 0 {
+			return strings.TrimSpace(text[:head]), strings.TrimSpace(text[head:])
+		}
+		return strings.TrimSpace(text[:idx]), strings.TrimSpace(text[idx:])
+	}
+	return strings.TrimSpace(text), ""
 }
 
 // truncateForPrompt caps a string to ~maxChars for inclusion in an LLM prompt.
@@ -301,16 +364,10 @@ func (s *Server) regeneratePlanWorkflow(projID, kind string) {
 // still triggers a real amend.
 const shortContinuationMaxLen = 30
 
-// needsPlanAmend reports whether query should trigger a synchronous
-// plan/workflow rewrite before Execute runs (local-first upgrade §5: "if a
-// new instruction comes, first change these, then go through these only").
-// Skips the amend — reuse the existing plan/workflow unchanged — only for a
-// short continuation after a real prior turn, using the same continuation
-// signal the clarification gate uses (orchestrator.HasActiveConversation)
-// so both decisions agree on what counts as "just a continuation": a bare
-// "continue"/"yes" shouldn't cost an LLM round-trip and shouldn't churn the
-// plan, but anything else is plausibly a new instruction and gets a fresh
-// amend.
+// needsPlanAmend reports whether query should trigger a synchronous plan
+// rewrite before Execute runs. It skips the amend only for a bare continuation
+// ("continue"/"yes") after a real prior turn, using the same signal as the
+// clarification gate; anything else is a plausible new instruction.
 func needsPlanAmend(query string, stm []core.Message, skipReadOnly bool) bool {
 	trimmed := strings.TrimSpace(query)
 	if orchestrator.HasActiveConversation(stm) && len(trimmed) < shortContinuationMaxLen {
@@ -326,58 +383,42 @@ func needsPlanAmend(query string, stm []core.Message, skipReadOnly bool) bool {
 }
 
 // amendPlanWorkflowSync synchronously rewrites the plan+workflow for a new
-// instruction, BEFORE the kernel executes it — replacing the old design
-// where the rewrite ran in a goroutine launched only AFTER Execute returned
-// (racing with a separate pre-Execute "mark task running" goroutine), so
-// execution always ran against a stale plan. Bounded by a tight sub-timeout
-// so a slow LLM can't stall chat; on timeout/error the old plan/workflow are
-// returned unchanged (fail-open — matches the existing best-effort
-// philosophy of every other project LLM call in this file).
+// instruction before the kernel executes it, so execution runs against a fresh
+// plan. Bounded by a tight sub-timeout; on timeout/error the old plan/workflow
+// are returned unchanged (fail-open).
 func (s *Server) amendPlanWorkflowSync(ctx context.Context, projID, query, oldPlan, oldWorkflow string) (string, string) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	// Prefer the local model for these two rewrites when one is healthy
 	// (Part 5b) — else the cloud primary, unchanged. RouteAux returns a
 	// core.LLMClient; fall back to primaryClient when no model routes.
-	var client core.LLMClient = s.primaryClient()
+	client, clientModel := s.primaryClientModel()
 	if s.kernel != nil {
-		if lc, _, ok := s.kernel.RouteAux("plan_amend", 0); ok && lc != nil {
-			client = lc
+		if lc, lm, ok := s.kernel.RouteAux("plan_amend", 0); ok && lc != nil {
+			client, clientModel = lc, lm
 		}
 	}
 	temp := 0.2
 
-	plan := oldPlan
-	planPrompt := fmt.Sprintf("Here is the current Implementation Plan and Architecture:\n%s\n\nThe user just requested: %s\n\nRewrite the implementation plan to reflect this new instruction BEFORE any work is done — describe what will change, not what already happened (the workflow tracks progress separately). You MUST keep the Mermaid architecture graph (```mermaid graph TD ... ```), and every node ID MUST exactly match a Workflow task ID (format T1, T2, T3, ...) — reuse existing IDs for existing tasks and only add new IDs for new tasks. If underspecified, add an 'Open Questions' section. Output ONLY the raw markdown plan.", oldPlan, query)
-	if pResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Messages: []core.Message{
-			{Role: "system", Content: "You are an AI architect. Keep the plan detailed but concise. Only output valid markdown. Always include a Mermaid graph whose node IDs exactly match the workflow's task IDs (T1, T2, ...)."},
-			{Role: "user", Content: planPrompt},
-		},
+	plan, workflow := oldPlan, oldWorkflow
+	sys := "You are an AI software architect. Rewrite a project's plan and workflow to reflect a new instruction, BEFORE any work is done. Output ONLY raw markdown in TWO sections separated by a line containing exactly ===WORKFLOW===\n" +
+		"Section 1 = the updated Implementation Plan: keep the ```mermaid\\ngraph TD``` architecture; node IDs T1,T2,... MUST match workflow task IDs; reuse existing IDs, add new ones only for new tasks; add an 'Open Questions' section if underspecified.\n" +
+		"Section 2 = the updated Task Workflow: \"- [ ] T<n>: ...\" (pending) / \"- [/] T<n>: ...\" (running — mark the task worked on next) / \"- [x] T<n>: ...\" (done); keep task IDs stable, never renumber."
+	user := fmt.Sprintf("Current Implementation Plan:\n%s\n\nCurrent Task Workflow:\n%s\n\nThe user just requested: %s", oldPlan, oldWorkflow, query)
+	if resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
+		Model:       clientModel,
+		Messages:    []core.Message{{Role: "system", Content: sys}, {Role: "user", Content: user}},
 		Temperature: &temp,
-	}); err == nil && len(pResp.Choices) > 0 {
-		if t := strings.TrimSpace(pResp.Choices[0].Message.Content); t != "" {
-			plan = t
+	}); err == nil && len(resp.Choices) > 0 {
+		np, nw := splitPlanWorkflow(strings.TrimSpace(resp.Choices[0].Message.Content))
+		if np != "" {
+			plan = np
+		}
+		if nw != "" {
+			workflow = nw
 		}
 	}
 
-	workflow := oldWorkflow
-	wfPrompt := fmt.Sprintf("Here is the current Task Workflow:\n%s\n\nThe user just requested: %s\n\nRewrite the workflow to reflect this new instruction: adjust or add tasks as needed, and mark the task that will be worked on next as running. Format every line strictly as \"- [ ] T<n>: <one-line approach>\" (pending), \"- [/] T<n>: ...\" (running), or \"- [x] T<n>: ...\" (done). Task IDs (T1, T2, ...) MUST stay stable across rewrites — never renumber an existing task, only add new IDs for genuinely new tasks. Output ONLY the raw markdown checklist.", oldWorkflow, query)
-	if wResp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Messages: []core.Message{
-			{Role: "system", Content: "You are an AI architect. Only output valid markdown checklists with stable T<n> task IDs."},
-			{Role: "user", Content: wfPrompt},
-		},
-		Temperature: &temp,
-	}); err == nil && len(wResp.Choices) > 0 {
-		if t := strings.TrimSpace(wResp.Choices[0].Message.Content); t != "" {
-			workflow = t
-		}
-	}
-
-	// Status-linked flowgraph (local-first upgrade §5): stamp the workflow's
-	// real task status onto the plan's Mermaid graph so the architecture
-	// diagram is a genuine real-time view, not a static snapshot.
 	plan = injectNodeStatus(plan, workflow)
 
 	if projID != "" && s.projects != nil {
@@ -421,13 +462,9 @@ func parseWorkflowTaskStatuses(workflow string) map[string]string {
 // markdown (non-greedy, spans newlines).
 var mermaidFenceRe = regexp.MustCompile("(?s)```mermaid\\n(.*?)```")
 
-// injectNodeStatus appends Mermaid classDef/class styling to the plan's
-// mermaid fence so the architecture flowgraph visually reflects the
-// workflow's real task status (green=done, amber=running, gray=pending) —
-// the "real-time flowgraph which showing whats done and what not" from the
-// local-first upgrade plan, built on the already-vendored mermaid.min.js
-// (no new diagramming library, no client-side changes needed). No-op if the
-// plan has no mermaid fence or the workflow has no ID'd task lines to map.
+// injectNodeStatus styles the plan's mermaid fence so the architecture graph
+// reflects the workflow's task status (green=done, amber=running, gray=pending).
+// No-op if there's no mermaid fence or no ID'd task lines to map.
 func injectNodeStatus(plan, workflow string) string {
 	statuses := parseWorkflowTaskStatuses(workflow)
 	if len(statuses) == 0 {
@@ -538,25 +575,21 @@ func (s *Server) Start(addr string) error {
 	// DarkCode Tool Protocol (HTP) endpoint
 	mux.HandleFunc("/api/htp", s.handleHTP)
 
-	// Plugins endpoint (Phase 16)
 	mux.HandleFunc("/api/plugins", func(w http.ResponseWriter, r *http.Request) {
 		pluginDir := filepath.Join(s.activeWorkspace, "plugins")
 		if s.activeWorkspace == "" {
 			cwd, _ := os.Getwd()
 			pluginDir = filepath.Join(cwd, "plugins")
 		}
-		
+
 		reg := plugin.NewRegistry(pluginDir)
 		_ = reg.DiscoverAll()
-		
+
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"plugins": reg.Plugins(),
 		})
 	})
 
-	// Profiler endpoints (Phase 16). Gated behind --debug: pprof leaks
-	// process args/env and lets any caller trigger CPU-consuming profile
-	// captures, so it must not be registered by default.
 	s.cfgMu.RLock()
 	debugPprof := s.cfg.DebugPprof
 	s.cfgMu.RUnlock()
@@ -605,14 +638,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// corsMiddleware restricts cross-origin access. The embedded frontend is
-// same-origin and needs no CORS headers at all, so we only reflect an Origin
-// when it is a localhost origin (for optional local dev frontends). We never
-// emit "Access-Control-Allow-Origin: *" — that would let any website issue
-// authenticated requests to the local agent (drive-by RCE via /api/tools).
-// securityHeaders adds defense-in-depth browser security headers to every
-// response. The server is loopback-only, but these are cheap and stop common
-// XSS / clickjacking vectors in case the UI is ever proxied or framed.
+// securityHeaders adds defense-in-depth browser security headers (nosniff,
+// frame-deny, no-referrer) to every response. Cheap even though the server is
+// loopback-only, in case the UI is ever proxied or framed.
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -799,8 +827,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Snapshot the config fields under the read lock. handleStatus previously
-	// read s.cfg.Model/Provider/... unlocked, racing with /api/config writes.
 	s.cfgMu.RLock()
 	model, provider, baseURL := s.cfg.Model, s.cfg.Provider, s.cfg.BaseURL
 	routingMode, safetyLevel := s.cfg.RoutingMode, s.cfg.SafetyLevel
@@ -833,7 +859,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		},
 		"hardware": observability.GetHardwareStats(),
 		"embedded": s.embeddedStatus(),
-		"metrics": metrics.Default.Snapshot(),
+		"metrics":  metrics.Default.Snapshot(),
 	})
 }
 
@@ -933,19 +959,10 @@ func (s *Server) signalSwitchToCLI(projectID string) {
 	}
 }
 
-// SetGUIActive toggles whether disconnect-driven CLI resume is armed.
-// main.go calls this on every CLI↔GUI transition:
-//
-//   - entering GUI mode  → SetGUIActive(true)  (arm: a browser close resumes CLI)
-//   - entering CLI mode  → SetGUIActive(false) (disarm: the user is now driving
-//     the terminal; stray SSE disconnects from a leftover browser tab must NOT
-//     fire the grace timer and corrupt the readline prompt, and must NOT push
-//     a stale SwitchToCLI signal that would later bounce GUI→CLI instantly)
-//
-// This is the root-cause fix for the ">>> [gui] last SSE client gone…"
-// prompt-corruption bug: previously ResumeOnDisconnect stayed true across the
-// transition into CLI mode, so a leftover/reopened browser tab could arm the
-// grace timer while the CLI owned the terminal.
+// SetGUIActive arms (GUI) or disarms (CLI) disconnect-driven CLI resume.
+// main.go calls it on every CLI↔GUI transition. Disarming in CLI mode stops a
+// leftover browser tab's SSE disconnect from firing the grace timer and
+// corrupting the terminal prompt.
 func (s *Server) SetGUIActive(active bool) {
 	s.guiMu.Lock()
 	defer s.guiMu.Unlock()

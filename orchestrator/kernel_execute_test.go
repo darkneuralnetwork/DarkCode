@@ -12,8 +12,8 @@ import (
 
 // promptRecorder is a fakeLLMClient respFunc that records every system-prompt
 // it sees (thread-safe, since the DAG/consensus paths call concurrently) and
-// returns a planner-format response when handed the planner prompt so the DAG
-// path actually builds a DAG instead of falling back to direct execution.
+// returns a JSON plan when handed the Planning Engine prompt so the DAG path
+// actually builds a graph instead of falling back to direct execution.
 type promptRecorder struct {
 	mu      sync.Mutex
 	prompts []string
@@ -27,13 +27,13 @@ func (p *promptRecorder) respFunc(idx int, req *core.CompletionRequest) string {
 		if m.Role == core.RoleSystem {
 			c := m.ContentString()
 			p.prompts = append(p.prompts, c)
-			if strings.Contains(c, "Planner Agent") {
+			if strings.Contains(c, "Planning Engine") {
 				isPlanner = true
 			}
 		}
 	}
 	if isPlanner {
-		return plannerResponse(plannerTask{name: "t1", goal: "do the thing"})
+		return `[{"name":"t1","goal":"do the thing","agent":"worker","deps":[]}]`
 	}
 	return "task output"
 }
@@ -70,7 +70,7 @@ func TestExecuteDispatchGeneralMode(t *testing.T) {
 	if !rec.sawPrompt("General (conversational) mode") {
 		t.Error("expected the general-mode (no-tools) path to be taken")
 	}
-	if rec.sawPrompt("Planner Agent") || rec.sawPrompt("Agentic Loop (ReAct)") {
+	if rec.sawPrompt("Planning Engine") || rec.sawPrompt("Agentic Loop (ReAct)") {
 		t.Error("general mode must not enter the DAG or loop paths")
 	}
 }
@@ -112,8 +112,8 @@ func TestExecuteDispatchTrivialDirect(t *testing.T) {
 	if !rec.sawPrompt("Coding Agent") {
 		t.Error("expected the trivial-direct path to spawn a single Coding Agent worker")
 	}
-	if rec.sawPrompt("Planner Agent") {
-		t.Error("a trivial task must not be decomposed via the DAG planner")
+	if rec.sawPrompt("Planning Engine") {
+		t.Error("a trivial task must not be decomposed via the planner")
 	}
 }
 
@@ -132,8 +132,8 @@ func TestExecuteDispatchDAGDecomposition(t *testing.T) {
 	if out == "" {
 		t.Fatal("expected a non-empty answer")
 	}
-	if !rec.sawPrompt("Planner Agent") {
-		t.Error("expected a non-trivial multi-step task to go through the DAG planner")
+	if !rec.sawPrompt("Planning Engine") {
+		t.Error("expected a non-trivial multi-step task to go through the unified planner")
 	}
 }
 

@@ -240,6 +240,45 @@ func (d *DAG) FailedNodes() []*core.TaskNode {
 	return failed
 }
 
+// CancelDescendants marks every transitive dependent of the given node as
+// cancelled (unless it already reached a terminal state) and returns the IDs
+// it cancelled. Called when a node fails: its descendants can never satisfy
+// their dependencies, so cancelling them lets the executor's ready-loop
+// terminate cleanly instead of deadlocking, and records WHY each task didn't
+// run.
+func (d *DAG) CancelDescendants(id string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var cancelled []string
+	queue := append([]string(nil), d.edges[id]...)
+	seen := map[string]bool{id: true}
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		if seen[curr] {
+			continue
+		}
+		seen[curr] = true
+		if node, ok := d.nodes[curr]; ok {
+			switch node.Status {
+			case core.TaskCompleted, core.TaskFailed, core.TaskCancelled:
+				// terminal — leave as-is
+			default:
+				node.Status = core.TaskCancelled
+				now := time.Now()
+				node.CompletedAt = &now
+				if node.Error == "" {
+					node.Error = "cancelled: dependency " + id + " failed"
+				}
+				cancelled = append(cancelled, curr)
+			}
+		}
+		queue = append(queue, d.edges[curr]...)
+	}
+	return cancelled
+}
+
 // computeTopoOrder computes a topological sort using Kahn's algorithm.
 // Must be called with write lock held.
 func (d *DAG) computeTopoOrder() {

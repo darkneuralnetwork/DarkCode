@@ -85,21 +85,27 @@ func (l *Logger) log(level LogLevel, msg string, fields map[string]interface{}) 
 		l.file.Write(append(data, '\n'))
 		l.mu.Unlock()
 	}
-	if l.console {
-		stream := os.Stdout
-		if level == LevelError || level == LevelWarn {
-			stream = os.Stderr
-		}
+	// Console mirroring (CLI mode) is limited to Warn/Error, on stderr. Info/
+	// Debug lines (e.g. "knowledge graph code index synced") go to the logfile
+	// only — mirroring them to stdout collided with the interactive readline
+	// prompt. The /log command surfaces the full activity trace in-app.
+	if l.console && (level == LevelError || level == LevelWarn) {
 		if len(fields) > 0 {
-			fmt.Fprintf(stream, "[%s] %s %v\n", level, msg, fields)
+			fmt.Fprintf(os.Stderr, "[%s] %s %v\n", level, msg, fields)
 		} else {
-			fmt.Fprintf(stream, "[%s] %s\n", level, msg)
+			fmt.Fprintf(os.Stderr, "[%s] %s\n", level, msg)
 		}
 	}
 }
 
 func (l *Logger) Info(msg string, fields map[string]interface{}) {
 	l.log(LevelInfo, msg, fields)
+}
+
+// Debug logs a routine/verbose line. Written to the logfile only (never
+// mirrored to the console), for background housekeeping like index syncs.
+func (l *Logger) Debug(msg string, fields map[string]interface{}) {
+	l.log(LevelDebug, msg, fields)
 }
 
 func (l *Logger) Warn(msg string, fields map[string]interface{}) {

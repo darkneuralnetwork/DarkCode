@@ -78,7 +78,7 @@ func fetchOllamaPS(stats *HardwareStats) {
 	}
 	defer resp.Body.Close()
 	stats.Provider = "local"
-	
+
 	var data struct {
 		Models []struct {
 			SizeVram int64 `json:"size_vram"`
@@ -150,7 +150,7 @@ func getLinuxCPUUsage() float64 {
 	if len(fields) < 5 || fields[0] != "cpu" {
 		return 0
 	}
-	
+
 	var total, idle uint64
 	for i := 1; i < len(fields); i++ {
 		val, _ := strconv.ParseUint(fields[i], 10, 64)
@@ -159,28 +159,20 @@ func getLinuxCPUUsage() float64 {
 			idle = val
 		}
 	}
-	
+
 	if lastCPUTotal == 0 {
 		lastCPUTotal = total
 		lastCPUIdle = idle
 		return 0 // Need two samples
 	}
-	
+
 	totalDiff := float64(total - lastCPUTotal)
 	idleDiff := float64(idle - lastCPUIdle)
 	lastCPUTotal = total
 	lastCPUIdle = idle
-	
+
 	if totalDiff == 0 {
 		return 0
 	}
 	return (1.0 - (idleDiff / totalDiff)) * 100.0
 }
-
-// getWindowsMemory uses wmic or systeminfo for a lightweight Windows fallback
-// getWindowsMemory / getWindowsCPUUsage are implemented per-platform:
-// real kernel32 syscalls in hardware_windows.go, no-op stubs in
-// hardware_notwindows.go. This keeps the Windows-only syscall code out of the
-// cross-platform build while giving the Windows branch above a real
-// implementation (it was previously a `return 0, 0` stub, which is why the
-// Resource Center showed RAM 0/0 and CPU 0% on Windows).

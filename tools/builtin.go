@@ -30,6 +30,7 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(fileTool.ReadSchema()),
 		Handler:     fileTool.ReadFile,
 		Category:    "file",
+		ReadOnly:    true,
 	})
 
 	// List directory
@@ -39,6 +40,7 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(fileTool.ListDirSchema()),
 		Handler:     fileTool.ListDir,
 		Category:    "file",
+		ReadOnly:    true,
 	})
 
 	// File write
@@ -84,6 +86,7 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(searchTool.SearchSchema()),
 		Handler:     searchTool.SearchContent,
 		Category:    "file",
+		ReadOnly:    true,
 	})
 
 	// List files
@@ -93,6 +96,7 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(searchTool.ListSchema()),
 		Handler:     searchTool.ListFiles,
 		Category:    "file",
+		ReadOnly:    true,
 	})
 
 	// Web fetch
@@ -102,6 +106,7 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(webTool.FetchSchema()),
 		Handler:     webTool.FetchURL,
 		Category:    "web",
+		ReadOnly:    true,
 	})
 
 	// Web search
@@ -111,6 +116,7 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(webTool.SearchSchema()),
 		Handler:     webTool.WebSearch,
 		Category:    "web",
+		ReadOnly:    true,
 	})
 
 	// Todo list

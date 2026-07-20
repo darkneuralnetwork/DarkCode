@@ -30,13 +30,17 @@ type ToolHandler func(ctx context.Context, args map[string]interface{}) *ToolRes
 
 // ToolEntry describes a registered tool: its schema and handler.
 type ToolEntry struct {
-	Name        string
-	Description string
-	Parameters  json.RawMessage // JSON Schema
-	Handler     ToolHandler
+	Name          string
+	Description   string
+	Parameters    json.RawMessage // JSON Schema
+	Handler       ToolHandler
 	Category      string // toolset name
 	Source        string // id of the tool source that registered this tool ("builtin" if built-in)
 	Deterministic bool   // if true, router checks this before involving any LLM
+	// ReadOnly marks a tool that only observes (reads files, lists, searches,
+	// fetches) and never mutates the filesystem/system. Chat mode offers only
+	// read-only tools so it can answer from the project without writing.
+	ReadOnly bool
 }
 
 // Registry holds all registered tools. Thread-safe.
@@ -159,10 +163,23 @@ func (r *Registry) Schemas() []ToolDef {
 // which depend on tools. The earlier “avoid import cycles” comment predating
 // this was overly conservative — verified by `go build`.)
 func (r *Registry) LLMSchemas() interface{} {
+	return r.llmSchemas(false)
+}
+
+// LLMSchemasReadOnly returns only the read-only tool schemas — used by Chat
+// mode so the model is never even offered a write/execute tool.
+func (r *Registry) LLMSchemasReadOnly() interface{} {
+	return r.llmSchemas(true)
+}
+
+func (r *Registry) llmSchemas(readOnlyOnly bool) []llm.ToolSchema {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]llm.ToolSchema, 0, len(r.tools))
 	for _, entry := range r.tools {
+		if readOnlyOnly && !entry.ReadOnly {
+			continue
+		}
 		result = append(result, llm.ToolSchema{
 			Type: "function",
 			Function: llm.FunctionDef{
@@ -173,6 +190,17 @@ func (r *Registry) LLMSchemas() interface{} {
 		})
 	}
 	return result
+}
+
+// IsReadOnly reports whether the named tool is read-only (observes, never
+// mutates). Unknown tools are treated as NOT read-only (fail closed).
+func (r *Registry) IsReadOnly(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.tools[name]; ok {
+		return e.ReadOnly
+	}
+	return false
 }
 
 // ToolDef / FunctionDef mirror the llm.ToolSchema but live here so the
@@ -210,7 +238,6 @@ func (r *Registry) DispatchAll(ctx context.Context, calls []core.ToolCall) inter
 
 	results := make([]DispatchResult, len(calls))
 	var wg sync.WaitGroup
-	// Fixed: Bounded worker pool (max 5 concurrent tool executions) to prevent resource exhaustion
 	sem := make(chan struct{}, 5)
 
 	for i, call := range calls {
@@ -285,6 +312,17 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 			Name:    call.Function.Name,
 			Success: false,
 			Error:   "invalid arguments: " + msg,
+		}
+		return result
+	}
+
+	// Read-only policy (Chat mode): refuse any mutating tool. Defense-in-depth
+	// behind not offering write tools to the model at all.
+	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
+		result.Result = &ToolResult{
+			Name:    call.Function.Name,
+			Success: false,
+			Error:   "blocked: " + call.Function.Name + " is a write/execute tool and this is a read-only (Chat) request — switch to Build mode to modify files",
 		}
 		return result
 	}
@@ -599,6 +637,12 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 
 	if msg := validateArgs(entry.Parameters, args); msg != "" {
 		return nil, fmt.Errorf("invalid arguments for tool %s: %s", name, msg)
+	}
+
+	// Read-only policy (Chat mode): refuse mutating tools on this surface too.
+	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
+		return &ToolResult{Name: name, Success: false,
+			Error: "blocked: " + name + " is a write/execute tool and this is a read-only (Chat) request"}, nil
 	}
 
 	// Permission gate: the direct-execute surface (HTTP /api/tools/execute,

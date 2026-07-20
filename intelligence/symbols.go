@@ -1,13 +1,5 @@
 package intelligence
 
-// symbols.go — the symbol graph populated by AST scanning.
-//
-// SymbolGraph holds every top-level declaration (function / struct /
-// interface / type / const / var) discovered across the workspace. It is the
-// backbone of the deterministic toolchain + project intelligence (spec §7):
-// find-references, go-to-definition, call-graph, and inheritance queries all
-// resolve against it without an LLM.
-
 import "strings"
 
 // Symbol is one discovered declaration.

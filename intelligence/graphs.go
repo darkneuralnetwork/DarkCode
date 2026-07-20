@@ -1,15 +1,5 @@
 package intelligence
 
-// graphs.go — real dependency / call / import / class graphs.
-//
-// Previously these were empty structs (spec §7 audit: "empty structs with no
-// fields and no population logic"). They now hold real edges extracted from
-// Go AST scans and support the deterministic queries the spec requires:
-//   - DependencyGraph: package → packages it imports
-//   - ImportGraph:      file → imported packages
-//   - CallGraph:        caller function → callee names
-//   - ClassGraph:       type → embedded types (Go "inheritance")
-
 import "sort"
 
 // DependencyGraph tracks package-level dependencies.
@@ -105,10 +95,10 @@ func (g *ImportGraph) FileCount() int { return len(g.edges) }
 
 // CallEdge is one caller→callee relationship.
 type CallEdge struct {
-	Caller     string // "TypeName.Method" or "func"
-	Callee     string // called identifier
-	File       string
-	Line       int
+	Caller string // "TypeName.Method" or "func"
+	Callee string // called identifier
+	File   string
+	Line   int
 }
 
 // CallGraph tracks function-call relationships.

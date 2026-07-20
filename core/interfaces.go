@@ -187,6 +187,8 @@ type AuditStore interface {
 type ToolRegistry interface {
 	DispatchAll(ctx context.Context, calls []ToolCall) interface{}
 	LLMSchemas() interface{}
+	// LLMSchemasReadOnly returns only read-only tool schemas (Chat mode).
+	LLMSchemasReadOnly() interface{}
 }
 
 // ============================================================================

@@ -92,16 +92,10 @@ func (c *Client) SetAuthScheme(scheme string) *Client {
 	return c
 }
 
-
-
 // setAuth applies the provider-specific auth headers to an HTTP request.
 func (c *Client) setAuth(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 
-	// Anthropic authenticates exclusively with `x-api-key` + `anthropic-version`.
-	// It must NOT also receive `Authorization: Bearer` — the dual header breaks
-	// auth (root cause of the Anthropic model-integration failures). Handle it
-	// before the generic switch so Bearer is never emitted for Anthropic.
 	if c.Provider == "anthropic" && c.APIKey != "" {
 		req.Header.Set("x-api-key", c.APIKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
@@ -262,8 +256,13 @@ func randomID() string {
 // "contents is not specified" errors on Google's Gemini API.
 func sanitizeMessages(msgs []core.Message) {
 	for i := range msgs {
-		if s, ok := msgs[i].Content.(string); ok && s == "" {
+		if s, ok := msgs[i].Content.(string); ok && strings.TrimSpace(s) == "" {
 			msgs[i].Content = nil
+		}
+		for j := range msgs[i].ToolCalls {
+			if strings.TrimSpace(msgs[i].ToolCalls[j].Function.Arguments) == "" {
+				msgs[i].ToolCalls[j].Function.Arguments = "{}"
+			}
 		}
 	}
 }
@@ -274,6 +273,15 @@ func (c *Client) ChatCompletion(ctx context.Context, req *CompletionRequest) (*C
 		return nil, err
 	}
 	req.Stream = false
+	// Default the model to this client's configured model when the caller
+	// left it blank. The request body marshals req.Model directly, so an
+	// empty value sends `"model":""` — which providers like Gemini reject
+	// with "model is not specified". This is the single safety net for every
+	// call site that builds a request without a Model (the "blank name"
+	// error class); the metrics path already used the same fallback.
+	if req.Model == "" {
+		req.Model = c.Model
+	}
 	sanitizeMessages(req.Messages)
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -374,6 +382,11 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionReques
 	}
 	req.Stream = true
 	req.StreamOptions = &StreamOptions{IncludeUsage: true} // request usage in final chunk
+	// See ChatCompletion: default a blank model to this client's own so the
+	// body never sends `"model":""` (the Gemini blank-name rejection).
+	if req.Model == "" {
+		req.Model = c.Model
+	}
 	sanitizeMessages(req.Messages)
 	body, err := json.Marshal(req)
 	if err != nil {

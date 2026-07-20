@@ -1,14 +1,5 @@
 package plugin
 
-// loader.go — discovers and loads plugin binaries from a directory.
-//
-// Previously this tried to load every file (including non-executable ones)
-// as a plugin binary. It now:
-//   - Only loads files that are executable
-//   - Follows a naming convention (plugin-* or *.plugin)
-//   - Skips files that can't be stat'd or aren't regular files
-//   - Continues on individual load failures (logs and moves on)
-
 import (
 	"fmt"
 	"os"

@@ -1,30 +1,5 @@
 package orchestrator
 
-// cascade.go — the cognition cascade controller (local-first upgrade §2/§7
-// Phase A). Before any LLM work, Execute runs the query down a cost-ascending
-// ladder of local answerers, each returning a first-class core.Confidence:
-//
-//	rung 0 — deterministic tools (go/ast + ripgrep, exact, ~free)
-//	rung 1 — answer cache (ConfidentRecall: exact/near-duplicate repeats)
-//	rung 2 — knowledge-graph query (typed code/activity facts, cited)
-//	rung 3 — confident episodic recall (graded reuse of ONE past answer)
-//
-// A rung answers only when its confidence clears cascadeAnswerThreshold;
-// otherwise the query escalates. Rung 3 answers only from a full-coverage or
-// high-cosine match to one specific past successful answer
-// (memory/recall_answer.go); ranked hybrid recall below that bar deliberately
-// stays a context injector for the LLM rungs (4 local / 5 cloud) rather than
-// a direct answerer — see the plan's "graph-first ≠ graph-only".
-//
-// The entry-point classifier (router.TaskClassifier.EntryRung) picks which
-// rung a query STARTS at, so synthesis/action requests skip straight to the
-// LLM path and never risk a confidently-wrong cache hit, while structural
-// questions get the deterministic tools first.
-//
-// Every attempt — hit or escalation — is recorded in the kernel's cascade
-// log: the per-query "which rung answered and why" telemetry that is both
-// the cost-savings proof and the dataset for calibrating the thresholds.
-
 import (
 	"context"
 	"encoding/json"

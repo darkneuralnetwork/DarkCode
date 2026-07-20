@@ -5,52 +5,121 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/darkcode/agents"
 	"github.com/darkcode/core"
 	"github.com/darkcode/dag"
+	"github.com/darkcode/plan"
 )
 
-func (k *Kernel) planAndDecompose(ctx context.Context, goal string) (*dag.DAG, error) {
-	cfg := core.SubAgentConfig{
-		Role:      core.RolePlanner,
-		Goal:      goal, // augmentedGoal already contains conversation history and project context
-		ModelTier: core.ModelTierReasoning,
-		MaxTurns:  3, // planner doesn't need many turns
-	}
-
-	agent, err := k.factory.Spawn(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	result, err := agent.Execute(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse planner output into tasks
-	tasks := agents.ParsePlannerOutput(result.Output)
-	if len(tasks) == 0 {
-		// If planner didn't produce structured tasks, try to parse the goal
-		// as a single task
-		return nil, fmt.Errorf("planner produced no tasks")
-	}
-
-	// Convert to DAG
-	d := agents.PlannerTasksToDAG(tasks)
-
-	// Emit the plan
+// executePlannedGraph runs the graph's DAG, merges the results, verifies,
+// records memory/learning, and emits the final output — the execution half
+// of what Kernel.Execute used to inline for the DAG path. Node statuses and
+// outputs are synced back into the graph, and the graph is retained for the
+// server to persist (ConsumeApprovedPlan).
+func (k *Kernel) executePlannedGraph(ctx context.Context, g *plan.Graph, recallBlock string) (string, error) {
+	goal := g.Goal
+	d := g.ToDAG()
+	k.log("execute", fmt.Sprintf("Executing plan graph: %d task(s) in %d wave(s)", len(g.Nodes), len(g.Waves())))
 	if k.emitter != nil {
-		k.emitter.EmitTaskUpdate("planner", "planned",
-			fmt.Sprintf("DAG with %d tasks", d.NodeCount()))
+		k.emitter.EmitDAGUpdate(d.Summary())
 	}
 
-	return d, nil
+	results, err := k.executeDAG(ctx, d, goal)
+
+	// Sync execution state back into the graph and retain it for the server
+	// to persist to the active project — even on partial failure, so the
+	// persisted graph shows exactly which tasks failed or were blocked.
+	g.SyncFrom(d)
+	k.mu.Lock()
+	k.lastRunPlan = g
+	k.mu.Unlock()
+	if k.emitter != nil {
+		k.emitter.EmitDAGUpdate(d.Summary())
+	}
+
+	if err != nil {
+		if len(results) == 0 {
+			return "", fmt.Errorf("DAG execution failed: %w", err)
+		}
+		// Best-effort recovery: cancellation aborted the DAG, but some
+		// sub-agents did complete. Synthesize what we have instead of
+		// discarding all completed work.
+		k.log("execute", fmt.Sprintf("DAG execution failed (%v) — merging %d completed sub-task result(s)", err, len(results)))
+		merged, mergeErr := k.mergeResults(ctx, results, goal)
+		if mergeErr != nil {
+			return "", fmt.Errorf("DAG execution failed: %w", err)
+		}
+		merged = fmt.Sprintf("[Partial result — DAG execution did not complete: %v]\n\n%s", err, merged)
+		k.recordOutcome(goal, merged, results, false, "dag", 0, recallBlock)
+		return merged, nil
+	}
+
+	// Merge results
+	k.log("merge", "Merging sub-agent results")
+	merged, err := k.mergeResults(ctx, results, goal)
+	if err != nil {
+		return "", fmt.Errorf("merge failed: %w", err)
+	}
+
+	// Surface failed/blocked tasks honestly: a run where T2 failed and T3
+	// was blocked must not read as a clean success.
+	if failed := d.FailedNodes(); len(failed) > 0 {
+		var lines []string
+		for _, n := range failed {
+			lines = append(lines, fmt.Sprintf("- %s (%s): %s", n.ID, n.Name, firstErrLine(n.Error)))
+		}
+		for _, n := range d.AllNodes() {
+			if n.Status == core.TaskCancelled {
+				lines = append(lines, fmt.Sprintf("- %s (%s): blocked — %s", n.ID, n.Name, firstErrLine(n.Error)))
+			}
+		}
+		merged += "\n\n⚠ Incomplete tasks:\n" + strings.Join(lines, "\n")
+	}
+
+	// Verify output (self-verification pipeline). A planned graph is
+	// non-trivial by definition, so verification always runs here; found
+	// issues are appended to the answer (and recorded below) rather than
+	// silently logged.
+	merged = k.verifyOutput(ctx, goal, merged, verifyComplexityMin)
+
+	// Store episodic memory, record learning feedback + audit + knowledge
+	// graph; skill extraction folds in via minSkillSuccess=2.
+	k.log("store", "Storing episodic memory")
+	k.log("improve", "Recording learning feedback and extracting reusable skills")
+	k.recordOutcome(goal, merged, results, len(d.FailedNodes()) == 0, "dag", 2, recallBlock)
+
+	if k.emitter != nil {
+		k.emitter.EmitFinalOutput(merged)
+	}
+	k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: merged})
+
+	return merged, nil
+}
+
+func firstErrLine(s string) string {
+	if s == "" {
+		return "no result"
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
 }
 
 // ============================================================================
-// DAG EXECUTION — Run tasks respecting dependencies, parallelizing where possible
+// DAG EXECUTION — Run tasks respecting dependencies, parallelizing where
+// possible. Dependency OUTPUTS are piped into dependents (the edge carries
+// data, not just ordering), failures are honest (a failed node marks its
+// descendants cancelled instead of silently counting as done), and the
+// ready-loop terminates cleanly either way.
 // ============================================================================
+
+// maxDepContextChars bounds how much of each dependency's output is piped
+// into a dependent agent's context, so a verbose upstream agent can't blow
+// the downstream prompt budget.
+const maxDepContextChars = 2400
 
 func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*core.SubAgentResult, error) {
 	var allResults []*core.SubAgentResult
@@ -75,7 +144,9 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			return allResults, fmt.Errorf("DAG deadlock: unresolvable dependencies")
 		}
 
-		// Build agent configs for ready tasks
+		// Build agent configs for ready tasks. Each dependent receives its
+		// dependencies' outputs as context — without this, edges only
+		// ordered execution and every agent worked blind.
 		var configs []core.SubAgentConfig
 		for _, node := range ready {
 			configs = append(configs, core.SubAgentConfig{
@@ -83,6 +154,7 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 				Goal:      node.Goal,
 				ModelTier: node.ModelTier,
 				MaxTurns:  k.cfg.MaxTurns,
+				Context:   dependencyContext(d, node),
 			})
 		}
 
@@ -104,17 +176,65 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			return allResults, ctx.Err()
 		}
 
-		// Mark tasks as processed and collect results
+		// Record each task's real outcome. A failed task is marked failed
+		// (not completed), its transitive dependents are cancelled so the
+		// loop can terminate, and its result is still collected so the
+		// merge can report what went wrong.
 		for i, node := range ready {
 			processed[node.ID] = true
-			d.MarkCompleted(node.ID)
-			if i < len(results) && results[i] != nil {
-				allResults = append(allResults, results[i])
+			var res *core.SubAgentResult
+			if i < len(results) {
+				res = results[i]
+			}
+			if res != nil {
+				allResults = append(allResults, res)
+			}
+			if res != nil && res.Success {
+				d.MarkCompleted(node.ID)
+				d.SetOutput(node.ID, res.Output)
+				continue
+			}
+			errMsg := "sub-agent returned no result"
+			if res != nil && res.Error != "" {
+				errMsg = res.Error
+			}
+			d.UpdateStatus(node.ID, core.TaskFailed)
+			d.SetError(node.ID, errMsg)
+			for _, blocked := range d.CancelDescendants(node.ID) {
+				processed[blocked] = true
+				k.log("execute", fmt.Sprintf("Task %s blocked: dependency %s failed", blocked, node.ID))
+			}
+			if k.emitter != nil {
+				k.emitter.EmitTaskUpdate(node.ID, "failed", firstErrLine(errMsg))
 			}
 		}
 	}
 
 	return allResults, nil
+}
+
+// dependencyContext assembles the outputs of a node's completed dependencies
+// into the context block passed to its sub-agent.
+func dependencyContext(d *dag.DAG, node *core.TaskNode) string {
+	if len(node.Dependencies) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, depID := range node.Dependencies {
+		dep, ok := d.GetNode(depID)
+		if !ok || dep.Output == "" {
+			continue
+		}
+		out := dep.Output
+		if len(out) > maxDepContextChars {
+			out = out[:maxDepContextChars] + "\n…[truncated]"
+		}
+		sb.WriteString(fmt.Sprintf("### Result of prerequisite task %s (%s)\n%s\n\n", dep.ID, dep.Name, out))
+	}
+	if sb.Len() == 0 {
+		return ""
+	}
+	return "Results from prerequisite tasks (build on these, do not redo them):\n\n" + sb.String()
 }
 
 // ============================================================================
@@ -164,7 +284,7 @@ func (k *Kernel) mergeResults(ctx context.Context, results []*core.SubAgentResul
 		Messages: []core.Message{
 			{
 				Role:    core.RoleSystem,
-				Content: "You are a result synthesizer. Merge multiple sub-agent outputs into a single coherent, well-structured answer. Remove redundancy. Resolve contradictions. Present a unified response.",
+				Content: "You are a result synthesizer. Merge multiple sub-agent outputs into a single coherent, well-structured answer. Remove redundancy. Resolve contradictions. Present a unified response. If some agents failed, state plainly what was NOT accomplished.",
 			},
 			{
 				Role:    core.RoleUser,

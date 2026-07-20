@@ -55,7 +55,30 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	// A 429 body is a large provider JSON blob that is useless (and alarming)
+	// when surfaced to a user or spammed into logs. Collapse quota errors to a
+	// concise, actionable line; keep full detail for other API errors.
+	if e.Code == 429 {
+		if isDailyQuota(e.Body) {
+			return "rate limit: free-tier daily quota exhausted (HTTP 429) — wait for the daily reset, add billing to the API key, or enable the local LLM"
+		}
+		return "rate limit: too many requests (HTTP 429) — the request was throttled; retrying with backoff"
+	}
 	return fmt.Sprintf("API error %d: %s", e.Code, e.Body)
+}
+
+// isDailyQuota reports whether a 429 body indicates a per-DAY quota cap
+// (which will not clear within a retry window), as opposed to a per-minute
+// rate limit (which will). Matches the provider quota identifiers seen from
+// Gemini/Google free tier.
+func isDailyQuota(body string) bool {
+	b := strings.ToLower(body)
+	// "perday" matches the quotaId GenerateRequestsPerDayPerProjectPerModel;
+	// the others are defensive. Per-MINUTE quota ids contain "perminute" and
+	// are deliberately NOT matched, so they still retry.
+	return strings.Contains(b, "perday") ||
+		strings.Contains(b, "per day") ||
+		strings.Contains(b, "requests_per_day")
 }
 
 // contextOverflowMarkers are the substrings providers use to signal that the
@@ -116,7 +139,7 @@ func parseRetryAfter(resp *http.Response, body string) time.Duration {
 			return d
 		}
 	}
-	
+
 	// Gemini specific body parsing: "Please retry in 1.5s" or "Please retry in 445.309714ms."
 	if body != "" && strings.Contains(body, "Please retry in") {
 		re := regexp.MustCompile(`Please retry in ([0-9.]+)(m?s)`)
@@ -136,7 +159,7 @@ func parseRetryAfter(resp *http.Response, body string) time.Duration {
 			}
 		}
 	}
-	
+
 	return 0
 }
 
@@ -353,6 +376,16 @@ func (c *RetryingClient) ChatCompletionStream(ctx context.Context, req *core.Com
 // HTTP 429 / 5xx (via *APIError), or a network-level error. Deterministic
 // failures (4xx other than 429, JSON decode/marshal errors) are not retried.
 func (c *RetryingClient) retryable(err error) bool {
+	return IsRetryable(err)
+}
+
+// IsRetryable reports whether an error is worth retrying: HTTP 429 (except a
+// per-day quota cap or an explicit limit:0) / 5xx via *APIError, or a
+// transient network error. Deterministic faults (other 4xx, JSON errors,
+// permanent URL faults, context cancel/deadline) are not. Exported so
+// non-retrying callers (e.g. the server's plan/workflow generator) can make
+// the same fast-fail decision.
+func IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -360,6 +393,15 @@ func (c *RetryingClient) retryable(err error) bool {
 	if errors.As(err, &ae) {
 		// If the API explicitly says a quota limit is 0, retrying will never succeed.
 		if strings.Contains(ae.Body, "limit: 0") {
+			return false
+		}
+		// A per-DAY quota (free-tier daily cap, e.g. Gemini's 20/day
+		// GenerateRequestsPerDayPerProjectPerModel) will not clear within any
+		// sane retry window, so retrying just burns ~5 attempts × Retry-After
+		// (a multi-minute hang) before surfacing the identical failure. Treat
+		// it as terminal. Per-MINUTE quotas are NOT matched here and still
+		// retry, since they recover within a backoff or two.
+		if ae.Code == 429 && isDailyQuota(ae.Body) {
 			return false
 		}
 		return ae.Code == 429 || ae.Code >= 500

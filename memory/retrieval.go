@@ -78,16 +78,11 @@ func (h *HybridRetriever) Recall(query string, k int) []RecallHit {
 	if len(qTokens) == 0 {
 		return nil
 	}
-	
+
 	// Get query embedding if available
 	queryVec, _ := h.mem.GetEmbedding(query)
 	hasVec := len(queryVec) > 0
 
-	// Computed once per Recall() call and reused for every entry below —
-	// previously kgBoost scanned and re-tokenized every KG node's label for
-	// EACH entry (O(entries × KG nodes), with the KG capped at 4000 concept
-	// nodes). The set of nodes matching the query doesn't depend on which
-	// entry we're scoring, so there's no need to recompute it per entry.
 	qKGMatches := h.kgQueryMatches(qTokens)
 
 	now := time.Now()
@@ -95,12 +90,6 @@ func (h *HybridRetriever) Recall(query string, k int) []RecallHit {
 
 	// Episodic memory.
 	for _, e := range h.mem.EpisodicGet() {
-		// Score with the vector path only when BOTH sides have a vector;
-		// entries written before an embedder was configured fall back to
-		// keyword overlap and must be gated by the overlap threshold, not the
-		// cosine one — previously hasVec alone selected the threshold, so a
-		// legacy vectorless entry scoring 0.25 overlap was silently dropped
-		// by the 0.3 cosine gate the moment an embedder came online.
 		usedVec := hasVec && len(e.Vector) > 0
 		var score float64
 		if usedVec {

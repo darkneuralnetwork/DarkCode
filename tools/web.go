@@ -97,9 +97,13 @@ func (t *WebTool) WebSearch(ctx context.Context, args map[string]interface{}) *T
 	// heuristic covers the same four buckets the LLM prompt did.
 	intent := classifySearchIntent(query)
 	var client core.LLMClient
+	var clientModel string
 	if t.Router != nil {
-		// Fast tier is still used below to summarize the raw results.
-		client, _, _ = t.Router.Route(core.ModelTierFast, 1, "summarize web results")
+		// Fast tier is still used below to summarize the raw results. Capture
+		// the model name: the router returns a wrapped client that does NOT
+		// bake in a default model, so an omitted Model field triggers the
+		// provider "model is not specified" error (the Gemini blank-name bug).
+		client, clientModel, _ = t.Router.Route(core.ModelTierFast, 1, "summarize web results")
 	}
 
 	var rawResult string
@@ -119,11 +123,12 @@ func (t *WebTool) WebSearch(ctx context.Context, args map[string]interface{}) *T
 		}
 		maxTokens2000 := 2000
 		summaryMsg := core.Message{
-			Role: "user",
+			Role:    "user",
 			Content: fmt.Sprintf("Extract the most relevant information from these raw retrieval results to answer the query: '%s'. Remove duplicates, trim unnecessary text, and produce a concise, high-signal context package.\n\nRaw Results:\n%s", query, rawResult),
 		}
 		resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-			Messages: []core.Message{summaryMsg},
+			Model:     clientModel,
+			Messages:  []core.Message{summaryMsg},
 			MaxTokens: &maxTokens2000,
 		})
 		if err == nil && len(resp.Choices) > 0 {
@@ -274,7 +279,7 @@ func (t *WebTool) searchWikipedia(ctx context.Context, query string) string {
 	if !ok {
 		return "No results found."
 	}
-	
+
 	searchList, ok := queryMap["search"].([]interface{})
 	if !ok || len(searchList) == 0 {
 		return "No results found."
@@ -290,7 +295,7 @@ func (t *WebTool) searchWikipedia(ctx context.Context, query string) string {
 		snippet = strings.ReplaceAll(snippet, "<span class=\"searchmatch\">", "")
 		snippet = strings.ReplaceAll(snippet, "</span>", "")
 		snippet = strings.ReplaceAll(snippet, "&quot;", "\"")
-		
+
 		out.WriteString(fmt.Sprintf("- %s: %s\n\n", title, snippet))
 	}
 
@@ -314,7 +319,7 @@ func extractTags(html string, classMatch string, limit int) []string {
 			break
 		}
 		closeTag += start
-		
+
 		// find start of content
 		contentStart := strings.Index(html[start:closeTag], ">")
 		if contentStart == -1 {
@@ -322,7 +327,7 @@ func extractTags(html string, classMatch string, limit int) []string {
 			continue
 		}
 		contentStart += start + 1
-		
+
 		text := html[contentStart:closeTag]
 		text = strings.ReplaceAll(text, "<b>", "")
 		text = strings.ReplaceAll(text, "</b>", "")
@@ -331,7 +336,6 @@ func extractTags(html string, classMatch string, limit int) []string {
 	}
 	return results
 }
-
 
 // WebResult is a helper for error results.
 type WebResult struct{ err error }

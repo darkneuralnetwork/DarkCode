@@ -1,28 +1,5 @@
 package deterministic
 
-// kgsync.go — feeds the deterministic AST index into the knowledge graph
-// (local-first upgrade plan §5/§7 Phase B).
-//
-// The definitions/imports/dependencies tools already compute high-quality
-// structured facts per call and throw them away. SyncWorkspaceKG records those
-// same facts as typed, provenance-carrying nodes/edges so the graph can answer
-// structural questions ("where is X defined", "which files import Y") by
-// traversal with citations — no LLM. Every node carries Provenance
-// ("file.go:line") and LastSeen, which is what makes a graph answer
-// high-confidence by construction: it points at real code.
-//
-// Node/edge scheme (IDs reuse the existing "file:<path>" convention from
-// orchestrator/memory_recorder.go so activity facts and code facts connect):
-//
-//	file:<relpath>            ── defines ──▶  symbol:<name>@<relpath>
-//	file:<relpath>            ── imports ──▶  package:<importpath>
-//
-// Reference fan-in is stored as a `references` count property on the symbol
-// node (how many OTHER files mention the identifier) rather than one edge per
-// referencing file — full per-site citations remain the job of the live
-// deterministic_references tool (cascade rung 0); the graph answers the
-// aggregate ("referenced by 6 files") cheaply.
-
 import (
 	"context"
 	"fmt"

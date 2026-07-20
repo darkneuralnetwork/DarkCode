@@ -1,23 +1,5 @@
 package embedded
 
-// manager.go — ProcessManager manages the lifecycle of a local llama-server
-// process. llama-server (from llama.cpp) exposes an OpenAI-compatible HTTP
-// API, so once it's running we can talk to it like any other OpenAI endpoint.
-//
-// This is the "Local-First Execution" backbone (spec §3): it lets DarkCode
-// run entirely offline by spawning a local model server and proxying chat
-// completions through it. No CGo required — just the llama-server binary on
-// PATH or in binaryDir.
-//
-// Previously this was an incomplete stub: it assumed the binary existed,
-// always used port 8080, didn't wait for readiness, and had no status/health
-// check. It now:
-//   - Discovers the binary (PATH lookup + binaryDir override)
-//   - Allocates a free port (no hard-coded 8080)
-//   - Waits for the /health endpoint to respond before returning
-//   - Exposes Status() and the base URL for the OpenAI client
-//   - Shuts down gracefully (SIGTERM → SIGKILL fallback)
-
 import (
 	"bytes"
 	"context"
@@ -253,10 +235,6 @@ func (p *ProcessManager) Start(ctx context.Context, modelPath string, opts Launc
 	if loraDir == "" {
 		loraDir = defaultLoRADir()
 	}
-	// Migration fallback: the old download_loras.sh wrote adapters to a
-	// CWD-relative ./loras, but the manager scans the system-wide dir. If the
-	// system-wide dir has none and a legacy ./loras does, use it and tell the
-	// user to move them so discovery stops depending on the launch directory.
 	if matches, _ := filepath.Glob(filepath.Join(loraDir, "*.gguf")); len(matches) == 0 {
 		if legacy, _ := filepath.Glob(filepath.Join("loras", "*.gguf")); len(legacy) > 0 {
 			observability.Log().Warn("using LoRA adapters from ./loras — move them to the system-wide dir so discovery no longer depends on the launch directory", map[string]interface{}{"legacy_dir": "./loras", "system_dir": loraDir})
@@ -282,10 +260,6 @@ func (p *ProcessManager) Start(ctx context.Context, modelPath string, opts Launc
 	}
 
 	p.serverCmd = exec.CommandContext(ctx, binPath, args...)
-	// Capture stderr (and stdout) into a bounded buffer so a failed start
-	// reports the real cause. Previously both were nil, so the only signal on
-	// a bad model path was a 60s "did not become healthy" timeout with no
-	// detail. The buffer is trimmed to its tail before being surfaced.
 	p.stderr.Reset()
 	p.serverCmd.Stdout = p.stderr
 	p.serverCmd.Stderr = p.stderr

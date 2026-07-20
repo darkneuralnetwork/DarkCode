@@ -1,12 +1,5 @@
 package deterministic
 
-// shared.go — helpers used by all deterministic tools.
-//
-// The deterministic toolchain (spec §8) backs rename / references / imports /
-// definitions / dependencies with real computation — ripgrep for text search
-// and go/ast for Go structural operations — instead of the previous stubs that
-// returned hardcoded strings ("Symbol renamed.", "References found.").
-
 import (
 	"context"
 	"os/exec"

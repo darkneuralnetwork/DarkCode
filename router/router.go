@@ -53,7 +53,7 @@ type Router struct {
 
 	// Capability advisor (spec §1 wiring): influences local-vs-cloud
 	// preference and concurrency based on detected hardware tier.
-	advisor       *capability.Advisor
+	advisor *capability.Advisor
 
 	// sequentialConsensus, when true, makes Consensus() call each model one
 	// at a time instead of fanning out in parallel. Set by the kernel from the
@@ -373,6 +373,26 @@ func (r *Router) Route(tier core.ModelTier, complexity int, taskDesc string) (co
 	return client, modelName, nil
 }
 
+// PlannerRoute returns the strongest available model for the planning phase.
+// Unlike Route it never applies the task-type local-offload intercept:
+// planning is the highest-leverage call in the pipeline, so it always goes to
+// the primary/reasoning model regardless of offloading heuristics. The
+// force-local hard guarantee is still honored via selectBestAvailable.
+func (r *Router) PlannerRoute() (core.LLMClient, string, error) {
+	tier := r.selectBestAvailable(core.ModelTierReasoning)
+	r.mu.RLock()
+	client := r.clients[tier]
+	modelName := r.models[tier]
+	r.mu.RUnlock()
+	if client == nil {
+		return nil, "", fmt.Errorf("no model available for planning (tier %s)", tier)
+	}
+	if r.emitter != nil {
+		r.emitter.EmitTaskUpdate("router", "routing", "Planning phase routed to primary model: "+modelName)
+	}
+	return client, modelName, nil
+}
+
 // selectBestAvailable returns the best available tier, trying the requested
 // tier first, then falling back through the hierarchy. When a capability
 // advisor is attached and recommends preferring local models, a local tier is
@@ -381,20 +401,6 @@ func (r *Router) selectBestAvailable(preferred core.ModelTier) core.ModelTier {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// If the advisor says "prefer local" and a local model is registered,
-	// try local first (unless the caller explicitly wants reasoning/critic).
-	// Consider the full local family: the primary local tier, plus the
-	// medium/tiny local tiers a model may have been registered at based on its
-	// size (previously only ModelTierLocal was checked, so a model registered
-	// solely at medium_local/tiny_local was never preferred and could only be
-	// reached via the exact-tier path — which the fallback hierarchy also
-	// omitted).
-	// tierAvailable reports whether tier has a registered client that isn't
-	// temporarily disabled (local-first upgrade §6c). r.models[tier] holds
-	// the name of whichever model currently occupies that tier slot — a
-	// disabled model's tier is skipped exactly like an unregistered one, so
-	// selection falls through to the next tier in the hierarchy rather than
-	// erroring.
 	tierAvailable := func(t core.ModelTier) bool {
 		if _, ok := r.clients[t]; !ok {
 			return false
@@ -450,13 +456,6 @@ func (r *Router) selectBestAvailable(preferred core.ModelTier) core.ModelTier {
 		}
 	}
 
-	// Nothing available. If preferred is registered but every check above
-	// rejected it, that can only mean it's temporarily disabled (§6c) — in
-	// that case, deliberately return an empty (unregistered) tier so
-	// Route()'s nil-client check produces a clear "no model available"
-	// error instead of silently falling back to serving the disabled
-	// model. If preferred was never registered at all, return it unchanged
-	// (the original behavior — same clear error, different cause).
 	if _, ok := r.clients[preferred]; ok {
 		return core.ModelTier("")
 	}
@@ -503,11 +502,6 @@ func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal st
 
 	consensusStart := time.Now()
 
-	// Identify the primary model and the contributing (non-primary) models.
-	// Temporarily disabled models (local-first upgrade §6c) are excluded
-	// from the contributor fan-out — a disabled model's role simply
-	// doesn't participate in this consensus round, same as if it had never
-	// been registered.
 	now := time.Now()
 	var primary *RegisteredModel
 	var others []RegisteredModel
@@ -551,7 +545,6 @@ func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal st
 		return result, nil
 	}
 
-	// --- Phase 5: Deterministic Pre-Routing & Selective Consensus ---
 	taskType := r.classifier.Classify(goal)
 	if taskType == TaskTypeDeterministic {
 		// In a real system, the orchestrator would have bypassed the router.
@@ -664,16 +657,10 @@ func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal st
 		}
 	}
 
-	// callModel prepends its own systemPrompt argument to messages, so
-	// synthMessages must stay system-message-free (matching the calling
-	// convention used everywhere else in this file) — embedding a second
-	// system message here previously caused every consensus synthesis call
-	// to ship two stacked, overlapping system messages to the LLM.
 	synthMessages := []core.Message{
 		{Role: core.RoleUser, Content: sb.String()},
 	}
 
-	// ── Phase 2: Primary model synthesizes all contributions.
 	synth, err := r.callModel(ctx, primary.Client, primary.Name, synthMessages,
 		"You are the primary synthesizer. Merge the specialist responses from the "+
 			"conversation below into a single, coherent, correct, and complete answer. "+

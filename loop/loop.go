@@ -27,14 +27,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/darkcode/agents"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/observability"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
-	"github.com/darkcode/observability"
-	"github.com/darkcode/agents"
 )
 
 // MaxObservationLen caps the size of a single tool's observation text that is
@@ -163,7 +163,14 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 
 		// ── 1. THINK (Orient/Decide) ──────────────────────────────────────
 		temp := 0.7
-		schemas := l.registry.LLMSchemas().([]llm.ToolSchema)
+		// Chat (read-only) requests offer only read-only tools so the model is
+		// never given a write/execute tool to call.
+		var schemas []llm.ToolSchema
+		if core.IsReadOnlyTools(ctx) {
+			schemas = l.registry.LLMSchemasReadOnly().([]llm.ToolSchema)
+		} else {
+			schemas = l.registry.LLMSchemas().([]llm.ToolSchema)
+		}
 		// Hard context-fit guarantee: messages grow with each iteration's tool
 		// output, so fit to the RECEIVING client's effective window right
 		// before dispatch (Part 3 contract). Prevents the "context window
@@ -235,14 +242,6 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 				continue // loop back and fix it
 			}
 
-			// Goal-completion self-evaluation (local-first upgrade §7 Fix A):
-			// the syntactic stop condition (no tool calls) only means the
-			// model chose to stop, not that the goal was actually met. Ask
-			// it directly, once, before accepting the answer as final — this
-			// is what makes the loop genuinely "self-directed... evaluates
-			// its own output against a defined goal, and iterates until the
-			// objective is met" per the definition of loop engineering,
-			// rather than a fixed ReAct cycle with no real completion check.
 			if iteration < l.maxLoops {
 				if done, reason := l.evaluateGoalCompletion(ctx, client, modelName, goal, final); !done {
 					messages = append(messages, core.Message{
@@ -285,11 +284,15 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 			// happened — it cannot then claim the agent lacks tool access.
 			fmt.Fprintf(&trace, "%d. %s(%s) → %s\n", len(allToolCalls), r.Name,
 				argSummary(r.CallID, msg.ToolCalls), traceSnippet(obs))
+			toolName := r.Name
+			if toolName == "" {
+				toolName = "unknown_tool"
+			}
 			messages = append(messages, core.Message{
 				Role:       core.RoleTool,
 				Content:    strutil.Truncate(obs, MaxObservationLen),
 				ToolCallID: r.CallID,
-				Name:       r.Name,
+				Name:       toolName,
 			})
 		}
 

@@ -15,6 +15,28 @@
   // into a collapsible toggle under the assistant message on completion —
   // replaces the removed global "View/Hide Execution Details" toggle.
   let currentExecTrace = [];
+  // Coalescing state: consecutive identical trace rows (e.g. the same tool
+  // called again and again) collapse into one row with a "×N" counter instead
+  // of stacking dozens of duplicate lines.
+  let lastExecKey = null;
+  let lastExecCount = 1;
+
+  // pushExecRow adds a trace row to the live timeline and the folded trace,
+  // coalescing a repeat of the immediately-previous row into a ×N counter.
+  function pushExecRow(timeline, key, rowLabel) {
+    const render = (n) => `<div class="exec-row" style="margin-bottom:4px">${rowLabel}${n > 1 ? ` <span style="color:var(--text-mute)">×${n}</span>` : ""}</div>`;
+    if (key === lastExecKey && currentExecTrace.length) {
+      lastExecCount++;
+      currentExecTrace[currentExecTrace.length - 1] = render(lastExecCount);
+      if (timeline && timeline.lastElementChild) timeline.lastElementChild.outerHTML = render(lastExecCount);
+    } else {
+      lastExecKey = key;
+      lastExecCount = 1;
+      currentExecTrace.push(render(1));
+      if (timeline) timeline.insertAdjacentHTML("beforeend", render(1));
+    }
+    if (timeline) timeline.scrollTop = timeline.scrollHeight;
+  }
 
   function showExecBar() {
     const bar = document.getElementById("exec-status-bar");
@@ -24,6 +46,8 @@
     // "View/Hide Execution Details" toggle was removed; each response now
     // carries its own collapsible trace attached on completion.
     currentExecTrace = [];
+    lastExecKey = null;
+    lastExecCount = 1;
 
     execActive = true;
     execStartTime = Date.now();
@@ -319,20 +343,12 @@
           } else {
              msg = evt.status || "executed";
           }
-          const div = document.createElement("div");
-          div.style.marginBottom = "4px";
-          div.innerHTML = `<span style="color:var(--text-mute)">[${timeStr}]</span> <span style="color:var(--accent-1)">[tool]</span> ${evt.tool} - ${msg}`;
-          currentExecTrace.push(div.outerHTML);
-          
+          const rowLabel = `<span style="color:var(--text-mute)">[${timeStr}]</span> <span style="color:var(--accent-1)">[tool]</span> ${evt.tool} - ${msg}`;
           const loadingMsg = document.querySelector(".msg.loading");
-          if (loadingMsg) {
-            const timeline = loadingMsg.querySelector(".inline-exec-timeline");
-            if (timeline) {
-              timeline.hidden = false;
-              timeline.appendChild(div.cloneNode(true));
-              timeline.scrollTop = timeline.scrollHeight;
-            }
-          }
+          const timeline = loadingMsg ? loadingMsg.querySelector(".inline-exec-timeline") : null;
+          if (timeline) timeline.hidden = false;
+          // Coalesce repeats of the same tool+status into one ×N row.
+          pushExecRow(timeline, "tool|" + evt.tool + "|" + msg, rowLabel);
         }
         break;
       case "chat_query":
@@ -412,33 +428,14 @@
       return;
     }
 
-    // Append to timeline
+    // Append to timeline (coalescing consecutive identical status rows).
     const timeStr = new Date(evt.timestamp || Date.now()).toLocaleTimeString();
-    const div = document.createElement("div");
-    div.style.marginBottom = "4px";
-    div.innerHTML = `<span style="color:var(--text-mute)">[${timeStr}]</span> <span style="color:var(--accent-3)">[${evt.status || 'info'}]</span> ${evt.content}`;
-    
-    // Capture this event into the per-response trace (Fix D). The global
-    // timeline was removed; the trace is attached to the response on
-    // completion via attachExecDetails.
     if (evt.content) {
-      currentExecTrace.push(div.outerHTML);
-    }
-
-    // LIVE execution detail: append the row to the current loading message's
-    // .inline-exec-timeline so the user sees what the model is doing in real
-    // time (ChatGPT-style). The timeline is converted to a collapsible toggle
-    // on completion by finalizeAssistantMessage.
-    if (evt.content) {
+      const rowLabel = `<span style="color:var(--text-mute)">[${timeStr}]</span> <span style="color:var(--accent-3)">[${evt.status || 'info'}]</span> ${evt.content}`;
       const loadingMsg = document.querySelector(".msg.loading");
-      if (loadingMsg) {
-        const timeline = loadingMsg.querySelector(".inline-exec-timeline");
-        if (timeline) {
-          timeline.hidden = false;
-          timeline.appendChild(div.cloneNode(true));
-          timeline.scrollTop = timeline.scrollHeight;
-        }
-      }
+      const timeline = loadingMsg ? loadingMsg.querySelector(".inline-exec-timeline") : null;
+      if (timeline) timeline.hidden = false;
+      pushExecRow(timeline, "task|" + (evt.status || "") + "|" + evt.content, rowLabel);
     }
 
     // Map task updates to pipeline stages

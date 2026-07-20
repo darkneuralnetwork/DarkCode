@@ -24,12 +24,6 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe to event broadcast (per-client channel; cleans up on exit).
 	broadcast, unsub := s.emitter.Subscribe()
-	// Track this client for GUI disconnect detection (Issue #4). onSSEConnect
-	// cancels any pending resume-CLI grace timer; onSSEDisconnect (deferred)
-	// arms it if this was the last client. Defer order is LIFO, so
-	// onSSEDisconnect is declared FIRST and runs LAST — after unsub() has
-	// removed this subscriber, so SubscriberCount() correctly reflects the
-	// remaining clients.
 	defer s.onSSEDisconnect()
 	defer unsub()
 	s.onSSEConnect()

@@ -196,7 +196,6 @@ func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
 	}
 	lastIdx := len(messages) - 1
 
-	// Phase 1: drop whole middle messages, oldest first, until we fit.
 	kept := make([]bool, len(messages))
 	for i := range kept {
 		kept[i] = true
@@ -214,9 +213,6 @@ func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
 		return collectKept(messages, kept)
 	}
 
-	// Phase 2: still over (system + last turn alone exceed the budget).
-	// Middle-truncate the surviving messages' content, largest first,
-	// preserving head and tail so meaning survives at both ends.
 	out := collectKept(messages, kept)
 	for EstimateTokens(out) > budget {
 		bi, bTok := -1, 0

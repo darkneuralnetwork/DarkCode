@@ -98,7 +98,7 @@ func FetchModels(p config.Provider, apiKey string, baseURL string) ([]string, er
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
 	var reqURL string
-	
+
 	// Handle provider specific URLs
 	if p.ID == "google" {
 		// Gemini API compatibility uses /openai, but models fetch uses native API
@@ -116,17 +116,12 @@ func FetchModels(p config.Provider, apiKey string, baseURL string) ([]string, er
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	// Provider-specific auth. Anthropic authenticates exclusively via
-	// `x-api-key` + `anthropic-version`; sending `Authorization: Bearer` as
-	// well is a dual-auth conflict that Anthropic's /v1/models endpoint
-	// rejects (root cause of the Anthropic model-fetch failures). So we
-	// short-circuit Anthropic before the generic Bearer/api-key switch.
 	if p.ID == "anthropic" && apiKey != "" {
 		httpReq.Header.Set("x-api-key", apiKey)
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	} else if p.ID == "google" && apiKey != "" {
 		// Google's dynamic model fetch uses the `?key=` parameter.
-		// Sending an `Authorization: Bearer` header alongside it causes Google to 
+		// Sending an `Authorization: Bearer` header alongside it causes Google to
 		// expect an OAuth token, rejecting standard API keys with HTTP 401.
 	} else if apiKey != "" {
 		switch p.AuthScheme {

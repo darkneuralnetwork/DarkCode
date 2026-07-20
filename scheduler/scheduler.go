@@ -1,17 +1,5 @@
 package scheduler
 
-// scheduler.go — Scheduler manages CPU, memory, and context budgeting for
-// background tasks (indexing, pre-fetching, model loading). It is the
-// "Model Manager" backbone (spec §4): it coordinates the WorkerPool,
-// PriorityQueue, ModelLoader, and MemoryBudget.
-//
-// Previously Run()/Stop() were empty stubs and the scheduler didn't wire up
-// its own subsystems. It now:
-//   - Starts a WorkerPool on Run()
-//   - Accepts tasks via Submit()
-//   - Tracks active tasks and shuts them down cleanly on Stop()
-//   - Exposes the ModelLoader for model load/unload with memory budgeting
-
 import (
 	"context"
 	"errors"

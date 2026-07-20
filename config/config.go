@@ -35,14 +35,16 @@ type Config struct {
 	// fast path. Default false (raw STM append) to preserve behavior.
 	UseCtxEngine bool `json:"use_ctx_engine,omitempty"`
 
-	// --- Execution Profile (parallelism switcher) ---
-	// Controls how the two parallelism points (DAG sub-agent executor +
-	// consensus fan-out) run: "parallel" (today's behavior), "sequential"
-	// (serial — safe on free-tier models with strict RPM limits), or "auto"
-	// (default — resolves to sequential when only free-tier cloud models are
-	// registered, parallel otherwise). Retry/backoff is always on regardless
-	// of profile. Hot-toggled from the Settings tab.
+	// ExecutionProfile controls DAG + consensus parallelism: "parallel",
+	// "sequential" (safe on strict free-tier RPM limits), or "auto" (default:
+	// sequential when only free-tier cloud models are registered).
 	ExecutionProfile string `json:"execution_profile,omitempty"`
+
+	// PlanApproval controls the interactive plan gate: "always" pauses every
+	// planned task, "auto" (default) pauses only deep plans, "never" runs
+	// immediately. PlanDepth overrides planning depth: "auto"/"light"/"deep".
+	PlanApproval string `json:"plan_approval,omitempty"`
+	PlanDepth    string `json:"plan_depth,omitempty"`
 
 	// --- Context Compressor ---
 	// The model used for context compression (Layer 3). If empty, the primary
@@ -50,15 +52,11 @@ type Config struct {
 	// cheaper/faster model handles compression while the primary handles reasoning.
 	CompressorModel string `json:"compressor_model,omitempty"`
 
-	// --- Embeddings (local-first upgrade Phase C) ---
-	// The model used to generate vector embeddings for semantic memory/RAG.
-	//   ""      (default) auto: use the local embedded model when one is
-	//           loaded (llama-server already runs with --embedding), else
-	//           embeddings stay off and recall uses keyword overlap.
-	//   "off"   never embed, even when a local model is loaded.
-	//   <name>  a model from Models to use for embeddings (its endpoint must
-	//           serve /embeddings; note a cloud model here incurs per-write
-	//           and per-query API cost).
+	// EmbeddingModel selects the vector-embedding model for semantic memory/RAG:
+	//   ""     (default) auto: the local embedded model when loaded, else off
+	//          (recall falls back to keyword overlap).
+	//   "off"  never embed.
+	//   <name> a model from Models whose endpoint serves /embeddings.
 	EmbeddingModel string `json:"embedding_model,omitempty"`
 
 	// --- Agentic Loop (looping technology) ---
@@ -74,29 +72,18 @@ type Config struct {
 	// --- Projects ---
 	// Long-lived project context (per-project folders on disk).
 	ProjectsDir string `json:"projects_dir,omitempty"`
-	
+
 	// --- Local LLM ---
 	// Toggle whether to automatically load the local llama.cpp engine at startup.
 	EnableLocalLLM bool `json:"enable_local_llm"`
 	// LocalMode refines EnableLocalLLM with never-force semantics:
 	//   "off"   — never load the local model.
-	//   "auto"  — load only when the hardware tier allows it AND the Local
-	//             Resource Governor confirms the full bill (model + KV cache +
-	//             LoRAs + overhead) fits free memory.
-	//   "on"    — prefer local whenever safe; still refuses (with a logged
-	//             reason) when the governor says it doesn't fit — no
-	//             configuration value may launch an over-budget process, that
-	//             is what hangs low-RAM machines.
-	//   "force" — pin execution to the local model: routing NEVER falls back
-	//             to a cloud provider (a request fails loudly rather than
-	//             silently going remote), and the local model is auto-started
-	//             on demand. The Resource Governor still applies — "force"
-	//             skips the hardware-tier gate like "on", but an over-budget
-	//             load is still refused with a diagnostic (that refusal
-	//             surfaces as a clear error, never a silent cloud fallback).
-	//             See router.SetForceLocal and Config.ForceLocal.
-	// Empty = derive from EnableLocalLLM (true → "auto", false → "off") so
-	// existing configs keep working unchanged.
+	//   "auto"  — load only when the hardware tier allows AND the resource
+	//             governor confirms the full bill fits free memory.
+	//   "on"    — prefer local when safe; still refused (logged) if it won't fit.
+	//   "force" — pin to local; routing never falls back to cloud. The governor
+	//             still applies, so an over-budget load is refused, not silent.
+	// Empty derives from EnableLocalLLM (true → "auto", false → "off").
 	LocalMode string `json:"local_mode,omitempty"`
 	// Toggle whether to offload simple tasks (explain error, code review) to local LLM.
 	EnableLocalOffloading bool `json:"enable_local_offloading"`
@@ -108,16 +95,12 @@ type Config struct {
 	// field to survive restarts.
 	LocalModelRole string `json:"local_model_role,omitempty"`
 
-	// MemoryProfile is the user-facing curated context/RAM knob for the local
-	// model, so users pick an intent instead of guessing a raw -c value (a
-	// too-small raw value silently truncates injected context and breaks even
-	// simple tasks — the reason this abstraction exists):
-	//   "lean"     — 8192 ctx: lowest RAM, fine for chat + small coding.
-	//   "balanced" — 16384 ctx: comfortable for RAG + a project brief (default).
+	// MemoryProfile is the context/RAM knob for the local model:
+	//   "lean"     — 8192 ctx: lowest RAM.
+	//   "balanced" — 16384 ctx: RAG + project brief (default).
 	//   "max"      — 32768 ctx: largest window, highest RAM.
-	// Empty = auto (governor's RAM-aware default). EmbeddedContextSize, when
-	// set (>0), always wins over the profile — the power-user escape hatch.
-	// Resolve via EffectiveEmbeddedContextSize().
+	// Empty = auto. A set EmbeddedContextSize (>0) overrides this. Resolve via
+	// EffectiveEmbeddedContextSize().
 	MemoryProfile string `json:"memory_profile,omitempty"`
 
 	// EmbeddedContextSize overrides the llama-server context window (-c) for
@@ -134,14 +117,9 @@ type Config struct {
 	// and the explicit way to disable idle unload).
 	EmbeddedIdleTimeoutMinutes int `json:"embedded_idle_timeout_minutes,omitempty"`
 
-	// --- Auxiliary-call routing (cost reduction) ---
-	// UseLocalForAux routes behind-the-scenes calls (loop self-eval, context
-	// rewrite, plan/workflow amend) to the local model when one is loaded and
-	// healthy and the prompt fits its window — otherwise cloud. Safe by
-	// construction: with no local model this is a no-op (pure cloud), so it
-	// never forces local. Defaults on (true) via applied defaults.
-	// (no omitempty: an explicit false must persist, and an absent field in an
-	// older config decodes over the DefaultConfig true.)
+	// UseLocalForAux routes auxiliary calls (loop self-eval, context rewrite,
+	// plan amend) to the local model when one is loaded and the prompt fits,
+	// else cloud. Defaults true. No omitempty: an explicit false must persist.
 	UseLocalForAux bool `json:"use_local_for_aux"`
 	// SkipAuxForReadOnly skips the plan/workflow amend for read-only / question
 	// turns (nothing to change), saving 2 cloud calls on the common case.
@@ -233,22 +211,24 @@ func (c *Config) EffectiveEmbeddedContextSize() int {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Model:            "",
-		Provider:         "embedded",
-		BaseURL:          "http://127.0.0.1:0/v1",
-		APIKey:           "",
-		MaxTurns:         50,
-		Temperature:      0.7,
-		ContextLength:    16000,
-		SystemPrompt:     DefaultSystemPrompt,
-		RoutingMode:      "single",
-		SafetyLevel:      "normal",
-		MaxConcurrent:    3,
-		CompressContext:  true,
-		ExecutionProfile: "auto",
-		AgenticLoop:      false,
-		MaxLoops:         3,
-		MemoryDir:        ".darkcode/memory",
+		Model:                 "",
+		Provider:              "embedded",
+		BaseURL:               "http://127.0.0.1:0/v1",
+		APIKey:                "",
+		MaxTurns:              50,
+		Temperature:           0.7,
+		ContextLength:         16000,
+		SystemPrompt:          DefaultSystemPrompt,
+		RoutingMode:           "single",
+		SafetyLevel:           "normal",
+		MaxConcurrent:         3,
+		CompressContext:       true,
+		ExecutionProfile:      "auto",
+		PlanApproval:          "auto",
+		PlanDepth:             "auto",
+		AgenticLoop:           false,
+		MaxLoops:              3,
+		MemoryDir:             ".darkcode/memory",
 		ProjectsDir:           ".darkcode/projects",
 		EnableLocalLLM:        false,
 		EnableLocalOffloading: false,
@@ -320,17 +300,10 @@ SELF-IMPROVEMENT: After successful tasks, reusable patterns are extracted as ski
 
 When you encounter errors, report them honestly and try alternatives.`
 
-// ConfigPath returns the path to the config file.
-//
-// The config lives in a system-wide "~/.darkcode/config.json" by default, so
-// one install serves every directory the binary is launched from — matching
-// where MemoryDir/ProjectsDir already default to (see Load below) and where
-// the local llama-server binary/models/LoRAs live (app_wireup.go's
-// resolveDataDir). An existing per-directory install (a "./.config" file
-// from before this consolidation) is honored as a migration fallback so it
-// keeps working without the user having to move anything: it's only used
-// when the system-wide config doesn't exist yet. A brand-new install always
-// lands on the system-wide path.
+// ConfigPath returns the config file path: the system-wide
+// "~/.darkcode/config.json" by default, so one install serves every directory.
+// A legacy per-directory "./.config" is honored as a migration fallback only
+// when the system-wide config doesn't exist yet.
 func ConfigPath() string {
 	home, homeErr := os.UserHomeDir()
 	if homeErr == nil {
@@ -386,6 +359,14 @@ func Load() (*Config, error) {
 	}
 	if cfg.ContextLength == 0 {
 		cfg.ContextLength = 16000
+	}
+	// Older config files predate the planning-phase fields: default them so
+	// existing installs get the approval gate + adaptive depth.
+	if cfg.PlanApproval == "" {
+		cfg.PlanApproval = "auto"
+	}
+	if cfg.PlanDepth == "" {
+		cfg.PlanDepth = "auto"
 	}
 	if cfg.RoutingMode == "" {
 		cfg.RoutingMode = "single"
@@ -452,10 +433,6 @@ func (cfg *Config) Save() error {
 
 // applyEnv applies environment variable overrides to the config.
 func applyEnv(cfg *Config) {
-	// Each provider env var only fills in a missing key (guarded by
-	// `cfg.APIKey == ""`) so a key configured via the GUI/.config is never
-	// silently clobbered by a stale shell variable. OPENROUTER previously
-	// lacked this guard and would override an explicitly-configured key.
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" && cfg.APIKey == "" {
 		cfg.APIKey = v
 		cfg.BaseURL = "https://api.openai.com/v1"

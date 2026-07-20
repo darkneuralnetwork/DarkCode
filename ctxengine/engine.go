@@ -1,13 +1,5 @@
 package ctxengine
 
-// engine.go — the Context Intelligence Engine (spec §6, "the core innovation").
-//
-// Assemble() runs the full pipeline: deduplicate → rank → budget → compress.
-// It is the optional intelligent-context path the kernel can use to build a
-// prompt instead of dumping raw STM. Previously the components were no-op
-// stubs; they are now real (TF-IDF ranking, extractive/LLM summarization,
-// shingle near-dedup, token-budget trimming).
-
 import (
 	"context"
 

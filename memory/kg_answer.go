@@ -1,27 +1,5 @@
 package memory
 
-// kg_answer.go — the graph-query answer path (local-first upgrade §7 Phase B,
-// cascade rung 2). Answers structural/relational questions by knowledge-graph
-// traversal with citations and NO LLM:
-//
-//   "where is HybridRetriever defined?"       → symbol node → file:line
-//   "which files import github.com/x/router?" → imports edges → file list
-//   "who references Route?"                   → symbol reference fan-in
-//   "what tools did we use for <topic>?"      → task→tool activity edges
-//   "how did we fix <problem>?"               → fix node via fixed_by edge
-//   "why did we decide <topic>?"              → decision node
-//
-// Confidence policy (plan §2/§10.5): only *sourced* facts may answer. A
-// symbol/import fact carries file:line provenance written by the code index,
-// so a hit is high-confidence by construction — the answer points at real
-// code the user can verify. Unsourced facts (concept co-occurrence nodes)
-// never answer here; they only *suggest* via the existing recall/kgBoost
-// context injection. Fix/decision facts (local-first upgrade Phase D,
-// orchestrator/reflection.go) are sourced from episodic task outcomes rather
-// than AST ground truth, so they answer at a lower confidence than a code
-// fact but well above an unsourced concept edge — see answerFixHistory/
-// answerDecisionHistory.
-
 import (
 	"fmt"
 	"regexp"

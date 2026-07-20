@@ -1,17 +1,5 @@
 package orchestrator
 
-// reflection.go — deterministic reflection (local-first upgrade §7 Phase D).
-//
-// "Reflection: record *why* a task succeeded/failed → reusable procedural
-// knowledge (the `Lessons` field exists but is unpopulated)." Deliberately
-// rules-based, no LLM call: a reflection runs on EVERY task (including the
-// trivial ones the cascade already answers for free), so spending an LLM
-// call to generate it would undercut the whole local-first thesis. The
-// signal is cheap and already on hand — goal keywords, tool usage, strategy,
-// success, and a lookback over recent episodic memory for a prior failure on
-// a similar goal (the strongest, cheapest "this fixed something" signal
-// available without asking a model to guess).
-
 import (
 	"fmt"
 	"strings"

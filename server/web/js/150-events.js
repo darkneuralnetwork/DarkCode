@@ -779,6 +779,35 @@ function attachEventListeners() {
     });
   });
 
+  // Planning Phase segment toggles (plan approval + depth) — immediate-apply,
+  // mirroring the execution-profile toggle. The kernel hot-applies via
+  // SetPlanControls; no restart needed.
+  $$(".cfg-plan-seg").forEach(btn => {
+    btn?.addEventListener("click", async () => {
+      const key = btn.dataset.key;
+      const value = btn.dataset.value;
+      try {
+        const res = await fetch(API + "/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "update_settings", [key]: value })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        // Re-render keeping the sibling control's current active value.
+        const current = {};
+        $$(".cfg-plan-seg").forEach(b => {
+          if (b.style.fontWeight === "600") current[b.dataset.key] = b.dataset.value;
+        });
+        current[key] = value;
+        renderPlanControls(current.plan_approval, current.plan_depth);
+        toast("success", `${key === "plan_approval" ? "Plan approval" : "Planning depth"} set to ${value}`);
+      } catch (err) {
+        toast("error", "Planning setting failed: " + err.message);
+        loadConfig();
+      }
+    });
+  });
+
   // Model switcher (topbar)
   $("#model-select")?.addEventListener("change", (e) => {
     const model = e.target.value;

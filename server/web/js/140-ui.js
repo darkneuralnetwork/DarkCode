@@ -153,13 +153,27 @@ function safeUrl(url) {
 function renderMarkdown(text) {
   if (!text) return "";
   let html = esc(text);
-  // Code blocks: ```language\ncode\n```
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    if (lang === "mermaid") {
-      return `<div class="mermaid">${code}</div>`;
-    }
-    return `<pre class="md-code-block"><code class="language-${lang}">${code}</code></pre>`;
+  // Extract fenced code blocks FIRST, into placeholders, so none of the
+  // inline / heading / list / <br> passes below can mangle their contents.
+  // Critically, the \n→<br> pass would otherwise collapse a multi-line
+  // ```mermaid diagram onto a single line, which breaks the mermaid parser
+  // (it renders an error box instead of the graph).
+  const blocks = [];
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+    const rendered = (lang === "mermaid")
+      ? `<div class="mermaid">${code}</div>`
+      : `<pre class="md-code-block"><code class="language-${lang}">${code}</code></pre>`;
+    blocks.push(rendered);
+    return "@@FENCE" + (blocks.length - 1) + "@@";
   });
+  // Headings: #, ##, ### at line start → styled block headings (deepest
+  // first so ### isn't partially eaten by the # rule). Rendered as divs so
+  // the <br> pass below can be cleaned up around them without <hN> margins.
+  html = html.replace(/^\s*###\s+(.+)$/gm, '<div class="md-h3">$1</div>');
+  html = html.replace(/^\s*##\s+(.+)$/gm, '<div class="md-h2">$1</div>');
+  html = html.replace(/^\s*#\s+(.+)$/gm, '<div class="md-h1">$1</div>');
+  // Bullet list items: -, * at line start → styled list rows.
+  html = html.replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-li">$1</div>');
   // Inline code: `code`
   html = html.replace(/`([^`]+)`/g, `<code class="md-inline-code">$1</code>`);
   // Bold: **text**
@@ -172,6 +186,13 @@ function renderMarkdown(text) {
     `<a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
   // Line breaks
   html = html.replace(/\n/g, "<br>");
+  // Collapse the <br>s the previous pass injected immediately around block
+  // elements (headings, list rows) so blocks don't get double vertical gaps.
+  html = html.replace(/<br>\s*(<div class="md-)/g, "$1");
+  html = html.replace(/(<\/div>)\s*<br>/g, "$1");
+  // Restore fenced blocks, absorbing any <br> the surrounding newlines left
+  // hugging the placeholder so the block sits on its own line.
+  html = html.replace(/(?:<br>)?@@FENCE(\d+)@@(?:<br>)?/g, (m, i) => blocks[+i]);
   return html;
 }
 function fmtTime(ts) {

@@ -8,13 +8,8 @@ import (
 	"unsafe"
 )
 
-// hardware_windows.go — real Windows implementations of the RAM/CPU stats,
-// replacing the old `return 0, 0` stub that made the GUI Resource Center show
-// RAM 0/0 and CPU 0% on Windows. Pure stdlib (syscall + kernel32), no cgo and
-// no external dependency.
-
 var (
-	kernel32              = syscall.NewLazyDLL("kernel32.dll")
+	kernel32               = syscall.NewLazyDLL("kernel32.dll")
 	procGlobalMemoryStatus = kernel32.NewProc("GlobalMemoryStatusEx")
 	procGetSystemTimes     = kernel32.NewProc("GetSystemTimes")
 )

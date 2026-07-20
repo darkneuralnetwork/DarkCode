@@ -84,11 +84,11 @@ func (t *TaskNode) Duration() time.Duration {
 type ModelTier string
 
 const (
-	ModelTierReasoning   ModelTier = "reasoning" // strongest model for planning
-	ModelTierCoding      ModelTier = "coding"    // mid-high for code execution
-	ModelTierFast        ModelTier = "fast"      // lightweight for simple tasks
-	ModelTierLocal       ModelTier = "local"     // generic open-source fallback
-	ModelTierCritic      ModelTier = "critic"    // independent verifier
+	ModelTierReasoning   ModelTier = "reasoning"    // strongest model for planning
+	ModelTierCoding      ModelTier = "coding"       // mid-high for code execution
+	ModelTierFast        ModelTier = "fast"         // lightweight for simple tasks
+	ModelTierLocal       ModelTier = "local"        // generic open-source fallback
+	ModelTierCritic      ModelTier = "critic"       // independent verifier
 	ModelTierMediumLocal ModelTier = "medium_local" // medium local model (e.g. review code)
 	ModelTierTinyLocal   ModelTier = "tiny_local"   // tiny local model (e.g. explain error)
 )
@@ -260,25 +260,25 @@ type SubAgentResult struct {
 type EventType string
 
 const (
-	EventTaskUpdate    EventType = "task_update"
-	EventAgentSpawn    EventType = "agent_spawn"
-	EventAgentComplete EventType = "agent_complete"
-	EventToolExecution EventType = "tool_execution"
-	EventModelRoute    EventType = "model_route"
-	EventCompression   EventType = "compression"
-	EventMemoryStore   EventType = "memory_store"
-	EventFinalOutput   EventType = "final_output"
-	EventError         EventType = "error"
-	EventDAGUpdate     EventType = "dag_update"
-	EventSkillExtract  EventType = "skill_extract"
-	EventConsensus     EventType = "consensus"
-	EventTokenUsage    EventType = "token_usage"
-	EventFileChange    EventType = "file_change"   // a file was created/modified/deleted
-	EventApproval      EventType = "approval"      // a permission decision was made
-	EventChatQuery     EventType = "chat_query"    // user input from chat
-	EventChatResponse  EventType = "chat_response" // agent response
-	EventSyncGUI       EventType = "sync_gui"      // trigger gui reload when waking up
-	EventPlanUpdated   EventType = "plan_updated"
+	EventTaskUpdate      EventType = "task_update"
+	EventAgentSpawn      EventType = "agent_spawn"
+	EventAgentComplete   EventType = "agent_complete"
+	EventToolExecution   EventType = "tool_execution"
+	EventModelRoute      EventType = "model_route"
+	EventCompression     EventType = "compression"
+	EventMemoryStore     EventType = "memory_store"
+	EventFinalOutput     EventType = "final_output"
+	EventError           EventType = "error"
+	EventDAGUpdate       EventType = "dag_update"
+	EventSkillExtract    EventType = "skill_extract"
+	EventConsensus       EventType = "consensus"
+	EventTokenUsage      EventType = "token_usage"
+	EventFileChange      EventType = "file_change"   // a file was created/modified/deleted
+	EventApproval        EventType = "approval"      // a permission decision was made
+	EventChatQuery       EventType = "chat_query"    // user input from chat
+	EventChatResponse    EventType = "chat_response" // agent response
+	EventSyncGUI         EventType = "sync_gui"      // trigger gui reload when waking up
+	EventPlanUpdated     EventType = "plan_updated"
 	EventWorkflowUpdated EventType = "workflow_updated"
 )
 
@@ -526,10 +526,6 @@ type KGEdge struct {
 	// (e.g. the file:line of an import declaration).
 	Provenance string `json:"provenance,omitempty"`
 }
-
-// ============================================================================
-// COGNITION CASCADE TYPES (local-first upgrade §2/§7 Phase A)
-// ============================================================================
 
 // Confidence is the single comparable signal every cascade rung returns.
 // Score is in [0,1]; Reason says how the score was derived (for the rung

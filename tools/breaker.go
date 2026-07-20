@@ -5,25 +5,6 @@ import (
 	"time"
 )
 
-// ============================================================================
-// SELF-HEALING TOOL RUNTIME — per-tool circuit breaker.
-//
-// A tool that keeps failing (a flaky MCP server, a wedged terminal command, a
-// down web endpoint) was previously retried identically forever — every agent
-// turn could re-invoke it and re-fail, wasting turns/tokens and, in the loop,
-// tripping stuck-detection instead of routing around the real problem. The
-// breaker tracks consecutive execution failures per tool and, past a
-// threshold, quarantines it for a growing backoff window. During quarantine
-// the tool short-circuits with a clear "temporarily unavailable" message
-// (which also steers the LLM to try another approach) instead of running. It
-// auto-probes when the window expires and fully recovers on the first success.
-//
-// Only genuine execution failures count. Argument-validation failures,
-// permission denials, and unknown-tool calls are the caller's/user's doing,
-// not tool unreliability, and are recorded before this breaker is consulted —
-// they never trip it.
-// ============================================================================
-
 const (
 	breakerDefaultThreshold   = 3
 	breakerDefaultBaseBackoff = 2 * time.Second

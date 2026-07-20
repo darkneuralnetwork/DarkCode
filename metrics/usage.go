@@ -59,27 +59,27 @@ type SeriesBucket struct {
 
 // Snapshot is a point-in-time view of all usage data.
 type Snapshot struct {
-	Since           time.Time       `json:"since"`
-	TotalPrompt     int             `json:"total_prompt_tokens"`
-	TotalCompletion int             `json:"total_completion_tokens"`
-	TotalCached     int             `json:"total_cached_tokens"`
-	TotalTokens     int             `json:"total_tokens"`
-	TotalCost       float64         `json:"total_cost"`
+	Since           time.Time `json:"since"`
+	TotalPrompt     int       `json:"total_prompt_tokens"`
+	TotalCompletion int       `json:"total_completion_tokens"`
+	TotalCached     int       `json:"total_cached_tokens"`
+	TotalTokens     int       `json:"total_tokens"`
+	TotalCost       float64   `json:"total_cost"`
 	// CacheSavings is the estimated USD not spent because TotalCached prompt
 	// tokens were billed at the cached rate instead of full input price.
-	CacheSavings    float64         `json:"cache_savings"`
+	CacheSavings float64 `json:"cache_savings"`
 	// TotalRequests is the number of LLM API calls. TotalTurns is the number of
 	// user questions/messages. One turn fans out into several requests (routing,
 	// answer, compression, skill extraction, …), so requests ÷ turns is the
 	// average model calls per question — surfaced so the count isn't mistaken
 	// for "one request per question".
-	TotalRequests   int             `json:"total_requests"`
-	TotalTurns      int             `json:"total_turns"`
-	TotalErrors     int             `json:"total_errors"`
-	AvgLatencyMs    float64         `json:"avg_latency_ms"`
-	PerModel        []ModelStat     `json:"per_model"`
-	Series          []SeriesBucket  `json:"series"`
-	Recent          []RequestRecord `json:"recent"`
+	TotalRequests int             `json:"total_requests"`
+	TotalTurns    int             `json:"total_turns"`
+	TotalErrors   int             `json:"total_errors"`
+	AvgLatencyMs  float64         `json:"avg_latency_ms"`
+	PerModel      []ModelStat     `json:"per_model"`
+	Series        []SeriesBucket  `json:"series"`
+	Recent        []RequestRecord `json:"recent"`
 }
 
 const (
@@ -144,11 +144,6 @@ func (u *UsageTracker) Record(rec RequestRecord) {
 	if rec.TotalTokens == 0 && (rec.PromptTokens != 0 || rec.CompletionTokens != 0) {
 		rec.TotalTokens = rec.PromptTokens + rec.CompletionTokens
 	}
-	// Cost from pricing registry; local/unknown models cost nothing. Prompt
-	// tokens are split into cached (cheaper prefix-cache reads) and uncached,
-	// so a stable, re-sent system prompt no longer gets charged full input
-	// price — the cost meter reflects the caching saving instead of ignoring
-	// it.
 	if rec.Cost == 0 {
 		in, cachedIn, out, ok := config.LookupPricingFull(rec.Provider, rec.Model)
 		if ok {

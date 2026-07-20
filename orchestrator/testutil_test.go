@@ -12,7 +12,6 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -160,27 +159,6 @@ func registerFakeTool(reg *tools.Registry, name string) {
 			return &tools.ToolResult{Name: name, Success: true, Output: "tool ran"}
 		},
 	})
-}
-
-// plannerResponse builds a valid planner-format response for the given task
-// names (each depending on the previous one is NOT assumed — deps default to
-// none unless provided via plannerTask).
-type plannerTask struct {
-	name, goal, deps, agent string
-}
-
-func plannerResponse(tasks ...plannerTask) string {
-	var sb string
-	for _, tk := range tasks {
-		agent := tk.agent
-		if agent == "" {
-			agent = "worker"
-		}
-		sb += fmt.Sprintf("TASK: %s | GOAL: %s | DEPS: %s | AGENT: %s | PRIORITY: normal\n",
-			tk.name, tk.goal, tk.deps, agent)
-	}
-	sb += "PLAN_END\n"
-	return sb
 }
 
 // waitGroupTimeout runs wg.Wait() with a timeout, failing the test instead of

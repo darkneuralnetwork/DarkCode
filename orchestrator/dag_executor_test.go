@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,34 +11,53 @@ import (
 	"github.com/darkcode/dag"
 )
 
-func TestPlanAndDecomposeSuccess(t *testing.T) {
-	client := &fakeLLMClient{name: "planner", responses: []string{
-		plannerResponse(
-			plannerTask{name: "task1", goal: "write the function"},
-			plannerTask{name: "task2", goal: "write the tests", deps: "task1"},
-		),
-	}}
+const testPlanJSON = `[{"name":"task1","goal":"write the function","agent":"worker","deps":[]},{"name":"task2","goal":"write the tests","agent":"qa","deps":["task1"]}]`
+
+func TestDeepPlanLightProducesGraphInOneCall(t *testing.T) {
+	client := &fakeLLMClient{name: "planner", responses: []string{testPlanJSON}}
 	deps := newTestKernel(t, client)
 
-	d, err := deps.Kernel.planAndDecompose(context.Background(), "implement a feature")
+	g, err := deps.Kernel.deepPlan(context.Background(), "implement a feature", PlanDepthLight)
 	if err != nil {
-		t.Fatalf("planAndDecompose: %v", err)
+		t.Fatalf("deepPlan: %v", err)
 	}
-	if d == nil || d.NodeCount() != 2 {
-		t.Fatalf("expected a 2-node DAG, got %v", d)
+	if len(g.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(g.Nodes))
+	}
+	if len(g.Nodes[1].Deps) != 1 || g.Nodes[1].Deps[0] != "T1" {
+		t.Errorf("T2 deps = %v, want [T1]", g.Nodes[1].Deps)
+	}
+	if got := client.callCount(); got != 1 {
+		t.Errorf("light planning made %d LLM calls, want exactly 1", got)
 	}
 }
 
-func TestPlanAndDecomposeNoTasks(t *testing.T) {
+func TestDeepPlanDeepRunsSelfReview(t *testing.T) {
+	client := &fakeLLMClient{name: "planner", responses: []string{testPlanJSON, testPlanJSON}}
+	deps := newTestKernel(t, client)
+
+	g, err := deps.Kernel.deepPlan(context.Background(), "implement a feature", PlanDepthDeep)
+	if err != nil {
+		t.Fatalf("deepPlan: %v", err)
+	}
+	if len(g.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(g.Nodes))
+	}
+	if got := client.callCount(); got != 2 {
+		t.Errorf("deep planning made %d LLM calls, want 2 (decompose + self-review)", got)
+	}
+}
+
+func TestDeepPlanUnparsableFailsAfterOneRepair(t *testing.T) {
 	client := &fakeLLMClient{name: "planner", responses: []string{"I don't understand the request."}}
 	deps := newTestKernel(t, client)
 
-	_, err := deps.Kernel.planAndDecompose(context.Background(), "??")
+	_, err := deps.Kernel.deepPlan(context.Background(), "??", PlanDepthLight)
 	if err == nil {
-		t.Fatal("expected an error when the planner produces no parseable tasks")
+		t.Fatal("expected an error when the planner never produces parseable tasks")
 	}
-	if !strings.Contains(err.Error(), "no tasks") {
-		t.Errorf("error = %v, want it to mention no tasks were produced", err)
+	if got := client.callCount(); got != 2 {
+		t.Errorf("made %d LLM calls, want 2 (initial + one repair, no infinite retry)", got)
 	}
 }
 
@@ -166,6 +186,77 @@ func TestExecuteDAGDeadlockDetection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "deadlock") {
 		t.Errorf("error = %v, want it to mention deadlock", err)
+	}
+}
+
+// TestExecuteDAGFailureBlocksDependents exercises the honest-failure fix: a
+// failed node must be marked failed (not completed), its descendants must be
+// cancelled instead of deadlocking the ready-loop, and the failed result is
+// still returned for the merge to report.
+func TestExecuteDAGFailureBlocksDependents(t *testing.T) {
+	client := &fakeLLMClient{name: "worker", err: fmt.Errorf("boom")}
+	deps := newTestKernel(t, client)
+
+	d := buildTestDAG(t,
+		&core.TaskNode{ID: "a", Name: "a", Goal: "do a", Status: core.TaskPending, AgentRole: core.RoleWorker, ModelTier: core.ModelTierCoding},
+	)
+	if err := d.AddNode(&core.TaskNode{
+		ID: "b", Name: "b", Goal: "do b", Status: core.TaskPending,
+		AgentRole: core.RoleWorker, ModelTier: core.ModelTierCoding, Dependencies: []string{"a"},
+	}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	results, err := deps.Kernel.executeDAG(context.Background(), d, "goal")
+	if err != nil {
+		t.Fatalf("executeDAG should terminate cleanly on task failure, got: %v", err)
+	}
+	if len(results) != 1 || results[0].Success {
+		t.Fatalf("results = %+v, want exactly the failed result of a", results)
+	}
+	na, _ := d.GetNode("a")
+	if na.Status != core.TaskFailed {
+		t.Errorf("a.Status = %s, want failed (was previously mislabeled completed)", na.Status)
+	}
+	nb, _ := d.GetNode("b")
+	if nb.Status != core.TaskCancelled {
+		t.Errorf("b.Status = %s, want cancelled (blocked by failed dependency)", nb.Status)
+	}
+}
+
+// TestExecuteDAGPipesDependencyOutputs exercises the data-flow fix: a
+// dependent task must receive its dependencies' outputs in its context —
+// edges carry data, not just ordering.
+func TestExecuteDAGPipesDependencyOutputs(t *testing.T) {
+	sawUpstream := false
+	client := &fakeLLMClient{name: "worker", respFunc: func(idx int, req *core.CompletionRequest) string {
+		for _, m := range req.Messages {
+			if m.Role == core.RoleSystem && strings.Contains(m.ContentString(), "SECRET_ALPHA_42") {
+				sawUpstream = true
+			}
+		}
+		return "SECRET_ALPHA_42"
+	}}
+	deps := newTestKernel(t, client)
+
+	d := buildTestDAG(t,
+		&core.TaskNode{ID: "first", Name: "first", Goal: "produce the value", Status: core.TaskPending, AgentRole: core.RoleWorker, ModelTier: core.ModelTierCoding},
+	)
+	if err := d.AddNode(&core.TaskNode{
+		ID: "second", Name: "second", Goal: "use the value", Status: core.TaskPending,
+		AgentRole: core.RoleWorker, ModelTier: core.ModelTierCoding, Dependencies: []string{"first"},
+	}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	if _, err := deps.Kernel.executeDAG(context.Background(), d, "goal"); err != nil {
+		t.Fatalf("executeDAG: %v", err)
+	}
+	if !sawUpstream {
+		t.Error("dependent task never saw its dependency's output in context")
+	}
+	if n, _ := d.GetNode("first"); n.Output == "" {
+		t.Error("first.Output not recorded via SetOutput")
 	}
 }
 

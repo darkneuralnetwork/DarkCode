@@ -31,6 +31,7 @@ import (
 	"github.com/darkcode/internal/strutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -247,12 +248,6 @@ func (g *Gate) Check(tool string, args map[string]interface{}) (bool, ApprovalRe
 	req, dangerous := classify(tool, args)
 	req.Timestamp = time.Now()
 
-	// Secret guard: if the call's arguments carry something that looks like a
-	// credential (API key, token, private key, …), force an approval prompt
-	// even at Normal level and mark it at least Medium risk. This stops a
-	// secret from being silently piped into a tool (e.g. exfiltrated via a
-	// web_fetch URL or echoed into a world-readable file) without the user
-	// seeing it first. Previously the scanner was instantiated but never used.
 	if argsContainSecret(g.scanner, args) {
 		dangerous = true
 		if req.Risk < core.RiskMedium {
@@ -542,6 +537,15 @@ func classifyCommand(cmd string) (risk core.RiskLevel, dangerous bool) {
 	if hasFileRedirection(c) {
 		return core.RiskMedium, true
 	}
+	// The word-list scan below can only see literal command words. It is blind
+	// to code hidden inside an interpreter one-liner (`python -c "..."`), a
+	// find -exec/-delete, an xargs child command, or a pipe into a shell — all
+	// of which can run `rm -rf` or worse while tokenizing to harmless-looking
+	// words. Force approval for those execution wrappers so they can't slip
+	// through as RiskLow.
+	if hasObfuscatedExecution(c) {
+		return core.RiskHigh, true
+	}
 	switch {
 	case commandMatchesAny(c, criticalCommands):
 		return core.RiskCritical, true
@@ -582,6 +586,34 @@ func hasFileRedirection(c string) bool {
 	return false
 }
 
+// obfuscatedExecPatterns match command forms that execute arbitrary code the
+// word-list scan can't inspect: interpreter inline-eval flags, find's command
+// actions, xargs, and pipes into a shell. Compiled once.
+var obfuscatedExecPatterns = []*regexp.Regexp{
+	// python/perl/ruby/node/php/deno running inline code (-c, -e, -r, --eval).
+	regexp.MustCompile(`(^|[\s;|&$(` + "`" + `])(python[0-9.]*|perl|ruby|node|php|deno|osascript)\b[^|;&]*?\s-{1,2}(c|e|r|eval)\b`),
+	// bash/sh/zsh -c "<code>" (also the classic `curl … | bash` target).
+	regexp.MustCompile(`\b(ba|z|da)?sh\b\s+-c\b`),
+	// find … -exec/-execdir/-delete runs (or deletes) per match.
+	regexp.MustCompile(`\bfind\b[^|;&]*\s-(exec|execdir|delete)\b`),
+	// xargs invokes a child command per input line (only in command position:
+	// at the start or after a pipe/separator).
+	regexp.MustCompile(`(^|[|;&]\s*)xargs\b`),
+	// piping anything into a shell interpreter.
+	regexp.MustCompile(`\|\s*(sudo\s+)?(ba|z|da)?sh\b`),
+}
+
+// hasObfuscatedExecution reports whether c wraps arbitrary code execution in a
+// form the literal word-list can't see into. c is already lower-cased/trimmed.
+func hasObfuscatedExecution(c string) bool {
+	for _, re := range obfuscatedExecPatterns {
+		if re.MatchString(c) {
+			return true
+		}
+	}
+	return false
+}
+
 // commandHas checks whether pattern p appears as a command word (or
 // multi-word command) in c, rather than as a substring of another word.
 // p may contain spaces (e.g. "git push").
@@ -613,10 +645,6 @@ func isDelim(r rune) bool {
 var criticalCommands = []string{
 	"rm", "rmdir", "sudo", "chmod", "chown", "mkfs", "dd",
 	"shutdown", "reboot", "halt", "poweroff", "format", "truncate",
-	// Note: a literal "rm-rf" token was previously listed here but never
-	// matched — commands like `rm -rf /` tokenize to ["rm", "-rf", "/"], so
-	// the whole-word matcher would never see "rm-rf" as a token. "rm" itself
-	// already matches and classifies such commands as RiskCritical.
 }
 
 var highCommands = []string{

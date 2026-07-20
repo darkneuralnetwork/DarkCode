@@ -520,9 +520,24 @@ function renderPlanBoard(markdown, container, kind) {
     return;
   }
 
-  // Detect checkbox lines. If none, fall back to plain markdown.
-  const lines = markdown.split("\n");
-  const hasTasks = lines.some(l => /^\s*[-*]\s+\[[ xX]\]\s+/.test(l));
+  // Protect fenced code blocks (```lang ... ```), above all ```mermaid, from
+  // the line-by-line board parser below — which would otherwise shred a
+  // multi-line architecture diagram into individual text notes (the bug that
+  // showed the raw "graph TD / classDef ..." source instead of a graph).
+  // Each fence is swapped for a single placeholder line, rendered whole via
+  // renderMarkdown (which turns ```mermaid into a <div class="mermaid">) and
+  // re-inserted after the board is built.
+  const fences = [];
+  const guarded = markdown.replace(/```[\s\S]*?```/g, (m) => {
+    fences.push(m);
+    return " FENCE" + (fences.length - 1) + " ";
+  });
+
+  // The PLAN panel is a document (goal, approach, changes, architecture
+  // graph) — always render it as rich markdown, never the checkbox board.
+  // Only the WORKFLOW panel (a task list) uses the checkbox board.
+  const lines = guarded.split("\n");
+  const hasTasks = kind === "workflow" && lines.some(l => /^\s*[-*]\s+\[[ xX]\]\s+/.test(l));
   if (!hasTasks) {
     container.innerHTML = renderMarkdown(markdown);
     if (window.mermaid) {
@@ -539,6 +554,12 @@ function renderPlanBoard(markdown, container, kind) {
 
   for (const raw of lines) {
     const line = raw.trimEnd();
+    // Fenced block placeholder → render the whole fence (mermaid/code).
+    const fenceMatch = line.match(/^ FENCE(\d+) $/);
+    if (fenceMatch) {
+      html += '<div class="bp-fence">' + renderMarkdown(fences[+fenceMatch[1]]) + '</div>';
+      continue;
+    }
     // Heading → section divider.
     const headingMatch = line.match(/^(#{1,4})\s+(.*)$/);
     if (headingMatch) {

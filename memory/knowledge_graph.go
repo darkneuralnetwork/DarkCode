@@ -26,9 +26,9 @@ type KnowledgeGraph struct {
 	mu          sync.RWMutex
 	nodes       map[string]*core.KGNode
 	edges       []*core.KGEdge
-	edgeIndex   map[string]int              // O(1) lookup for findEdgeIndexLocked
-	adjacent    map[string][]string         // nodeID -> connected node IDs
-	edgesByNode map[string][]*core.KGEdge   // nodeID -> incident edges, for O(1) GetEdges
+	edgeIndex   map[string]int            // O(1) lookup for findEdgeIndexLocked
+	adjacent    map[string][]string       // nodeID -> connected node IDs
+	edgesByNode map[string][]*core.KGEdge // nodeID -> incident edges, for O(1) GetEdges
 	filePath    string
 	writer      *DebouncedWriter
 	embedder    core.LLMClient
@@ -68,15 +68,6 @@ func NewKnowledgeGraph(dir string) (*KnowledgeGraph, error) {
 
 	kg.rebuildEdgeIndexLocked()
 
-	// Startup pruning: a persisted graph may already be over
-	// maxConceptNodes (e.g. the cap was lowered since the file was last
-	// written, or the file was edited/merged externally). Previously
-	// pruning only ran inside RecordWordRelations on a write, so an
-	// over-cap graph stayed over-cap — and therefore slower to query via
-	// the per-node scans in cli/console.go's /know command — until the
-	// next write happened to push it further over the cap and trigger a
-	// cleanup. pruneConceptsLocked() is a no-op (and cheap: an O(nodes)
-	// scan) when already under the cap.
 	kg.mu.Lock()
 	kg.pruneConceptsLocked()
 	kg.mu.Unlock()

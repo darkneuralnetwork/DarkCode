@@ -1566,7 +1566,9 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   border: 1px solid rgba(120, 170, 255, 0.18);
   border-radius: 8px;
   padding: 12px;
-  max-height: 250px;
+  /* Fixed height during the run so streaming thinking text scrolls INSIDE the
+     panel instead of growing the message and dragging the response down. */
+  height: 130px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2056,6 +2058,34 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .bp-status-todo { background: var(--bg-elevated); color: var(--text-mute); border: 1px solid var(--border); }
 .bp-note { font-size: 12px; color: var(--text-dim); padding: 3px 8px; line-height: 1.5; }
 .bp-note code { font-family: var(--font-mono); font-size: 11px; background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; }
+/* Fenced block (mermaid architecture graph / code) inside the blueprint. */
+.bp-fence { margin: 10px 0; }
+.bp-fence .mermaid { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; overflow-x: auto; }
+
+/* Rich-markdown blocks (headings + list rows), used by the plan document view
+   and chat responses. */
+.md-h1, .md-h2, .md-h3 {
+  font-weight: 800; letter-spacing: 0.4px; color: var(--text-bright);
+  margin: 14px 0 6px; line-height: 1.35;
+}
+.md-h1 { font-size: 16px; }
+.md-h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--accent-3); padding-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.md-h3 { font-size: 13px; color: var(--accent-3); }
+.md-h1:first-child, .md-h2:first-child, .md-h3:first-child { margin-top: 0; }
+.md-li {
+  position: relative; font-size: 13px; color: var(--text); line-height: 1.55;
+  padding: 2px 8px 2px 22px;
+}
+.md-li::before {
+  content: "▸"; position: absolute; left: 8px; color: var(--accent-3); font-size: 11px; top: 3px;
+}
+.md-li code, .md-h1 code, .md-h2 code, .md-h3 code {
+  font-family: var(--font-mono); font-size: 12px; background: var(--bg-elevated);
+  padding: 1px 5px; border-radius: 3px;
+}
 
 /* ChatGPT-style edit-and-resend button below user messages. */
 .msg-actions { display: flex; gap: 6px; margin-top: 6px; }
@@ -2072,6 +2102,12 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .inline-exec-timeline.msg-exec-live {
   display: block; margin-top: 10px;
   border-color: rgba(255,145,0,0.15);
+  /* Fixed height during the run so appended tool rows scroll INSIDE the panel
+     rather than growing the message and pushing the response downward. The
+     panel collapses into the folded "Execution Details" toggle at completion. */
+  height: 150px;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 /* Chat/Build mode segmented control (Phase 5). */

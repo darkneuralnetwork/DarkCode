@@ -1,16 +1,5 @@
 package plugin
 
-// host.go — the plugin host manages external plugin processes and
-// communicates with them via JSON-RPC over stdin/stdout.
-//
-// Previously Host.Load spawned a binary and immediately discarded it (the
-// process was orphaned, no communication happened, and grpcPluginStub
-// returned empty manifests). It now:
-//   - Spawns the plugin binary with stdin/stdout pipes
-//   - Performs a handshake (manifest → init)
-//   - Proxies Execute calls via JSON-RPC
-//   - Shuts down all plugins cleanly on Host.Shutdown()
-
 import (
 	"bufio"
 	"encoding/json"
@@ -34,10 +23,10 @@ type Host struct {
 
 // managedPlugin wraps an external process and its stdin/stdout pipes.
 type managedPlugin struct {
-	name   string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
+	name     string
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   *bufio.Reader
 	manifest Manifest
 }
 

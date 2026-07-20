@@ -1,13 +1,5 @@
 package agents
 
-// verification_stages.go — additional verification stages that were missing
-// from the original pipeline (spec §10: "missing security scan, style, patch
-// validation"). These extend the base CmdVerificationStage with:
-//   - Language detection so Go-specific stages only run on Go projects
-//   - A security scan stage (govulncheck / gosec)
-//   - A patch validation stage (checks that changed files compile)
-//   - A style check stage (golangci-lint, with go vet fallback)
-
 import (
 	"context"
 	"os"
@@ -167,7 +159,7 @@ func NewPatchValidationStage(workspace string) *PatchValidationStage {
 	return &PatchValidationStage{workspace: workspace}
 }
 
-func (p *PatchValidationStage) Name() string { return "patch_validation" }
+func (p *PatchValidationStage) Name() string                    { return "patch_validation" }
 func (p *PatchValidationStage) IsApplicable(output string) bool { return true }
 
 func (p *PatchValidationStage) Verify(ctx context.Context, goal, output string) (*core.VerificationResult, error) {

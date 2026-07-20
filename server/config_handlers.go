@@ -16,17 +16,33 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Snapshot EVERY field under the read lock. updateConfig (POST /api/config)
-	// takes the write lock for its whole body and mutates these fields
-	// (RoutingMode/SafetyLevel/MaxTurns/AgenticLoop/MaxLoops/CompressorModel/…).
-	// Reading them here without the lock raced a concurrent settings save —
-	// the same class of bug previously fixed in handleStatus. One contiguous
-	// critical section; the masked-models loop stays where it is.
 	s.cfgMu.RLock()
 	safeModels := make(map[string]config.ModelConfig)
 	for k, v := range s.cfg.Models {
 		v.APIKey = maskKey(v.APIKey)
 		safeModels[k] = v
+	}
+	// The flat-configured primary (model/provider/base_url fields) is a real
+	// registered cloud model even when the multi-model map is empty —
+	// synthesize an entry so the Models panel shows it instead of claiming
+	// "No cloud models registered" while the primary is actively serving.
+	if s.cfg.Model != "" && s.cfg.Provider != "" && s.cfg.Provider != "embedded" {
+		inMap := false
+		for k, v := range safeModels {
+			if k == s.cfg.Model || v.Model == s.cfg.Model {
+				inMap = true
+				break
+			}
+		}
+		if !inMap {
+			safeModels[s.cfg.Model] = config.ModelConfig{
+				BaseURL:  s.cfg.BaseURL,
+				APIKey:   maskKey(s.cfg.APIKey),
+				Model:    s.cfg.Model,
+				Provider: s.cfg.Provider,
+				Tier:     "reasoning",
+			}
+		}
 	}
 	model := s.cfg.Model
 	provider := s.cfg.Provider
@@ -44,34 +60,38 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	maxConcurrent := s.cfg.MaxConcurrent
 	temperature := s.cfg.Temperature
 	executionProfile := s.cfg.ExecutionProfile
+	planApproval := s.cfg.PlanApproval
+	planDepth := s.cfg.PlanDepth
 	s.cfgMu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"model":            model,
-		"provider":         provider,
-		"base_url":         baseURL,
-		"routing_mode":     routingMode,
-		"safety_level":     safetyLevel,
-		"max_turns":        maxTurns,
-		"compress_context": compressContext,
-		"agentic_loop":     agenticLoop,
-		"max_loops":        maxLoops,
-		"compressor_model": compressorModel,
-		"ui_mode":          uiMode,
-		"context_length":   contextLength,
-		"max_concurrent":   maxConcurrent,
-		"temperature":      temperature,
+		"model":             model,
+		"provider":          provider,
+		"base_url":          baseURL,
+		"routing_mode":      routingMode,
+		"safety_level":      safetyLevel,
+		"max_turns":         maxTurns,
+		"compress_context":  compressContext,
+		"agentic_loop":      agenticLoop,
+		"max_loops":         maxLoops,
+		"compressor_model":  compressorModel,
+		"ui_mode":           uiMode,
+		"context_length":    contextLength,
+		"max_concurrent":    maxConcurrent,
+		"temperature":       temperature,
 		"execution_profile": executionProfile,
-		"enable_local_llm": s.cfg.EnableLocalLLM,
-		"local_mode":       s.cfg.ResolvedLocalMode(),
-		"force_local":      s.cfg.ForceLocal(),
-		"local_model_role": s.cfg.LocalModelRole,
-		"memory_profile":   s.cfg.MemoryProfile,
-		"has_api_key":      hasKey,
-		"models":           safeModels,
-		"embedded":         s.embeddedStatus(),
+		"plan_approval":     planApproval,
+		"plan_depth":        planDepth,
+		"enable_local_llm":  s.cfg.EnableLocalLLM,
+		"local_mode":        s.cfg.ResolvedLocalMode(),
+		"force_local":       s.cfg.ForceLocal(),
+		"local_model_role":  s.cfg.LocalModelRole,
+		"memory_profile":    s.cfg.MemoryProfile,
+		"has_api_key":       hasKey,
+		"models":            safeModels,
+		"embedded":          s.embeddedStatus(),
 		"registered_models": s.kernelRegisteredModels(),
-		"metrics":          metrics.Default.Snapshot(),
+		"metrics":           metrics.Default.Snapshot(),
 	})
 }
 
@@ -91,6 +111,12 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// Execution profile (parallelism switcher): "parallel" | "sequential" |
 		// "auto". Pointer so an explicit "auto" is distinguishable from "not sent".
 		ExecutionProfile *string `json:"execution_profile,omitempty"`
+
+		// Planning phase: approval gate policy ("always"|"auto"|"never") and
+		// depth override ("auto"|"light"|"deep"). Pointers so unset fields
+		// leave current values unchanged.
+		PlanApproval *string `json:"plan_approval,omitempty"`
+		PlanDepth    *string `json:"plan_depth,omitempty"`
 
 		// MemoryProfile is the local model's context/RAM knob: "lean" | "balanced"
 		// | "max" | "" (auto). Pointer so an unset field leaves it unchanged.
@@ -156,11 +182,6 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 			Tier:     config.ResolveTier(providerID, req.ModelName),
 		}
 
-		// Set the newly registered model as the primary active model ONLY when
-		// no primary is currently configured. Previously this unconditionally
-		// stole primary on every add_model — so adding a second model for
-		// consensus/verification would silently swap the user's active chat
-		// model out from under them. Now we preserve an existing primary.
 		if s.cfg.Model == "" {
 			s.cfg.Model = req.ModelName
 			s.cfg.BaseURL = baseURL
@@ -328,6 +349,18 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 			s.cfg.ExecutionProfile = *req.ExecutionProfile
 			if s.kernel != nil {
 				s.kernel.SetExecutionProfile(*req.ExecutionProfile)
+			}
+		}
+		// Planning-phase controls (approval gate + depth governor) hot-toggle.
+		if req.PlanApproval != nil || req.PlanDepth != nil {
+			if req.PlanApproval != nil {
+				s.cfg.PlanApproval = *req.PlanApproval
+			}
+			if req.PlanDepth != nil {
+				s.cfg.PlanDepth = *req.PlanDepth
+			}
+			if s.kernel != nil {
+				s.kernel.SetPlanControls(s.cfg.PlanApproval, s.cfg.PlanDepth)
 			}
 		}
 

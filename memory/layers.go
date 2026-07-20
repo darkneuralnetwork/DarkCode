@@ -1,21 +1,5 @@
 package memory
 
-// layers.go — ArchitectureMemory, a persisted key/value store for codebase
-// design decisions (component map, dependency notes, architectural
-// constraints) recorded by the agent across a session.
-//
-// This used to be one of six "Phase 9" memory tiers (Conversation, Session,
-// Workspace, Project, Architecture, User). An audit found the other five
-// fully redundant with existing, already-wired systems — Conversation with
-// System.stm, Project with project.Store, Session/Workspace with no real
-// caller and dedicated typed fields where needed, User with the existing
-// semantic-tier "user" category in tools/memory_tool.go — so they were
-// removed rather than left as unused dead weight. ArchitectureMemory was the
-// one tier with no existing equivalent (the knowledge graph captures task/
-// tool/concept activity, not "why we designed it this way" decisions), so it
-// was kept and wired into System with disk persistence — see
-// System.ArchitectureAddDecision / System.ArchitectureDecisions.
-
 import "sync"
 
 // kvMemory is the shared map-backed implementation ArchitectureMemory builds on.

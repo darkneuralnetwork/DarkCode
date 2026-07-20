@@ -2,8 +2,8 @@ package orchestrator
 
 import (
 	"fmt"
-	"strings"
 	"github.com/darkcode/core"
+	"strings"
 )
 
 // ErrorManager handles LLM and system errors, providing auto-fixes for known
@@ -34,7 +34,7 @@ func (em *ErrorManager) Handle(err error, history []core.Message) (bool, []core.
 
 		for _, m := range history {
 			newMsg := m
-			
+
 			// 1. Convert Assistant ToolCalls to plain text
 			if len(m.ToolCalls) > 0 {
 				var calls []string
@@ -42,7 +42,7 @@ func (em *ErrorManager) Handle(err error, history []core.Message) (bool, []core.
 					calls = append(calls, fmt.Sprintf("%s(%s)", tc.Function.Name, tc.Function.Arguments))
 				}
 				callStr := strings.Join(calls, ", ")
-				
+
 				newMsg.ToolCalls = nil
 				if newMsg.ContentString() == "" {
 					newMsg.Content = fmt.Sprintf("[Historical Tool Calls Executed: %s]", callStr)
@@ -51,7 +51,7 @@ func (em *ErrorManager) Handle(err error, history []core.Message) (bool, []core.
 				}
 				modified = true
 			}
-			
+
 			// 2. Convert Tool Responses to plain User/Assistant text
 			if m.Role == core.RoleTool {
 				newMsg.Role = core.RoleUser

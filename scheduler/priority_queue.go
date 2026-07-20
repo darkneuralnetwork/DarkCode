@@ -1,13 +1,5 @@
 package scheduler
 
-// priority_queue.go — priority-ordered task queue with context-cancellable Pop.
-//
-// Previously Pop() used sync.Cond.Wait() which could not be interrupted by
-// context cancellation (the code even acknowledged: "In a real system, you'd
-// use select over a channel"). This is now a channel-based implementation:
-// Push sends to a buffered channel after inserting in priority order, and Pop
-// selects on either the task channel or ctx.Done().
-
 import (
 	"context"
 	"errors"

@@ -257,6 +257,34 @@ function renderExecutionProfile(profile) {
   if (hint) hint.textContent = hints[profile] || hints.auto;
 }
 
+// renderPlanControls marks the active segments of the Planning Phase panel
+// (plan approval + planning depth) and updates the hint text. Called from
+// loadConfig and the segment click handler (150-events.js).
+function renderPlanControls(approval, depth) {
+  const vals = { plan_approval: approval || "auto", plan_depth: depth || "auto" };
+  $$(".cfg-plan-seg").forEach(btn => {
+    const active = btn.dataset.value === vals[btn.dataset.key];
+    btn.style.background = active ? "var(--accent-3)" : "transparent";
+    btn.style.color = active ? "#000" : "var(--text-mute)";
+    btn.style.borderColor = active ? "var(--accent-3)" : "transparent";
+    btn.style.fontWeight = active ? "600" : "400";
+  });
+  const approvalHints = {
+    auto: "Approval: only deep-planned (complex) tasks pause for your review; light plans run immediately.",
+    always: "Approval: every planned task pauses for approve / revise / reject in chat.",
+    never: "Approval: plans execute immediately without review."
+  };
+  const depthHints = {
+    auto: "Depth: complexity + project context decide — one planning call for moderate tasks, decompose + self-review for complex ones.",
+    light: "Depth: always a single planning call on the primary model (cheapest).",
+    deep: "Depth: always extended-thinking decompose + adversarial self-review on the primary model (most thorough)."
+  };
+  const hint = $("#cfg-plan-hint");
+  if (hint) hint.textContent =
+    (approvalHints[vals.plan_approval] || approvalHints.auto) + " " +
+    (depthHints[vals.plan_depth] || depthHints.auto);
+}
+
 // renderActiveProvider populates the "Active Provider" connection-details
 // panel from the /api/config response.
 function renderActiveProvider(d) {
@@ -321,6 +349,7 @@ async function loadConfig() {
     updateLoopIndicator(loopOn);
     updateLoopModeOption(loopOn);
     renderExecutionProfile(d.execution_profile);
+    renderPlanControls(d.plan_approval, d.plan_depth);
 
     // Local LLM
     const localChk = $("#cfg-enable-local-llm");
