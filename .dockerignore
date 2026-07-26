@@ -1,0 +1,15 @@
+# Keep hidden dirs (VCS, local tooling, app state) out of the build context so
+# nothing local or sensitive is copied into the image.
+.*
+**/.*
+
+# Build output & artifacts
+/dist/
+/build/
+/binaries/
+darkcode
+*.log
+*.exe
+*.deb
+*.tar.gz
+*.zip

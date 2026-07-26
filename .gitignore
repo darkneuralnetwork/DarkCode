@@ -1,0 +1,23 @@
+# Build output & binaries
+/darkcode
+/dist/
+/build/
+/binaries/
+*.exe
+*.deb
+*.tar.gz
+*.zip
+
+# Test & coverage
+coverage.out
+
+# Logs
+*.log
+
+# OS & editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
