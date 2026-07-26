@@ -4,435 +4,263 @@
 
 # DarkCode
 
-**Next-Generation Autonomous AI Agent Platform**
-
-A local-first, modular AI agent operating system built in Go for autonomous software engineering, intelligent automation, and scalable AI workflows.
+**A local-first, autonomous AI agent platform for software engineering — built in Go.**
 
 Engineered by [**Team Dark Neural Network (DNN)**](https://darkneuralnetwork.com)
 
-![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go)
-![AI Agents](https://img.shields.io/badge/AI_Agent-purple?style=for-the-badge)
-![Local LLM](https://img.shields.io/badge/Local_LLM-green?style=for-the-badge)
-![RAG](https://img.shields.io/badge/Hybrid_RAG-orange?style=for-the-badge)
-![Knowledge Graph](https://img.shields.io/badge/Knowledge_Graph-blue?style=for-the-badge)
-![Loop Engineering](https://img.shields.io/badge/Loop_Engineering-red?style=for-the-badge)
-![License](https://img.shields.io/badge/License-GPL_3.0-blue?style=for-the-badge)
+[![CI](https://github.com/darkneuralnetwork/DarkCode/actions/workflows/ci.yml/badge.svg)](https://github.com/darkneuralnetwork/DarkCode/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/darkneuralnetwork/DarkCode?style=flat-square&color=8957e5)](https://github.com/darkneuralnetwork/DarkCode/releases)
+![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat-square&logo=go)
+![Local First](https://img.shields.io/badge/Local--First-green?style=flat-square)
+![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square)
+
+[**Install**](#-installation) · [**Quick Start**](#-quick-start) · [**How It Works**](#-how-it-works) · [**Configuration**](#%EF%B8%8F-configuration) · [**Wiki**](docs/WIKI.md)
 
 </div>
 
 ---
 
-## ⚡ Overview
+## ⚡ What is DarkCode?
 
-The next generation of AI applications requires more than just a conversational model. DarkCode reimagines AI engineering by distributing intelligence across specialized, modular systems. 
+Most AI coding assistants are a thin loop: **you → cloud model → answer**, paying full price for every token and forgetting everything between sessions.
 
-**Traditional AI struggles with:**
-* Exponential inference costs
-* Massive context requirements
-* Volatile memory and repeated reasoning
-* Poor holistic project understanding
-* Unreliable execution and cloud dependency
+DarkCode is different. It runs on **your machine**, keeps a durable, growing memory of your code, and — crucially — **tries to answer from local knowledge before ever calling a cloud model.** The result is an agent that gets *cheaper and smarter the more you use it.*
 
-**The DarkCode Objective:**
-> Create an AI system that becomes more efficient over time by remembering, learning, and reusing knowledge instead of repeatedly solving the same problems.
+> **The objective:** an AI system that becomes more efficient over time by remembering, learning, and reusing knowledge instead of repeatedly re-solving the same problems.
 
----
+**Design principles**
 
-## 🔄 Loop Engineering Technology
-
-DarkCode is built on advanced **Loop Engineering** to create self-sustaining, autonomous workflows. Instead of linear, one-off executions, the platform operates on continuous feedback and improvement loops:
-
-* **Execution Loops:** Iterative *plan-execute-verify* cycles ensuring robust task completion.
-* **Feedback Loops:** Real-time monitoring of environment and tool outputs to dynamically course-correct failures.
-* **Memory Optimization Loops:** Continuous background processes that compress working memory into episodic and semantic Knowledge Graph updates.
-* **Reflective Loops:** Self-evaluating mechanisms where agents review their own code and logic before final deployment.
+| Principle | What it means |
+| :-- | :-- |
+| 🏠 **Local-first** | Runs offline with an embedded `llama.cpp` engine; cloud is optional. |
+| 💸 **Cost-minimizing** | A cognition cascade answers from tools, cache, and memory before any LLM call. |
+| 🧠 **Persistent memory** | Episodic + semantic memory and a code knowledge graph, shared across every project. |
+| 🔒 **Secure by default** | Permission gate, workspace confinement, and an optional filesystem sandbox. |
+| 📦 **Zero heavy deps** | A single Go binary — no database, no runtime, no framework. |
 
 ---
 
-## 🧠 The DarkCode Advantage
+## 🧭 How It Works
 
-Most assistants operate on a simple **User → LLM → Response** loop. DarkCode operates as a dynamic, intelligent execution engine.
+### Architecture
 
-**The Execution Pipeline:**
-`User Goal` ➔ `Intent Analysis` ➔ `Planning Engine` ➔ `Task Decomposition` ➔ `Specialized Agents` ➔ `Tool Execution` ➔ `Verification` ➔ `Memory Update` ➔ `Final Result`
+DarkCode is a set of independent, specialized layers behind one binary.
 
-**What this unlocks:**
-* Superior task handling and precision
-* Drastically reduced token consumption
-* Reusable, persistent knowledge
-* Controlled, secure automation
+```mermaid
+flowchart TD
+    U(["You"]) --> IF["CLI · Web GUI · single-query"]
+    IF --> K[["Orchestration Kernel"]]
 
----
+    K --> CAS{"Cognition Cascade<br/>answer locally?"}
+    CAS -->|"hit — 0 LLM calls"| OUT(["Answer"])
+    CAS -->|miss| RT["Model Router"]
 
-## 🏗️ Core Architecture
+    RT --> LOCAL["Local llama.cpp"]
+    RT --> CLOUD["Cloud providers"]
+    K --> AG["Sub-agents · ReAct loop"]
+    AG --> TOOLS["Tool Runtime"]
 
-<div align="center">
-  <img src="docs/images/real-time-details.png" alt="DarkCode AI Agent Platform Details" width="100%">
-</div>
+    TOOLS --> T1["files · terminal · git"]
+    TOOLS --> T2["web · search · MCP"]
+    K <--> MEM[("Memory System<br/>episodic · semantic<br/>+ knowledge graph")]
+    TOOLS -.->|"gated by"| SEC["Permission Gate · Sandbox"]
 
-DarkCode is built on a foundation of independent, highly specialized layers.
-
-```text
-                           [ User ]
-                              ↓
-                        [ Web UI / CLI ]
-                              ↓
-                    [ Orchestration Kernel ]
-      ┌───────────────┬───────────────┬───────────────┐
-  [ Planner ]   [ Model Router ]  [ Memory System ]
-      │               │               │
-  [ Agents ]    [ Local/Cloud ]   [ RAG + Graph ]
-      └───────────────┼───────────────┘
-                      ↓
-               [ Tool Runtime ]
-      ┌─────────┬─────┴───┬─────────┬─────────┐
-   [ Files ] [ Terminal ] [ Git ] [ Web ] [ APIs ]
+    LOCAL --> OUT
+    CLOUD --> OUT
+    AG --> OUT
 ```
 
-### Component Breakdown
+### The Cognition Cascade — why it's cheap
 
-* **Orchestration Kernel:** Commands the execution lifecycle, agent coordination, and workflow state.
-* **Planner:** Translates raw objectives into actionable, step-by-step execution strategies.
-* **Model Router:** Dynamically balances workloads between local and cloud models for optimal cost and latency.
-* **Agent Runtime:** Hosts specialized sub-agents with strict task isolation and parallel execution.
-* **Tool Runtime:** Provides secure, sandboxed access to the filesystem, terminal, Git, and the web.
+Before any paid model runs, a query descends a cost-ascending ladder of **local** answerers. A confident hit answers instantly, for free.
 
----
+```mermaid
+flowchart LR
+    Q(["Query"]) --> R0["Deterministic tools<br/>AST · ripgrep"]
+    R0 -->|miss| R1["Answer cache<br/>exact / near-dup"]
+    R1 -->|miss| R2["Knowledge graph<br/>typed, cited facts"]
+    R2 -->|miss| R3["Episodic recall<br/>a past answer"]
+    R3 -->|miss| LLM["LLM<br/>local first, then cloud"]
 
-## 🔀 Intelligent Model Routing
+    R0 -->|hit| A(["Answer — $0"])
+    R1 -->|hit| A
+    R2 -->|hit| A
+    R3 -->|hit| A
+```
 
-DarkCode thrives on a **local-first AI strategy**. Not every task requires a massive, expensive frontier model. Our routing engine ensures you use the smallest capable model for every action.
-
-**Local Models (Fast & Free):**
-* Code explanation & formatting
-* Summarization & classification
-* Simple edits & repetitive tasks
-* RAG retrieval
-
-**Cloud Models (Heavy Lifting):**
-* Complex system architecture
-* Advanced reasoning & synthesis
-* Deep debugging sessions
+Every rung records whether it answered, so you can see exactly how many calls were avoided (`/cascade` in the GUI, `/api/cascade`). More usage → deeper knowledge → better retrieval → **fewer API calls → lower cost.**
 
 ---
 
-## 💾 Advanced Memory & Knowledge Graph
+## 🧠 Memory & Knowledge Graph
 
-Memory in DarkCode is far more than chat history. It is a persistent intelligence layer that evolves with your projects.
+Memory is a persistent intelligence layer, not chat history — and it's **system-wide**, shared across all your projects.
 
-**The Memory Hierarchy:**
-`Conversation` ➔ `Working` ➔ `Episodic` ➔ `Semantic` ➔ `Knowledge Graph`
+```mermaid
+flowchart LR
+    C["Conversation<br/>(short-term)"] --> E["Episodic<br/>past tasks"]
+    E --> S["Semantic<br/>facts / docs"]
+    E --> KG[("Knowledge Graph<br/>symbols · imports · deps")]
+    S --> KG
+    KG --> R["Hybrid RAG recall"]
+    R -->|feeds| C
+```
 
-**Continuous Knowledge Improvement:**
-DarkCode actively maps files, functions, APIs, and dependencies into its Knowledge Graph. Every meaningful interaction feeds the system.
-
-`More Usage` ➔ `Deeper Knowledge` ➔ `Better Retrieval` ➔ `Fewer API Calls` ➔ `Lower Costs`
+Writes are atomic (crash-safe), and an optional local embedder turns recall genuinely semantic. The graph indexes your codebase's symbols, imports, and dependencies with provenance.
 
 ---
 
-## 🛡️ Secure Autonomous Execution
+## 🔀 Model Routing
 
-Powerful automation requires uncompromising security. DarkCode implements rigid boundaries to ensure safe execution:
+Use the smallest capable model for every action. Routing has three modes:
 
-* Capability-based access
-* Strict tool validation
-* Hardened execution controls
-* Configurable permission boundaries
+| Mode | Behavior |
+| :-- | :-- |
+| `single` | One primary model handles everything. |
+| `escalation` | Start small/local; escalate to a stronger model only when needed. |
+| `consensus` | Multiple models answer; the primary synthesizes the final result. |
+
+Pick the "brain" per request — `local` (offline), `cloud`, or `auto` (local-first). Supported providers: **OpenAI, Anthropic, OpenRouter, Google, Groq, DeepSeek, Mistral, xAI, Together, Ollama, LM Studio,** and the built-in **embedded** local engine.
+
+---
+
+## 🔒 Security
+
+DarkCode executes real shell commands and edits files, so it treats safety as a first-class concern:
+
+- **Permission gate** — dangerous actions (destructive commands, writes, `git push`, interpreter one-liners, pipe-to-shell) require approval, with three levels: `strict` / `normal` / `relaxed`.
+- **Workspace confinement** — file writes are kept inside the active project, with symlink escapes blocked.
+- **Filesystem sandbox** — optional `bubblewrap`/`firejail` confinement so shell commands can only write inside the workspace. Modes: `off` / `auto` / `on` / `strict`.
+- **Secret scanning & SSRF guards** — credentials in tool args force a prompt; outbound fetches can't reach loopback or cloud-metadata endpoints.
+
+> See the [Security chapter of the Wiki](docs/WIKI.md#-security-model) for the full model.
+
+---
+
+## 🚀 Installation
+
+### Option 1 — Prebuilt release (recommended)
+
+Grab the latest from the [**Releases page**](https://github.com/darkneuralnetwork/DarkCode/releases):
+
+| Platform | Asset |
+| :-- | :-- |
+| Linux (Debian/Ubuntu, 64-bit) | `darkcode-vX.Y.Z-linux-amd64.deb` |
+| Linux (32-bit) | `darkcode-vX.Y.Z-linux-i386.deb` |
+| Windows (64-bit) | `darkcode-vX.Y.Z-windows-amd64.exe` |
+
+```bash
+# Debian / Ubuntu
+sudo apt install ./darkcode-*-linux-amd64.deb
+darkcode --gui
+```
+
+Verify your download against the published `SHA256SUMS`.
+
+### Option 2 — Build from source
+
+Requires **Go 1.24+** and Git.
+
+```bash
+git clone https://github.com/darkneuralnetwork/DarkCode.git
+cd DarkCode
+make build      # or: go build -o darkcode .
+./darkcode --gui
+```
+
+### Option 3 — Docker
+
+```bash
+docker build -t darkcode .
+docker run --rm -it -p 12345:12345 -v ~/.darkcode:/root/.darkcode darkcode --gui
+```
+
+---
+
+## 🏁 Quick Start
+
+```bash
+# Interactive terminal
+darkcode
+
+# Web dashboard on http://localhost:12345
+darkcode --gui
+
+# One-shot, non-interactive
+darkcode -q "explain what cmd/root.go does"
+
+# Register a cloud model and go
+darkcode --add-model gpt-4o --provider openai --api-key sk-...
+```
+
+On first launch DarkCode initializes the agent runtime, memory system, knowledge graph, tool runtime, and model router. Configure models via the **Web UI settings** or the config file (below).
+
+---
+
+## ⚙️ Configuration
+
+Config lives at **`~/.darkcode/config.json`** (one install serves every directory). Common keys:
+
+| Key | Values | Purpose |
+| :-- | :-- | :-- |
+| `routing_mode` | `single` · `escalation` · `consensus` | How models are selected. |
+| `safety_level` | `strict` · `normal` · `relaxed` | Approval strictness. |
+| `sandbox` | `off` · `auto` · `on` · `strict` | Shell-command confinement. |
+| `local_mode` | `off` · `auto` · `on` · `force` | Local-LLM preference (`force` = never touch cloud). |
+| `memory_profile` | `lean` · `balanced` · `max` | Local model context window / RAM. |
+| `use_local_for_aux` | `true` / `false` | Route background calls to the local model (cost saver). |
+| `cost_limit_per_day_usd` | number | Optional spend cap. |
+
+API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). The full reference is in the [**Wiki → Configuration**](docs/WIKI.md#%EF%B8%8F-configuration-reference).
 
 ---
 
 ## 🖥️ Interfaces
 
-### Web UI
 <div align="center">
   <img src="docs/images/gui.png" alt="DarkCode Web UI" width="100%">
 </div>
 
-A comprehensive control center featuring AI conversations, agent monitoring, visual execution tracking, memory inspection, and deep Knowledge Graph visibility.
-
-### Command Line Interface
-Built for power users and CI/CD pipelines. Start tasks, configure models, and automate workflows directly from your terminal.
-
-```bash
-# Launch the Web GUI
-$ darkcode --gui
-
-# Run the standard CLI
-$ darkcode
-```
+- **Web UI** — conversations, live agent monitoring, blueprint/plan tracking, memory inspection, and knowledge-graph visibility.
+- **CLI** — a full slash-command palette (`/help`). Highlights: `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`, `/cascade`. Full list in the [**Wiki → CLI Reference**](docs/WIKI.md#-cli-command-reference).
 
 ---
 
-## 🚀 Installation & Setup
+## 🛠️ Build, Test & Release
 
-DarkCode supports multiple installation methods depending on your use case. You can either download a ready-to-use release binary or build the platform directly from source.
+```bash
+make ci          # fmt-check + vet + build + race tests (what CI runs)
+make test        # unit tests
+./build.sh 1.2.0 # cross-compile release artifacts into dist/
+```
+
+CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + a cross-compile matrix). Releases are cut with `build.sh` (linux `.deb`, windows `.exe`, `SHA256SUMS`).
 
 ---
 
-## Option 1: Download Prebuilt Releases (Recommended)
+## 📚 Documentation
 
-DarkCode provides native binaries for common platforms.
-
-| Platform                  | Package        | Interface       |
-| :------------------------ | :------------- | :-------------- |
-| **Windows**               | `.exe`         | Web UI + CLI    |
-| **Linux (Debian/Ubuntu)** | `.deb`         | Web UI + CLI    |
-| **Source Code**           | Git Repository | Developer Setup |
-
-Download the latest release from the project releases page and follow the platform-specific instructions below.
-
----
-
-# Option 2: Install From Source (Git Clone)
-
-Building from source is recommended for developers, contributors, and users who want the latest features.
-
-## Requirements
-
-Before installing DarkCode, make sure you have:
-
-* Go **1.22+**
-* Git
-* A supported local LLM runtime (optional)
-* Linux, Windows, or macOS environment
-
-Verify your installation:
-
-```bash
-go version
-git --version
-```
-
----
-
-## Clone the Repository
-
-```bash
-git clone https://github.com/Dark-Neural-Network/DarkCode.git
-
-cd DarkCode
-```
-
----
-
-## Install Dependencies
-
-Download all Go dependencies:
-
-```bash
-go mod download
-```
-
-Verify the project:
-
-```bash
-go mod tidy
-```
-
----
-
-## Build DarkCode
-
-Build the executable:
-
-```bash
-go build -o darkcode .
-```
-
-The binary will be generated as:
-
-```
-darkcode
-```
-
-Windows users:
-
-```
-darkcode.exe
-```
-
----
-
-## Run DarkCode
-
-### Start Command Line Interface
-
-```bash
-./darkcode
-```
-
-Windows:
-
-```powershell
-.\darkcode.exe
-```
-
----
-
-### Launch Web Interface
-
-```bash
-./darkcode --gui
-```
-
-Windows:
-
-```powershell
-.\darkcode.exe --gui
-```
-
-The DarkCode dashboard will start and provide access to:
-
-* AI conversations
-* Agent execution monitoring
-* Knowledge Graph inspection
-* Memory management
-* Workflow tracking
-
----
-
-# Option 3: Linux Debian Installation
-
-Install the `.deb` package:
-
-```bash
-sudo apt install ./darkcode.deb
-```
-
-After installation:
-
-```bash
-darkcode --gui
-```
-
-DarkCode will be available globally from your terminal.
-
----
-
-# Option 4: Windows Installation
-
-Download the latest Windows release:
-
-```
-darkcode.exe
-```
-
-Run:
-
-```powershell
-.\darkcode.exe --gui
-```
-
-No additional installation is required.
-
----
-
-# First-Time Configuration
-
-On the first launch, DarkCode initializes:
-
-```
-✓ Agent Runtime
-✓ Memory System
-✓ Knowledge Graph
-✓ Tool Runtime
-✓ Model Router
-```
-
-Configure your preferred AI models through the DarkCode configuration file:
-
-```
-config/
-```
-
-or through the Web UI settings panel.
-
----
-
-# Development Mode
-
-For contributors and developers:
-
-Run directly without building:
-
-```bash
-go run .
-```
-
-Run Web UI mode:
-
-```bash
-go run . --gui
-```
-
-Run tests:
-
-```bash
-go test ./...
-```
-
----
-
-# Updating DarkCode
-
-If installed from source:
-
-```bash
-git pull
-
-go mod download
-
-go build -o darkcode .
-```
-
-If installed using releases, download and replace the previous binary with the newest version.
-
----
-
-
-## 🛠️ Technology Stack
-
-| Layer | Technology |
-| :--- | :--- |
-| **Language** | Go (Golang) |
-| **Agent Runtime** | Custom Modular Orchestration Engine |
-| **Models** | Local (llama.cpp compatible) + Cloud LLMs |
-| **Memory** | Native Go Memory Architecture |
-| **Retrieval** | Hybrid RAG Engine |
-| **Intelligence** | Dynamic Knowledge Graph |
-| **Execution** | Secure Tool Runtime Sandbox |
+The [**DarkCode Wiki**](docs/WIKI.md) covers everything in depth — installation, first-run setup, every concept, the full CLI and configuration reference, the security model, local-LLM tuning, the HTTP API, and troubleshooting.
 
 ---
 
 ## 🗺️ Roadmap
 
-**Current Focus:**
-* Agent orchestration & local LLM optimization
-* RAG improvements & Knowledge Graph reasoning
-* Tool reliability & cost minimization
-* Self sustainable system with Loop Engineering
-
-**Future Horizons:**
-* Advanced procedural memory & self-learning
-* Autonomous debugging & distributed agents
-* Enterprise-scale deployment collaboration
+- ✅ Local-first cascade, knowledge graph, resource-governed local models
+- ✅ Config-driven sandbox, CI, atomic memory, request idempotency
+- 🔭 SQLite-backed knowledge store for large graphs
+- 🔭 Deeper procedural memory & self-learning
+- 🔭 Distributed / multi-agent collaboration
 
 ---
 
 ## 🤝 Contributing
 
-DarkCode is evolving rapidly. We are actively looking for contributors passionate about:
-* Autonomous AI agents
-* LLM optimization & memory systems
-* Knowledge Graphs & AI infrastructure
-
----
+Contributions are welcome. Run `make ci` before opening a PR. We're especially interested in autonomous agents, LLM cost/memory optimization, and knowledge-graph reasoning.
 
 ## ⚖️ License
 
-DarkCode is proudly open-source, released under the **GNU General Public License v3.0 (GPL-3.0)**. 
-
-You are free to use, study, modify, and distribute this software, provided all derivative works remain under the GPL-3.0 license. [Read the full license here](LICENSE).
+Released under the **GNU General Public License v3.0**. Use, study, modify, and distribute freely; derivative works stay GPL-3.0. [Full text](LICENSE).
 
 ---
 
@@ -441,9 +269,7 @@ You are free to use, study, modify, and distribute this software, provided all d
 ### Engineered by [Dark Neural Network](https://darkneuralnetwork.com)
 *Building the next generation of intelligent autonomous systems.*
 
-🌐 [Website](https://darkneuralnetwork.com) &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Star on GitHub &nbsp;&nbsp;•&nbsp;&nbsp; 🤝 Join the Community
-
-*If DarkCode helps you build, automate, or explore the future of AI agents, consider supporting the project by contributing or sharing feedback.*
+🌐 [Website](https://darkneuralnetwork.com) · ⭐ Star on GitHub · 🤝 Join the Community
 
 **DarkCode is not just an assistant. It is a foundation for building intelligent systems.**
 
