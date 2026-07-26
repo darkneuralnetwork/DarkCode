@@ -14,7 +14,7 @@ Engineered by [**Team Dark Neural Network (DNN)**](https://darkneuralnetwork.com
 ![Local First](https://img.shields.io/badge/Local--First-green?style=flat-square)
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square)
 
-[**Install**](#-installation) · [**Quick Start**](#-quick-start) · [**How It Works**](#-how-it-works) · [**Configuration**](#%EF%B8%8F-configuration) · [**Wiki**](docs/WIKI.md)
+[**Install**](#-installation) · [**Quick Start**](#-quick-start) · [**How It Works**](#-how-it-works) · [**Configuration**](#%EF%B8%8F-configuration) · [**Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki)
 
 </div>
 
@@ -133,7 +133,7 @@ DarkCode executes real shell commands and edits files, so it treats safety as a 
 - **Filesystem sandbox** — optional `bubblewrap`/`firejail` confinement so shell commands can only write inside the workspace. Modes: `off` / `auto` / `on` / `strict`.
 - **Secret scanning & SSRF guards** — credentials in tool args force a prompt; outbound fetches can't reach loopback or cloud-metadata endpoints.
 
-> See the [Security chapter of the Wiki](docs/WIKI.md#-security-model) for the full model.
+> See the [Security chapter of the Wiki](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-security-model) for the full model.
 
 ---
 
@@ -211,7 +211,7 @@ Config lives at **`~/.darkcode/config.json`** (one install serves every director
 | `use_local_for_aux` | `true` / `false` | Route background calls to the local model (cost saver). |
 | `cost_limit_per_day_usd` | number | Optional spend cap. |
 
-API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). The full reference is in the [**Wiki → Configuration**](docs/WIKI.md#%EF%B8%8F-configuration-reference).
+API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). The full reference is in the [**Wiki → Configuration**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#%EF%B8%8F-configuration-reference).
 
 ---
 
@@ -222,7 +222,7 @@ API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KE
 </div>
 
 - **Web UI** — conversations, live agent monitoring, blueprint/plan tracking, memory inspection, and knowledge-graph visibility.
-- **CLI** — a full slash-command palette (`/help`). Highlights: `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`, `/cascade`. Full list in the [**Wiki → CLI Reference**](docs/WIKI.md#-cli-command-reference).
+- **CLI** — a full slash-command palette (`/help`). Highlights: `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`, `/cascade`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
 
 ---
 
@@ -240,7 +240,7 @@ CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + a c
 
 ## 📚 Documentation
 
-The [**DarkCode Wiki**](docs/WIKI.md) covers everything in depth — installation, first-run setup, every concept, the full CLI and configuration reference, the security model, local-LLM tuning, the HTTP API, and troubleshooting.
+The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) covers everything in depth — installation, first-run setup, every concept, the full CLI and configuration reference, the security model, local-LLM tuning, the HTTP API, and troubleshooting.
 
 ---
 
