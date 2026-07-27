@@ -47,6 +47,21 @@ type Agent struct {
 	// prompt can report that it was cancelled rather than pretending it
 	// finished normally.
 	cancelled map[string]bool
+	// active is the session whose prompt is currently running. A permission
+	// request arises deep inside tool execution, far from the protocol layer,
+	// and has to be addressed to the editor UI that asked for the work. The
+	// kernel runs one turn at a time, so there is exactly one such session.
+	active string
+
+	// pending maps an outgoing request id to the channel awaiting its reply.
+	// Guarded by its own mutex: a waiter must not hold the lock that Serve
+	// needs to deliver the answer.
+	pendingMu sync.Mutex
+	pending   map[int64]chan rpcReply
+
+	// inflight counts prompts still running, so Serve does not return while a
+	// turn is still writing to the output stream.
+	inflight sync.WaitGroup
 }
 
 // NewAgent builds an agent that writes protocol messages to out.
@@ -55,21 +70,31 @@ func NewAgent(exec Executor, out io.Writer) *Agent {
 		exec: exec, out: out,
 		sessions:  map[string]string{},
 		cancelled: map[string]bool{},
+		pending:   map[int64]chan rpcReply{},
 	}
 }
 
 // rpcRequest is an incoming JSON-RPC message. A nil ID marks a notification,
-// which must never be answered.
+// which must never be answered. A message with an ID but no Method is the
+// client's reply to something this agent asked, not a new request.
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// rpcReply is a client answer handed back to whoever is waiting for it.
+type rpcReply struct {
+	Result json.RawMessage
+	Err    *rpcError
 }
 
 // Serve reads requests until the stream ends. It returns nil on a clean EOF,
@@ -91,9 +116,47 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
 			// No id is recoverable here, so there is nobody to tell.
 			continue
 		}
+		// A reply to one of our own requests: hand it to the waiter.
+		if req.Method == "" && req.ID != nil {
+			a.deliver(req)
+			continue
+		}
+		// session/prompt is the only method that runs long, and it is the one
+		// that must not block this loop: a permission request raised inside it
+		// is answered by a message that only this loop can read, and
+		// session/cancel exists to interrupt a prompt that is still running.
+		// Everything else stays sequential, because a client may legitimately
+		// expect session/new to have taken effect before the next request that
+		// names the session it created.
+		if req.Method == "session/prompt" {
+			a.inflight.Add(1)
+			go func() {
+				defer a.inflight.Done()
+				a.dispatch(ctx, req)
+			}()
+			continue
+		}
 		a.dispatch(ctx, req)
 	}
+	// Do not report the stream as finished while a turn is still writing to it.
+	a.inflight.Wait()
 	return scanner.Err()
+}
+
+// deliver routes a client reply to the request that is waiting for it. An
+// unknown id means the waiter already gave up, which is not an error.
+func (a *Agent) deliver(req rpcRequest) {
+	var id int64
+	if err := json.Unmarshal(req.ID, &id); err != nil {
+		return
+	}
+	a.pendingMu.Lock()
+	ch, ok := a.pending[id]
+	delete(a.pending, id)
+	a.pendingMu.Unlock()
+	if ok {
+		ch <- rpcReply{Result: req.Result, Err: req.Error}
+	}
 }
 
 // dispatch routes one request and replies when it has an id.
@@ -217,6 +280,20 @@ func (a *Agent) prompt(ctx context.Context, params json.RawMessage) (interface{}
 	if text == "" {
 		return nil, fmt.Errorf("prompt contained no text")
 	}
+
+	// Mark this session as the one a permission request belongs to. Approval
+	// is raised deep inside tool execution, which has no way to know which
+	// editor UI asked for the work.
+	a.mu.Lock()
+	a.active = p.SessionID
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		if a.active == p.SessionID {
+			a.active = ""
+		}
+		a.mu.Unlock()
+	}()
 
 	answer, err := a.exec.Execute(ctx, cwd, text)
 	if err != nil {
