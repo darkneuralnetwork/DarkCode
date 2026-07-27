@@ -337,7 +337,9 @@ func (k *Kernel) SetRunsDir(dir string) { k.runsDir = dir }
 // RunEvents returns the recorded execution events for a goal's run, oldest
 // first — the raw material for a replay view or a post-mortem.
 func (k *Kernel) RunEvents(goal string) []ExecEvent {
-	return NewExecJournal(k.runsDir, goal).Events()
+	// Read-only: NewExecJournal would delete a finished run's journal as part
+	// of preparing to re-run it.
+	return ReadRunEvents(k.runsDir, goal)
 }
 
 // RollbackTo restores the workspace to checkpoint n and rewinds the transcript
@@ -768,3 +770,7 @@ func (k *Kernel) Status() string {
 		k.memory.Summary(),
 	)
 }
+
+// Runs lists the recorded execution journals, most recent first, so a replay
+// view can offer something to open.
+func (k *Kernel) Runs() []RunSummary { return ListRuns(k.runsDir) }

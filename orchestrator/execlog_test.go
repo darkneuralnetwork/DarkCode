@@ -94,3 +94,27 @@ func TestNilJournalIsSafe(t *testing.T) {
 		t.Error("an empty directory should disable journalling")
 	}
 }
+
+// Reading a finished run must not destroy it. NewExecJournal deletes the
+// journal when the previous run completed, so that the next attempt starts
+// clean — correct for executing, and fatal for a replay view that routed
+// through the same constructor.
+func TestReadingAFinishedRunDoesNotDeleteIt(t *testing.T) {
+	dir := t.TempDir()
+	goal := "some goal"
+
+	j := NewExecJournal(dir, goal)
+	j.Append(ExecEvent{Kind: "run_started", Name: goal})
+	j.Append(ExecEvent{Kind: "node_completed", Node: "t1"})
+	j.Append(ExecEvent{Kind: "run_finished", Name: goal})
+
+	for i := 0; i < 3; i++ {
+		got := ReadRunEvents(dir, goal)
+		if len(got) != 3 {
+			t.Fatalf("read %d: got %d events, want 3 — the read destroyed the record", i+1, len(got))
+		}
+	}
+	if runs := ListRuns(dir); len(runs) != 1 || runs[0].Status != "finished" {
+		t.Errorf("ListRuns = %+v, want one finished run", runs)
+	}
+}

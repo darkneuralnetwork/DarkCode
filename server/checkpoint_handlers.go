@@ -37,7 +37,11 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	goal := r.URL.Query().Get("goal")
 	if goal == "" {
-		writeError(w, http.StatusBadRequest, "goal is required (the run is keyed by it)")
+		// No goal: list what there is to replay. A timeline view has to start
+		// with an index, and journals are named by the hash of their goal, so
+		// the directory alone offers nothing a person can choose from.
+		runs := s.kernel.Runs()
+		writeJSON(w, http.StatusOK, map[string]interface{}{"runs": runs, "count": len(runs)})
 		return
 	}
 	events := s.kernel.RunEvents(goal)

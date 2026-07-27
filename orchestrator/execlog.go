@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -54,9 +56,8 @@ func NewExecJournal(dir, goal string) *ExecJournal {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil
 	}
-	sum := sha256.Sum256([]byte(goal))
 	j := &ExecJournal{
-		path: filepath.Join(dir, hex.EncodeToString(sum[:])[:16]+".jsonl"),
+		path: journalPath(dir, goal),
 		done: map[string]string{},
 	}
 	j.loadPrevious()
@@ -145,7 +146,14 @@ func (j *ExecJournal) Events() []ExecEvent {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	f, err := os.Open(j.path)
+	return readEvents(j.path)
+}
+
+// readEvents parses a journal file, skipping lines it cannot read: a run that
+// was killed mid-write leaves a partial last line, and losing that one event
+// is better than losing the whole history before it.
+func readEvents(path string) []ExecEvent {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -173,4 +181,86 @@ func (j *ExecJournal) Finish() {
 	defer j.mu.Unlock()
 	j.done = map[string]string{}
 	_ = os.Remove(j.path)
+}
+
+// journalPath is where a goal's journal lives. Shared so a reader and the
+// executor cannot disagree about it.
+func journalPath(dir, goal string) string {
+	sum := sha256.Sum256([]byte(goal))
+	return filepath.Join(dir, hex.EncodeToString(sum[:])[:16]+".jsonl")
+}
+
+// ReadRunEvents returns a run's events without touching it.
+//
+// This exists because NewExecJournal is a *resumption* constructor: it reads
+// the previous attempt to decide what can be skipped, and deletes the journal
+// outright when it sees the run already finished, so the next attempt starts
+// clean. That is right for executing and catastrophic for reading — routing a
+// post-mortem through it deleted the history as a side effect of displaying
+// it, and the record was gone by the time anyone scrolled.
+func ReadRunEvents(dir, goal string) []ExecEvent {
+	if dir == "" || goal == "" {
+		return nil
+	}
+	return readEvents(journalPath(dir, goal))
+}
+
+// RunSummary describes one recorded run, for listing them without reading
+// every event of each.
+type RunSummary struct {
+	// ID is the journal's filename stem: the goal hashed, which is how a run
+	// is addressed. The goal itself is not recoverable from it, which is why
+	// it is carried alongside.
+	ID      string    `json:"id"`
+	Goal    string    `json:"goal"`
+	Started time.Time `json:"started"`
+	Ended   time.Time `json:"ended,omitempty"`
+	Events  int       `json:"events"`
+	// Status is "running", "finished" or "failed" — what a reader wants
+	// before deciding which run to open.
+	Status string `json:"status"`
+}
+
+// ListRuns summarises every journal in dir, most recent first.
+//
+// A replay view has to start somewhere, and journals are named by the hash of
+// their goal, so the directory listing alone says nothing a person can choose
+// from. Each file's first event carries the goal and its last carries the
+// outcome, which is enough for an index without reading the whole log.
+func ListRuns(dir string) []RunSummary {
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	var out []RunSummary
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		events := readEvents(filepath.Join(dir, e.Name()))
+		if len(events) == 0 {
+			continue
+		}
+		s := RunSummary{
+			ID:      strings.TrimSuffix(e.Name(), ".jsonl"),
+			Goal:    events[0].Name,
+			Started: events[0].Time,
+			Events:  len(events),
+			Status:  "running",
+		}
+		last := events[len(events)-1]
+		switch last.Kind {
+		case "run_finished":
+			s.Status, s.Ended = "finished", last.Time
+		case "node_failed":
+			s.Status, s.Ended = "failed", last.Time
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
+	return out
 }
