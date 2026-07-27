@@ -173,6 +173,9 @@ func (a *AppRunner) initTools(memDir string) {
 		tools.RegisterGraphTool(a.Registry, kg, cwd, a.HealthDaemon)
 	}
 	tools.RegisterGitHubTool(a.Registry, cwd)
+	// One call for search-read-summarise, instead of the model spending a turn
+	// on each. Shares the SSRF-guarded client every other outbound path uses.
+	tools.RegisterResearchTool(a.Registry, safeurl.EgressClient(60*time.Second), a.Router)
 	// A language server answers the type-aware questions the graph cannot.
 	// Servers start lazily on first query, so this costs nothing when none is
 	// installed.

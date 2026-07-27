@@ -14,6 +14,11 @@ import (
 	"unicode/utf8"
 )
 
+// Cut shortens s to at most n bytes, retreating to the nearest rune boundary
+// so the result is always valid UTF-8. It adds no marker, for callers that
+// append their own.
+func Cut(s string, n int) string { return cut(s, n) }
+
 // cut shortens s to at most n bytes, retreating to the nearest rune boundary
 // so the result is always valid UTF-8.
 func cut(s string, n int) string {
