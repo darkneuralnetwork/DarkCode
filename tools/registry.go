@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/permission"
@@ -47,10 +48,11 @@ type ToolEntry struct {
 type Registry struct {
 	mu       sync.RWMutex
 	tools    map[string]*ToolEntry
-	gate     *permission.Gate // optional permission gate
-	recorder *ChangeRecorder  // optional change recorder
-	emitter  *ui.EventEmitter // optional event emitter for file_change events
-	breaker  *toolBreaker     // per-tool circuit breaker (self-healing runtime)
+	gate     *permission.Gate    // optional permission gate
+	recorder *ChangeRecorder     // optional change recorder
+	emitter  *ui.EventEmitter    // optional event emitter for file_change events
+	breaker  *toolBreaker        // per-tool circuit breaker (self-healing runtime)
+	ckpt     *checkpoint.Manager // optional pre-mutation snapshotter
 }
 
 // NewRegistry creates an empty tool registry.
@@ -236,6 +238,11 @@ func (r *Registry) DispatchAll(ctx context.Context, calls []core.ToolCall) inter
 		return nil
 	}
 
+	// One pre-mutation checkpoint for the whole batch: the calls run
+	// concurrently, so snapshotting per call would both serialize them and
+	// record several near-identical states of the same turn.
+	r.snapshot(mutatingTool(r, calls))
+
 	results := make([]DispatchResult, len(calls))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5)
@@ -276,6 +283,36 @@ func (r *Registry) DispatchAll(ctx context.Context, calls []core.ToolCall) inter
 // defaultToolTimeout bounds a single tool handler's execution. Shared by every
 // dispatch surface so they agree.
 const defaultToolTimeout = 120 * time.Second
+
+// mutatingTool returns the name of the first call that can modify the
+// workspace, or "" when every call only observes.
+func mutatingTool(r *Registry, calls []core.ToolCall) string {
+	for _, c := range calls {
+		if entry, ok := r.Get(c.Function.Name); ok && !entry.ReadOnly {
+			return c.Function.Name
+		}
+	}
+	return ""
+}
+
+// snapshot records a checkpoint before a mutating tool runs, so the user can
+// undo it. A read-only turn (empty tool) or an unconfigured checkpointer is a
+// no-op, and a snapshot failure must never block the tool — the user loses the
+// undo point, not the action.
+func (r *Registry) snapshot(tool string) {
+	if tool == "" {
+		return
+	}
+	r.mu.RLock()
+	ckpt := r.ckpt
+	r.mu.RUnlock()
+	if ckpt == nil {
+		return
+	}
+	if _, err := ckpt.Snapshot(tool, "before "+tool); err != nil {
+		log.Printf("checkpoint: snapshot before %s failed: %v", tool, err)
+	}
+}
 
 // readOnlyDeny returns a blocked result when a read-only (Chat) request targets
 // a mutating tool, else nil. Defense-in-depth behind not offering write tools.
@@ -665,6 +702,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("tool %s is temporarily unavailable (quarantined after repeated failures; retry in ~%s)", name, remaining.Round(time.Second))
 	}
 
+	if !entry.ReadOnly {
+		r.snapshot(name)
+	}
+
 	toolCtx, cancel := context.WithTimeout(ctx, defaultToolTimeout)
 	defer cancel()
 
@@ -707,6 +748,14 @@ func (r *Registry) SetPermissionGate(gate *permission.Gate) {
 func (r *Registry) SetChangeRecorder(rec *ChangeRecorder) {
 	r.mu.Lock()
 	r.recorder = rec
+	r.mu.Unlock()
+}
+
+// SetCheckpointer installs the manager that snapshots the workspace before a
+// mutating tool runs, backing /rollback.
+func (r *Registry) SetCheckpointer(m *checkpoint.Manager) {
+	r.mu.Lock()
+	r.ckpt = m
 	r.mu.Unlock()
 }
 

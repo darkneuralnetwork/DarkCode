@@ -35,6 +35,17 @@ jobs:
       - name: Test (race)
         run: make test-race
 
+      # The benchmark suite needs a live model, so CI cannot score it. What CI
+      # can enforce is that the harness and every task fixture stay valid —
+      # each task loads and is still solvable by its reference solution. A
+      # broken fixture would otherwise sit undetected until a benchmark run
+      # scored zero for the wrong reason.
+      - name: Benchmark fixtures
+        run: go test ./bench/ -run 'Shipped' -v
+
+      - name: SBOM
+        run: make sbom && cat SBOM.txt
+
   build-matrix:
     # Prove the single binary cross-compiles for the platforms we ship.
     runs-on: ubuntu-latest

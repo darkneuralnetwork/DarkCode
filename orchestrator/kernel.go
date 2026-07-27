@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/darkcode/agents"
+	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
@@ -44,6 +45,14 @@ type Kernel struct {
 	// permission gate — enforces user approval for dangerous tool calls.
 	// The registry consults it before executing any tool.
 	gate *permission.Gate
+
+	// checkpoints snapshots the workspace before each mutating tool so the
+	// user can undo the agent. nil when the store could not be opened.
+	checkpoints *checkpoint.Manager
+
+	// runsDir holds per-run execution journals, which make a DAG resumable
+	// after a crash and replayable for a post-mortem. Empty disables both.
+	runsDir string
 
 	// modeApprover is the single mode-aware approval router installed on the
 	// gate. It delegates each prompt to the GUI ServerApprover or the CLI
@@ -294,6 +303,56 @@ func (k *Kernel) SetChangeRecorder(rec *tools.ChangeRecorder) {
 	}
 }
 
+// newConfiguredClient builds an LLM client from a model config, applying the
+// provider, the credential pool, and the reasoning effort. Shared by every
+// registration site here so a model reloaded from the GUI gets the same
+// treatment as one wired at startup.
+func newConfiguredClient(mc config.ModelConfig) *llm.Client {
+	c := llm.NewClient(mc.BaseURL, mc.APIKey, mc.Model)
+	c.SetProvider(mc.Provider)
+	c.Keys = llm.NewKeyPool(append([]string{mc.APIKey}, mc.APIKeys...)...)
+	c.Effort = mc.ReasoningEffort
+	return c
+}
+
+// SetCheckpoints installs the workspace snapshotter, both on the tool registry
+// (which takes the pre-mutation snapshot) and on the kernel, so every surface
+// can offer rollback from one owner.
+func (k *Kernel) SetCheckpoints(m *checkpoint.Manager) {
+	k.checkpoints = m
+	if k.registry != nil {
+		k.registry.SetCheckpointer(m)
+	}
+}
+
+// Checkpoints returns the workspace snapshotter, or nil when unavailable.
+func (k *Kernel) Checkpoints() *checkpoint.Manager { return k.checkpoints }
+
+// SetRunsDir enables durable, resumable DAG execution by journalling each run
+// under dir.
+func (k *Kernel) SetRunsDir(dir string) { k.runsDir = dir }
+
+// RunEvents returns the recorded execution events for a goal's run, oldest
+// first — the raw material for a replay view or a post-mortem.
+func (k *Kernel) RunEvents(goal string) []ExecEvent {
+	return NewExecJournal(k.runsDir, goal).Events()
+}
+
+// RollbackTo restores the workspace to checkpoint n and rewinds the transcript
+// to match, so the agent's next turn reasons from the state on disk. Shared by
+// the CLI /rollback command and the HTTP API.
+func (k *Kernel) RollbackTo(n int) (checkpoint.Entry, []checkpoint.Change, error) {
+	if k.checkpoints == nil {
+		return checkpoint.Entry{}, nil, fmt.Errorf("checkpoints are not enabled")
+	}
+	entry, changes, err := k.checkpoints.Rollback(n)
+	if err != nil {
+		return checkpoint.Entry{}, nil, err
+	}
+	k.memory.STMTruncate(entry.Turn)
+	return entry, changes, nil
+}
+
 // SetApprovalCallback is a legacy bridge: it wraps the simple bool callback
 // as a permission.Approver on the gate. Prefer SetPermissionGate +
 // Gate().SetApprover for the full allow-once / allow-session / deny flow.
@@ -479,8 +538,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// writer per tier (used by Route/escalation); the allModels slice keeps
 	// every registered model (used by consensus fan-out).
 	for _, mc := range cfg.Models {
-		client := llm.NewClient(mc.BaseURL, mc.APIKey, mc.Model)
-		client.SetProvider(mc.Provider)
+		client := newConfiguredClient(mc)
 		k.router.RegisterModel(modelTierFromString(mc.Tier), client, mc.Model)
 		// Set the consensus role from config (empty = default "general").
 		k.router.SetModelRole(mc.Model, mc.Role)
@@ -490,8 +548,8 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// consensus, coding otherwise). This ensures the primary wins its tier
 	// slot for Route/escalation, and MarkPrimary below flags it as the
 	// consensus synthesizer.
-	primaryClient := llm.NewClient(cfg.BaseURL, cfg.APIKey, cfg.Model)
-	primaryClient.SetProvider(cfg.Provider)
+	primaryClient := newConfiguredClient(config.ModelConfig{
+		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model})
 	tier := primaryTierForMode(k.router.GetMode())
 	k.router.RegisterModel(tier, primaryClient, cfg.Model)
 	k.router.MarkPrimary(cfg.Model)
@@ -504,8 +562,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 		compModel := cfg.Model
 		if cfg.CompressorModel != "" {
 			if mc, ok := cfg.Models[cfg.CompressorModel]; ok {
-				compClient = llm.NewClient(mc.BaseURL, mc.APIKey, mc.Model)
-				compClient.SetProvider(mc.Provider)
+				compClient = newConfiguredClient(mc)
 				compModel = mc.Model
 			}
 		}

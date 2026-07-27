@@ -18,16 +18,69 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/memory"
 	"github.com/darkcode/plan"
 )
 
 // pendingPlanTTL bounds how long a proposal stays actionable. After it, the
 // next message is treated as a brand-new request, not stale plan feedback.
 const pendingPlanTTL = 30 * time.Minute
+
+// planFilePattern finds source paths named in a plan's goals, so the gate can
+// tell the user what the change will reach before they approve it.
+var planFilePattern = regexp.MustCompile(`\b[\w./-]+\.(?:go|ts|tsx|js|jsx|py|rs|java)\b`)
+
+// previewWithImpact appends a blast-radius section to a plan preview: which
+// files the planned edits can reach through the code graph, and how much of
+// the repository that is.
+//
+// Approving a plan is the moment the user decides how much risk to accept, and
+// until now that decision was made from task titles alone. The graph already
+// knows the answer.
+func (k *Kernel) previewWithImpact(g *plan.Graph) string {
+	preview := plan.Preview(g)
+	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
+	if !ok || kg == nil {
+		return preview
+	}
+
+	seen := map[string]bool{}
+	var files []string
+	for _, n := range g.Nodes {
+		for _, m := range planFilePattern.FindAllString(n.Goal+" "+n.Name, -1) {
+			if !seen[m] {
+				seen[m] = true
+				files = append(files, m)
+			}
+		}
+	}
+	if len(files) == 0 {
+		return preview
+	}
+
+	imp := kg.BlastRadius(files, 2)
+	if len(imp.Affected) == 0 {
+		return preview
+	}
+	var b strings.Builder
+	b.WriteString(preview)
+	b.WriteString(fmt.Sprintf("\n\n**Blast radius** — the %d file(s) this plan touches are referenced by %d other file(s) (%.0f%% of the indexed repository):\n",
+		len(files), len(imp.Affected), imp.Severity*100))
+	for i, f := range imp.Affected {
+		if i == 8 {
+			b.WriteString(fmt.Sprintf("- …and %d more\n", len(imp.Affected)-i))
+			break
+		}
+		b.WriteString("- `" + f + "`\n")
+	}
+	return b.String()
+}
 
 // pendingPlanState is a proposal awaiting the user's decision.
 type pendingPlanState struct {
@@ -201,7 +254,7 @@ func (k *Kernel) handlePendingPlan(ctx context.Context, msg string) (string, boo
 			return resp, true, nil
 		}
 		k.setPendingPlan(revised)
-		preview := plan.Preview(revised)
+		preview := k.previewWithImpact(revised)
 		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: preview})
 		if k.emitter != nil {
 			k.emitter.EmitTaskUpdate("planner", "awaiting-approval",

@@ -591,6 +591,14 @@ func (s *Server) handleCancelChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
+	// An optional redirect turns a bare stop into "stop and do this instead".
+	// Without it the agent's next turn has no idea why it was interrupted and
+	// is liable to resume the abandoned approach.
+	var body struct {
+		Redirect string `json:"redirect"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
 	s.activeChatCancelMu.Lock()
 	if s.activeChatCancel != nil {
 		s.activeChatCancel()
@@ -600,6 +608,13 @@ func (s *Server) handleCancelChat(w http.ResponseWriter, r *http.Request) {
 
 	if s.approver != nil {
 		s.approver.CancelAll()
+	}
+
+	if redirect := strings.TrimSpace(body.Redirect); redirect != "" && s.memSystem != nil {
+		s.memSystem.STMAdd(core.Message{
+			Role:    core.RoleUser,
+			Content: "[Interrupted the previous task] Stop that approach. New instruction: " + redirect,
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }

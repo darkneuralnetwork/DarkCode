@@ -118,7 +118,7 @@ func TestSyncWorkspaceKG_Idempotent(t *testing.T) {
 	}
 }
 
-func TestSyncWorkspaceKG_NonGoWorkspaceIsNoop(t *testing.T) {
+func TestSyncWorkspaceKG_EmptyWorkspaceIsNoop(t *testing.T) {
 	kg := newTestKG(t)
 	stats, err := SyncWorkspaceKG(context.Background(), t.TempDir(), kg)
 	if err != nil {
@@ -126,5 +126,54 @@ func TestSyncWorkspaceKG_NonGoWorkspaceIsNoop(t *testing.T) {
 	}
 	if stats.Files != 0 || stats.Symbols != 0 {
 		t.Fatalf("expected zero stats for empty workspace, got %+v", stats)
+	}
+}
+
+// A workspace with no Go files must still be indexed — the early return that
+// used to short-circuit here left polyglot repos with an empty graph.
+func TestSyncWorkspaceKGIndexesNonGoLanguages(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"web/app.ts":   "import { Logger } from \"./log\";\nexport class App extends Base {}\n",
+		"svc/main.py":  "import os\n\nclass Service:\n    def run(self):\n        pass\n",
+		"core/lib.rs":  "use std::fmt;\npub struct Engine { id: u32 }\n",
+		"api/Api.java": "import java.util.List;\npublic class Api {}\n",
+	}
+	for rel, src := range files {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	kg := newTestKG(t)
+	stats, err := SyncWorkspaceKG(context.Background(), root, kg)
+	if err != nil {
+		t.Fatalf("SyncWorkspaceKG: %v", err)
+	}
+	if stats.Files != 4 {
+		t.Errorf("indexed %d files, want 4", stats.Files)
+	}
+	if stats.Symbols < 4 {
+		t.Errorf("found %d symbols, want at least one per file", stats.Symbols)
+	}
+
+	// Symbols from every language land under the same node type and ID scheme.
+	want := map[string]bool{"App": false, "Service": false, "Engine": false, "Api": false}
+	for _, n := range kg.FindByType(core.KGNodeSymbol) {
+		if _, tracked := want[n.Label]; tracked {
+			want[n.Label] = true
+			if n.Properties["language"] == "" {
+				t.Errorf("symbol %s has no language property", n.Label)
+			}
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("symbol %s missing from the graph", name)
+		}
 	}
 }

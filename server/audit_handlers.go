@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
+	"time"
 )
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -15,6 +17,28 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		"count":   len(entries),
 		"summary": s.memSystem.Audit().Summary(),
 	})
+}
+
+// handleAuditExport streams the whole audit trail as newline-delimited JSON.
+//
+// The browser view is for reading; this is for keeping. JSONL is what a SIEM,
+// a log shipper, or `jq` ingests without a parser, which is what "we retain an
+// audit trail" has to mean in an environment that reviews one.
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	if s.memSystem == nil || s.memSystem.Audit() == nil {
+		writeError(w, http.StatusServiceUnavailable, "audit log not initialized")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition",
+		`attachment; filename="darkcode-audit-`+time.Now().Format("20060102-150405")+`.jsonl"`)
+
+	enc := json.NewEncoder(w)
+	for _, e := range s.memSystem.Audit().GetAll() {
+		if err := enc.Encode(e); err != nil {
+			return // client disconnected
+		}
+	}
 }
 
 // handleAuditRecent returns the most recent audit entries.

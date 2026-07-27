@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/darkcode/capability"
+	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/compression"
+	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ingest"
 	"github.com/darkcode/llm"
@@ -22,6 +24,7 @@ import (
 	"github.com/darkcode/provider"
 	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/router"
+	"github.com/darkcode/safeurl"
 	"github.com/darkcode/security"
 	"github.com/darkcode/server"
 	"github.com/darkcode/tools"
@@ -52,7 +55,14 @@ func (a *AppRunner) initObservabilityAndSecurity() {
 		observability.Log().Warn("sandbox requested but no backend (bwrap/firejail) found — shell commands run unconfined; install bubblewrap or set sandbox to off to silence", nil)
 	}
 
-	// 3. Discover and Load External Plugins
+	// 3. Air-gap: refuse every connection that leaves the machine. Enforced at
+	// dial time, so it holds for redirects and for provider calls alike.
+	if a.Cfg.AirGap {
+		safeurl.SetAirGap(true)
+		observability.Log().Info("air-gap mode on — outbound network access is blocked (loopback/private still reachable)", nil)
+	}
+
+	// 4. Discover and Load External Plugins
 	a.PluginHost = plugin.NewHost()
 	a.PluginLoader = plugin.NewLoader(a.PluginHost, "./plugins")
 	_ = a.PluginLoader.DiscoverAll()
@@ -128,7 +138,16 @@ func (a *AppRunner) initTools(memDir string) {
 	if err != nil {
 		oldStore = nil
 	}
-	tools.RegisterBuiltinTools(a.Registry, oldStore, a.Router, a.Sandbox)
+	backend, err := tools.NewBackend(a.Cfg.ExecutionBackend, a.Cfg.ExecutionImage,
+		a.Cfg.ExecutionHost, a.Cfg.ExecutionPort, a.Sandbox)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v; falling back to local execution\n", err)
+		backend = tools.LocalBackend{Sandbox: a.Sandbox}
+	}
+	if backend.Name() != "local" {
+		observability.Log().Info("shell commands run on "+backend.Name(), nil)
+	}
+	tools.RegisterBuiltinTools(a.Registry, oldStore, a.Router, a.Sandbox, backend)
 	tools.RegisterMemoryTool(a.Registry, tools.NewSemanticMemoryTool(oldStore, a.MemSystem))
 	tools.RegisterProjectTools(a.Registry, a.ProjectStore)
 	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG()))
@@ -140,6 +159,11 @@ func (a *AppRunner) initTools(memDir string) {
 	// workspace never delays startup.
 	deterministicKG := a.MemSystem.KG()
 	a.Registry.Register(deterministic.NewKGSyncTool(deterministicKG))
+	cwd, _ := os.Getwd()
+	if kg, ok := deterministicKG.(*memory.KnowledgeGraph); ok {
+		tools.RegisterGraphTool(a.Registry, kg, cwd)
+	}
+	tools.RegisterGitHubTool(a.Registry, cwd)
 	go func() {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -227,7 +251,8 @@ func (a *AppRunner) initRouterAndModels() {
 
 	// createClient builds an LLM client, returning the *EmbeddedClient itself
 	// for the embedded provider so its model-swap guard survives the retry wrap.
-	createClient := func(prov string, baseURL string, apiKey string, modelID string) core.LLMClient {
+	createClient := func(mc config.ModelConfig) core.LLMClient {
+		prov, baseURL, apiKey, modelID := mc.Provider, mc.BaseURL, mc.APIKey, mc.Model
 		if prov == "embedded" {
 			embProv := embedded.NewProviderWithDirs(nil, modelsDir, binDir)
 
@@ -252,12 +277,16 @@ func (a *AppRunner) initRouterAndModels() {
 		}
 		c := llm.NewClient(baseURL, apiKey, modelID)
 		c.SetProvider(prov)
+		// Pool the configured credentials (the single api_key counts as one) so
+		// calls rotate and a throttled key is parked instead of retried.
+		c.Keys = llm.NewKeyPool(append([]string{apiKey}, mc.APIKeys...)...)
+		c.Effort = mc.ReasoningEffort
 		return c
 	}
 
 	for _, mc := range a.Cfg.Models {
 		t := core.ParseModelTier(mc.Tier)
-		client := createClient(mc.Provider, mc.BaseURL, mc.APIKey, mc.Model)
+		client := createClient(mc)
 		a.Router.RegisterModel(t, llm.WrapCloud(client, mc.Provider, mc.Model), mc.Model)
 		a.Router.SetModelRole(mc.Model, mc.Role)
 		pingModelAsync(client, mc.Model)
@@ -269,7 +298,7 @@ func (a *AppRunner) initRouterAndModels() {
 
 	var primaryClient core.LLMClient
 	if a.Cfg.Model != "" || !a.Cfg.EnableLocalLLM {
-		primaryClient = createClient(a.Cfg.Provider, a.Cfg.BaseURL, a.Cfg.APIKey, a.Cfg.Model)
+		primaryClient = createClient(config.ModelConfig{Provider: a.Cfg.Provider, BaseURL: a.Cfg.BaseURL, APIKey: a.Cfg.APIKey, Model: a.Cfg.Model})
 		if endpointUsable(a.Cfg.Provider, a.Cfg.BaseURL, a.Cfg.Model) {
 			tier := core.PrimaryTierForMode(routingMode)
 			a.Router.RegisterModel(tier, llm.WrapCloud(primaryClient, a.Cfg.Provider, a.Cfg.Model), a.Cfg.Model)
@@ -287,7 +316,7 @@ func (a *AppRunner) initRouterAndModels() {
 				}
 			}
 		}
-		primaryClient = createClient(a.Cfg.Provider, a.Cfg.BaseURL, a.Cfg.APIKey, fallbackModel)
+		primaryClient = createClient(config.ModelConfig{Provider: a.Cfg.Provider, BaseURL: a.Cfg.BaseURL, APIKey: a.Cfg.APIKey, Model: fallbackModel})
 		// Only register a usable endpoint. An unconfigured client is kept as a
 		// compressor placeholder (hot-swapped when the local model loads) but not
 		// registered, so the preflight can report that no model is available.
@@ -303,7 +332,7 @@ func (a *AppRunner) initRouterAndModels() {
 	fastModel := a.Cfg.Model
 	if a.Cfg.CompressorModel != "" {
 		if mc, ok := a.Cfg.Models[a.Cfg.CompressorModel]; ok {
-			fastClient = createClient(mc.Provider, mc.BaseURL, mc.APIKey, mc.Model)
+			fastClient = createClient(mc)
 			fastModel = mc.Model
 		}
 	} else if a.Router.HasModel(core.ModelTierFast) {
@@ -345,7 +374,7 @@ func (a *AppRunner) initRouterAndModels() {
 	default:
 		if mc, ok := a.Cfg.Models[a.Cfg.EmbeddingModel]; ok {
 			// Raw client (no retry wrapper) — see localEmbedClient comment.
-			wireEmbedder(createClient(mc.Provider, mc.BaseURL, mc.APIKey, mc.Model), mc.Model)
+			wireEmbedder(createClient(mc), mc.Model)
 		} else {
 			observability.Log().Warn("embedding_model not found in models config; embeddings disabled", map[string]interface{}{"model": a.Cfg.EmbeddingModel})
 		}
@@ -540,6 +569,20 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	a.Recorder = tools.NewChangeRecorder()
 	a.Kernel.SetChangeRecorder(a.Recorder)
 
+	// Checkpoints: snapshot the workspace before every mutating tool so the
+	// user can undo the agent. The blob store is shared across projects (files
+	// are content-addressed), so this is cheap to keep always-on. A failure
+	// here costs the undo history, not the session.
+	if cwd, err := os.Getwd(); err == nil {
+		if m, err := checkpoint.New(defaultDarkcodeDir("checkpoints"), cwd); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: checkpoints unavailable (%v); /rollback is disabled\n", err)
+		} else {
+			m.SetTurnFunc(func() int { return len(a.MemSystem.STMGet()) })
+			a.Checkpoints = m
+			a.Kernel.SetCheckpoints(m)
+		}
+	}
+
 	// Inject the on-demand local-model loader so /local force / on and the GUI
 	// toggle can start the embedded model at runtime (embedded loading lives
 	// in package main; the kernel can't import it directly). See
@@ -550,6 +593,10 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// threshold-calibration dataset (which rung answered what, and which
 	// local answers the user rejected by re-asking) survives restarts.
 	a.Kernel.SetCascadeLogPath(filepath.Join(memDir, "cascade_log.jsonl"))
+
+	// Journal DAG runs so a crashed multi-step task resumes from where it
+	// stopped instead of re-paying for every completed sub-task.
+	a.Kernel.SetRunsDir(defaultDarkcodeDir("runs"))
 
 	// Cost governor: enforce optional spend caps against the process-wide
 	// usage tracker. Only installed when a budget is actually configured, so
@@ -564,6 +611,36 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	}
 
 	gate := a.Kernel.Gate()
+	gate.SetDenyRules(a.Cfg.DenyRules)
+	gate.SetAskTimeout(time.Duration(a.Cfg.ApprovalTimeoutSeconds) * time.Second)
+	// Smart approvals: ask the auxiliary model whether a flagged low-risk call
+	// is routine. Anything other than a clear "safe" — including an error, a
+	// timeout, or an unparseable reply — falls through to the user.
+	if a.Cfg.SmartApproval {
+		gate.SetJudge(func(req permission.ApprovalRequest) bool {
+			client, model, err := a.Kernel.PlannerClient()
+			if err != nil || client == nil {
+				return false
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
+				Model:    model,
+				Messages: []core.Message{{Role: core.RoleUser, Content: permission.JudgePrompt(req)}},
+			})
+			if err != nil || resp == nil || len(resp.Choices) == 0 {
+				return false
+			}
+			return permission.ParseJudgeVerdict(resp.Choices[0].Message.Content)
+		})
+	}
+
+	// Let the code graph escalate edits to structurally central files.
+	if kg, ok := a.MemSystem.KG().(*memory.KnowledgeGraph); ok && a.Cfg.BlastRadiusThreshold > 0 {
+		gate.SetBlastRadius(func(path string) float64 {
+			return kg.BlastRadius([]string{path}, 2).Severity
+		}, a.Cfg.BlastRadiusThreshold)
+	}
 	gate.OnDecision(func(req permission.ApprovalRequest, d permission.Decision) {
 		if a.MemSystem != nil && a.MemSystem.Audit() != nil {
 			approved := d != permission.DecisionDeny

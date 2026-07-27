@@ -12,9 +12,23 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
+
+// airGap, when set, refuses every connection that leaves the machine. Loopback
+// and private addresses still resolve so a local model server (Ollama, LM
+// Studio) keeps working — the point is that no repository content can reach
+// the internet, not that networking is off. Enforced at dial time, so it holds
+// for redirects and for any client built from SafeTransport.
+var airGap atomic.Bool
+
+// SetAirGap enables or disables air-gap mode process-wide.
+func SetAirGap(on bool) { airGap.Store(on) }
+
+// AirGapped reports whether air-gap mode is active.
+func AirGapped() bool { return airGap.Load() }
 
 // IsSafeFetchURL reports whether a URL may be fetched on behalf of a user.
 // allowLoopback lifts the loopback/private restriction for explicitly local
@@ -41,6 +55,9 @@ func IsSafeFetchURL(rawURL string, allowLoopback bool) bool {
 		return false
 	}
 	for _, ip := range ips {
+		if airGap.Load() && !ip.IsLoopback() && !ip.IsPrivate() {
+			return false
+		}
 		if !ipSafe(ip, allowLoopback) {
 			return false
 		}
@@ -67,6 +84,9 @@ func safeDialControl(allowLoopback bool) func(network, address string, c syscall
 			// Control always receives a resolved IP literal; a non-IP here is
 			// unexpected, so fail closed.
 			return fmt.Errorf("safeurl: dial address %q is not an IP", host)
+		}
+		if airGap.Load() && !ip.IsLoopback() && !ip.IsPrivate() {
+			return fmt.Errorf("safeurl: blocked connection to %s — air-gap mode is on", ip)
 		}
 		if !ipSafe(ip, allowLoopback) {
 			return fmt.Errorf("safeurl: blocked connection to disallowed address %s (SSRF guard)", ip)
@@ -103,6 +123,41 @@ func SafeClient(timeout time.Duration, allowLoopback bool) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: SafeTransport(allowLoopback),
+	}
+}
+
+// EgressClient returns a client that enforces air-gap mode but applies no SSRF
+// restrictions. It is for connections to endpoints the *user* configured (LLM
+// providers, which are legitimately allowed to be a private vLLM host) rather
+// than to URLs chosen by a model or a web page.
+func EgressClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			if !airGap.Load() {
+				return nil
+			}
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() {
+				return fmt.Errorf("safeurl: blocked connection to %s — air-gap mode is on", ip)
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
 	}
 }
 

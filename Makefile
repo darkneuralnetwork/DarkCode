@@ -56,12 +56,22 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 		git --no-pager diff -- go.mod go.sum; exit 1; \
 	fi
 
+.PHONY: bench
+bench: build ## Run the benchmark suite against the built binary
+	$(GO) run ./bench/cmd/benchrun -tasks bench/tasks -agent ./$(BINARY) -json bench-report.json
+
+.PHONY: sbom
+sbom: build ## Write the bill of materials read back out of the built binary
+	@{ echo "# SBOM for $(BINARY)"; echo "# Verify with: go version -m $(BINARY)"; echo; \
+	   $(GO) version -m ./$(BINARY); } > SBOM.txt
+	@echo "wrote SBOM.txt"
+
 .PHONY: ci
 ci: fmt-check vet build test-race ## The full gate CI enforces
 
 .PHONY: clean
 clean: ## Remove build artifacts
-	rm -f $(BINARY) coverage.out
+	rm -f $(BINARY) coverage.out SBOM.txt bench-report.json
 
 .PHONY: help
 help: ## List targets

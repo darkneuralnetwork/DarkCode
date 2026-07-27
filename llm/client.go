@@ -16,6 +16,7 @@ import (
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/metrics"
+	"github.com/darkcode/safeurl"
 )
 
 // Type aliases so the rest of the llm package reads naturally.
@@ -46,15 +47,53 @@ type Client struct {
 	AuthScheme   string            // "bearer" (default), "api-key", "none"
 	ExtraHeaders map[string]string // additional headers per provider
 	ExtraQuery   string            // e.g. "api-version=..." appended to request URL
+
+	// Keys, when set, rotates across several credentials and parks any that
+	// get throttled. nil means "use APIKey", which is the single-key default.
+	Keys *KeyPool
+
+	// Effort is the default reasoning effort ("low"/"medium"/"high") sent when
+	// a request does not set its own. Empty omits the field entirely.
+	Effort string
+}
+
+// pickKey returns the credential to use for one request: the next healthy key
+// from the pool, or the single configured key.
+func (c *Client) pickKey() string {
+	if k := c.Keys.Get(); k != "" {
+		return k
+	}
+	return c.APIKey
+}
+
+// keyCooldown is how long a throttled credential is parked. Long enough to
+// clear a per-minute quota, short enough that a small pool keeps working.
+const keyCooldown = 60 * time.Second
+
+// penalize parks the credential a failed request used, when the failure is one
+// that another key could avoid (throttling or a rejected key).
+func (c *Client) penalize(key string, err error) {
+	var ae *APIError
+	if !errors.As(err, &ae) || (ae.Code != 429 && ae.Code != 401 && ae.Code != 403) {
+		return
+	}
+	d := keyCooldown
+	if ae.RetryAfter > 0 {
+		d = ae.RetryAfter
+	}
+	c.Keys.Penalize(key, d)
 }
 
 // NewClient creates a new LLM client.
 func NewClient(baseURL, apiKey, model string) *Client {
 	baseURL = strings.TrimRight(baseURL, "/")
 	return &Client{
-		BaseURL:    baseURL,
-		APIKey:     apiKey,
-		HTTPClient: &http.Client{Timeout: 300 * time.Second},
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+		// EgressClient applies no SSRF restrictions (a provider may legitimately
+		// be a private vLLM host) but does enforce air-gap mode, so enabling it
+		// stops cloud calls at the socket rather than trusting configuration.
+		HTTPClient: safeurl.EgressClient(300 * time.Second),
 		Model:      model,
 		AuthScheme: config.AuthBearer,
 	}
@@ -92,12 +131,13 @@ func (c *Client) SetAuthScheme(scheme string) *Client {
 	return c
 }
 
-// setAuth applies the provider-specific auth headers to an HTTP request.
-func (c *Client) setAuth(req *http.Request) {
+// setAuth applies the provider-specific auth headers to an HTTP request using
+// the given credential (from pickKey, so a pooled key rotates per request).
+func (c *Client) setAuth(req *http.Request, key string) {
 	req.Header.Set("Content-Type", "application/json")
 
-	if c.Provider == "anthropic" && c.APIKey != "" {
-		req.Header.Set("x-api-key", c.APIKey)
+	if c.Provider == "anthropic" && key != "" {
+		req.Header.Set("x-api-key", key)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		for k, v := range c.ExtraHeaders {
 			req.Header.Set(k, v)
@@ -107,18 +147,18 @@ func (c *Client) setAuth(req *http.Request) {
 
 	switch c.AuthScheme {
 	case config.AuthAPIKey:
-		req.Header.Set("api-key", c.APIKey)
+		req.Header.Set("api-key", key)
 	case config.AuthNone:
 		// no auth header
 	default:
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	for k, v := range c.ExtraHeaders {
 		req.Header.Set(k, v)
 	}
 	// Google Gemini API gateway often rejects Bearer for API keys.
-	if c.Provider == "google" && c.APIKey != "" {
-		req.Header.Set("x-goog-api-key", c.APIKey)
+	if c.Provider == "google" && key != "" {
+		req.Header.Set("x-goog-api-key", key)
 	}
 }
 
@@ -283,7 +323,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req *CompletionRequest) (*C
 		req.Model = c.Model
 	}
 	sanitizeMessages(req.Messages)
-	body, err := json.Marshal(req)
+	body, err := json.Marshal(c.outgoing(req))
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -292,7 +332,8 @@ func (c *Client) ChatCompletion(ctx context.Context, req *CompletionRequest) (*C
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	c.setAuth(httpReq)
+	key := c.pickKey()
+	c.setAuth(httpReq, key)
 
 	start := time.Now()
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -306,7 +347,9 @@ func (c *Client) ChatCompletion(ctx context.Context, req *CompletionRequest) (*C
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		c.recordUsage(req, nil, latency, false)
-		return nil, &APIError{Code: resp.StatusCode, Body: string(raw), RetryAfter: parseRetryAfter(resp, string(raw))}
+		apiErr := &APIError{Code: resp.StatusCode, Body: string(raw), RetryAfter: parseRetryAfter(resp, string(raw))}
+		c.penalize(key, apiErr)
+		return nil, apiErr
 	}
 
 	var result CompletionResponse
@@ -388,7 +431,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionReques
 		req.Model = c.Model
 	}
 	sanitizeMessages(req.Messages)
-	body, err := json.Marshal(req)
+	body, err := json.Marshal(c.outgoing(req))
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -397,7 +440,8 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionReques
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	c.setAuth(httpReq)
+	key := c.pickKey()
+	c.setAuth(httpReq, key)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	start := time.Now()
@@ -412,7 +456,9 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionReques
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		c.recordUsage(req, nil, latency, false)
-		return nil, &APIError{Code: resp.StatusCode, Body: string(raw), RetryAfter: parseRetryAfter(resp, string(raw))}
+		apiErr := &APIError{Code: resp.StatusCode, Body: string(raw), RetryAfter: parseRetryAfter(resp, string(raw))}
+		c.penalize(key, apiErr)
+		return nil, apiErr
 	}
 
 	// Parse SSE stream
@@ -543,7 +589,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ping: %w", err)
 	}
-	c.setAuth(req)
+	c.setAuth(req, c.pickKey())
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)

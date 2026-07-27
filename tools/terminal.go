@@ -20,11 +20,14 @@ type TerminalTool struct {
 	// of the filesystem is read-only. Injected at startup from config so there
 	// is exactly one sandbox for the process. nil means no confinement.
 	Sandbox *security.Sandbox
+	// Backend decides where a command runs (local, Docker, SSH). nil means
+	// local, sandboxed — the default.
+	Backend Backend
 }
 
 // NewTerminalTool builds the terminal tool with the process sandbox (may be nil).
 func NewTerminalTool(sb *security.Sandbox) *TerminalTool {
-	return &TerminalTool{TimeoutSec: 120, Sandbox: sb}
+	return &TerminalTool{TimeoutSec: 120, Sandbox: sb, Backend: LocalBackend{Sandbox: sb}}
 }
 
 func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
@@ -33,8 +36,12 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 		return &ToolResult{Name: "terminal", Success: false, Error: "command is required"}
 	}
 
+	// The sandbox confines local execution only; Docker and SSH provide their
+	// own isolation, so a strict-mode refusal would be wrong there.
+	local := t.Backend == nil || t.Backend.Name() == "local"
+
 	// Strict sandbox with no backend fails closed rather than running unconfined.
-	if t.Sandbox != nil && t.Sandbox.MustRefuse() {
+	if local && t.Sandbox != nil && t.Sandbox.MustRefuse() {
 		return &ToolResult{Name: "terminal", Success: false,
 			Error: "blocked: sandbox mode is 'strict' but no sandbox backend (bwrap/firejail) is installed — install one, or set sandbox to 'auto'/'on'/'off'"}
 	}
@@ -61,12 +68,14 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 		workDir = ws
 	}
 
-	// Build the argv. When a sandbox is active, the command is confined so it
-	// can only write inside workDir; the rest of the filesystem is read-only.
-	argv := []string{"bash", "-c", command}
-	if t.Sandbox != nil && t.Sandbox.Available() {
-		argv = t.Sandbox.Wrap(workDir, argv[0], argv[1:]...)
+	// Build the argv via the configured backend. Locally that wraps the command
+	// in the filesystem sandbox; Docker and SSH move execution off this machine
+	// entirely.
+	backend := t.Backend
+	if backend == nil {
+		backend = LocalBackend{Sandbox: t.Sandbox}
 	}
+	argv := backend.Argv(workDir, command)
 
 	cmd := exec.CommandContext(toolCtx, argv[0], argv[1:]...)
 	setSysProcAttr(cmd)
@@ -79,7 +88,9 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if workDir != "" {
+	// The host-side working directory only means something for local runs; the
+	// other backends carry the directory inside their own argv.
+	if workDir != "" && local {
 		cmd.Dir = workDir
 	}
 

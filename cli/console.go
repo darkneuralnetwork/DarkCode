@@ -29,6 +29,7 @@ import (
 	"github.com/chzyer/readline"
 
 	"github.com/darkcode/attach"
+	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
@@ -54,6 +55,7 @@ type Console struct {
 	gate          *permission.Gate
 	sources       *tools.SourceManager
 	projects      *project.Store
+	ckpt          *checkpoint.Manager
 	activeProject string
 
 	// chatMode mirrors the GUI's Chat/Build control: "chat" (talk/Q&A, no
@@ -109,6 +111,8 @@ func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.Sys
 		brain:         "auto",  // local-first, escalate to cloud for hard tasks
 		streamEv:      true,    // minimal spinner on by default
 	}
+
+	c.ckpt = kernel.Checkpoints()
 
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          ">>> ",

@@ -38,6 +38,19 @@ type Node struct {
 	Status core.TaskStatus `json:"status"`
 	Output string          `json:"output,omitempty"`
 	Error  string          `json:"error,omitempty"`
+	// Proof records the outcome of each acceptance check that actually ran for
+	// this node. A task that reports success without a passing check is
+	// claiming, not proving — recording the difference is the point.
+	Proof []Proof `json:"proof,omitempty"`
+}
+
+// Proof is the evidence for (or against) one acceptance criterion.
+type Proof struct {
+	Criterion string    `json:"criterion"`
+	Command   string    `json:"command,omitempty"` // empty when not machine-checkable
+	Passed    bool      `json:"passed"`
+	Output    string    `json:"output,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // Graph is a full plan: the goal, its decomposition, and provenance.

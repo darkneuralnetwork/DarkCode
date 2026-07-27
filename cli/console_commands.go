@@ -83,6 +83,15 @@ func (c *Console) handleSlash(input string) bool {
 		}
 		fmt.Println(paint(cGreen, msg))
 
+	case "/rollback", "/undo":
+		c.handleRollback(parts[1:])
+
+	case "/health":
+		c.handleHealth()
+
+	case "/session", "/sessions":
+		c.handleSession(parts[1:])
+
 	case "/skills":
 		c.printSkills()
 

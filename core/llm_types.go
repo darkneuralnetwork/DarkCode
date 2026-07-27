@@ -12,6 +12,10 @@ type CompletionRequest struct {
 	MaxTokens     *int           `json:"max_tokens,omitempty"`
 	Stream        bool           `json:"stream"`
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+	// ReasoningEffort trades latency and cost against depth on models that
+	// expose it ("low", "medium", "high"). Omitted when empty, so providers
+	// that don't understand it never see the field.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // StreamOptions controls streaming behaviour.

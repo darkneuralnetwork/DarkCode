@@ -235,6 +235,22 @@ func (s *System) STMClear() {
 	s.stm = s.stm[:0]
 }
 
+// STMTruncate drops all but the first n messages. A checkpoint rollback uses
+// it to rewind the transcript to the point the filesystem was restored to —
+// without it the agent keeps reasoning from turns that describe files that no
+// longer exist. Growing is not possible, so n beyond the current length is a
+// no-op.
+func (s *System) STMTruncate(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	if n < len(s.stm) {
+		s.stm = s.stm[:n]
+	}
+}
+
 // StartNewSession begins a fresh chat session: it clears short-term memory and
 // advances the session epoch so episodic recall stops surfacing prior-session
 // conversations. Durable semantic/KG/procedural memory is deliberately kept —
@@ -365,6 +381,26 @@ func (s *System) EpisodicGetRecent(n int) []core.EpisodicEntry {
 		n = len(all)
 	}
 	return all[:n]
+}
+
+// EpisodicPrune drops entries older than cutoff and returns how many were
+// removed. Episodic memory grows with every task and is the one tier where old
+// entries stop earning their context cost, so it needs a way out.
+func (s *System) EpisodicPrune(cutoff time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.episodic[:0]
+	for _, e := range s.episodic {
+		if e.Timestamp.After(cutoff) {
+			kept = append(kept, e)
+		}
+	}
+	removed := len(s.episodic) - len(kept)
+	s.episodic = kept
+	if removed > 0 {
+		s.episodicWriter.MarkDirty()
+	}
+	return removed
 }
 
 // ============================================================================

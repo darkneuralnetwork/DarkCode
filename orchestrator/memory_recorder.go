@@ -180,10 +180,18 @@ func (k *Kernel) getRecallBlock(goal string) string {
 		hits = hits[:3]
 	}
 	block := memory.FormatRecall(hits)
-	if block == "" {
-		return ""
+	if block != "" {
+		k.log("memory", fmt.Sprintf("Hybrid recall: %d relevant past entr%s injected", len(hits), pluralY(len(hits))))
 	}
-	k.log("memory", fmt.Sprintf("Hybrid recall: %d relevant past entr%s injected", len(hits), pluralY(len(hits))))
+	// Procedural memory is the other half of recall: not "what do I know about
+	// this" but "how did I do this last time". Appended rather than merged so
+	// the model sees facts and precedent as distinct kinds of evidence.
+	if skill := k.recallSkill(goal); skill != "" {
+		if block == "" {
+			return skill
+		}
+		block += "\n" + skill
+	}
 	return block
 }
 

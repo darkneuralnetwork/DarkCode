@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -145,17 +146,100 @@ type Gate struct {
 	// onDecision is an optional hook (e.g. to emit a UI event).
 	onDecision func(req ApprovalRequest, d Decision)
 
+	// denyRules refuse matching calls ahead of every permissive path.
+	denyRules []DenyRule
+
+	// askTimeout bounds how long an approval prompt may block. On expiry the
+	// call is denied (fail closed) rather than left hanging forever.
+	askTimeout time.Duration
+
+	// blastRadius reports the share of the repository a write to a given path
+	// can reach, and blastThreshold is the share above which the write needs
+	// approval even at a permissive level. nil = no structural escalation.
+	blastRadius    func(path string) float64
+	blastThreshold float64
+
+	// judge optionally auto-approves low-risk flagged calls to cut prompt
+	// fatigue. It can never approve a high/critical action — see judgeAllows.
+	judge judgeState
+
 	scanner *security.SecretScanner
 }
+
+// defaultAskTimeout matches the server approver's window: long enough for a
+// user to read a prompt, short enough that an unattended run terminates.
+const defaultAskTimeout = 5 * time.Minute
 
 // NewGate creates a permission gate at the given level.
 func NewGate(level Level) *Gate {
 	return &Gate{
-		level:   level,
-		allowed: make(map[string]bool),
-		denied:  make(map[string]bool),
-		scanner: security.NewSecretScanner(),
+		level:      level,
+		allowed:    make(map[string]bool),
+		denied:     make(map[string]bool),
+		askTimeout: defaultAskTimeout,
+		scanner:    security.NewSecretScanner(),
 	}
+}
+
+// SetDenyRules installs the user's deny rules, replacing any previous set.
+func (g *Gate) SetDenyRules(rules []string) {
+	g.mu.Lock()
+	g.denyRules = ParseDenyRules(rules)
+	g.mu.Unlock()
+}
+
+// SetAskTimeout bounds how long an approval prompt may block before the call
+// is denied. A non-positive duration restores the default.
+func (g *Gate) SetAskTimeout(d time.Duration) {
+	if d <= 0 {
+		d = defaultAskTimeout
+	}
+	g.mu.Lock()
+	g.askTimeout = d
+	g.mu.Unlock()
+}
+
+// SetBlastRadius installs the structural risk estimator. When a write targets
+// a file whose blast radius exceeds threshold, the call is escalated to
+// require approval even in relaxed mode: "edit one file" and "edit the file
+// half the repository imports" are not the same action, and only the code
+// graph can tell them apart.
+func (g *Gate) SetBlastRadius(fn func(path string) float64, threshold float64) {
+	g.mu.Lock()
+	g.blastRadius, g.blastThreshold = fn, threshold
+	g.mu.Unlock()
+}
+
+// highBlastRadius reports whether this call edits a structurally central file,
+// along with the measured share.
+func (g *Gate) highBlastRadius(tool string, args map[string]interface{}) (float64, bool) {
+	if tool != "write_file" && tool != "patch" {
+		return 0, false
+	}
+	g.mu.Lock()
+	fn, threshold := g.blastRadius, g.blastThreshold
+	g.mu.Unlock()
+	if fn == nil || threshold <= 0 {
+		return 0, false
+	}
+	path, _ := args["path"].(string)
+	if path == "" {
+		return 0, false
+	}
+	share := fn(path)
+	return share, share >= threshold
+}
+
+// deniedByRule returns the rule refusing this call, if any.
+func (g *Gate) deniedByRule(tool string, args map[string]interface{}) (DenyRule, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, r := range g.denyRules {
+		if r.matches(tool, args) {
+			return r, true
+		}
+	}
+	return DenyRule{}, false
 }
 
 // SetApprover installs the callback used to prompt the user.
@@ -225,16 +309,41 @@ func (g *Gate) Stats() Stats {
 // denied, the caller should skip execution and surface a "permission denied"
 // result carrying the feedback.
 func (g *Gate) Check(tool string, args map[string]interface{}) (bool, ApprovalRequest, string) {
+	// Deny rules come first — ahead of the relaxed fast path, the session
+	// cache, and the approver — so a configured refusal cannot be overridden
+	// by how the session was set up or by an earlier "allow for session".
+	if rule, ok := g.deniedByRule(tool, args); ok {
+		req := ApprovalRequest{Tool: tool, Args: args, Timestamp: time.Now(), Risk: core.RiskHigh,
+			Summary: "blocked by deny rule"}
+		g.mu.Lock()
+		g.deniedCount++
+		onDec := g.onDecision
+		g.mu.Unlock()
+		if onDec != nil {
+			onDec(req, DecisionDeny)
+		}
+		suffix := rule.Tool
+		if rule.Pattern != "" {
+			suffix += ":" + rule.Pattern
+		}
+		return false, req, "refused by deny rule " + strconv.Quote(suffix)
+	}
+
+	// A structurally central file is escalated even under permissive settings:
+	// the graph knows this edit reaches much of the repository, which the tool
+	// name alone cannot express.
+	share, central := g.highBlastRadius(tool, args)
+
 	g.mu.Lock()
 	level := g.level
 	// Fast path: relaxed level approves everything.
-	if level == LevelRelaxed {
+	if level == LevelRelaxed && !central {
 		g.mu.Unlock()
 		return true, ApprovalRequest{Tool: tool, Args: args, Timestamp: time.Now()}, ""
 	}
 
 	// Session-scoped decisions.
-	if g.allowed[tool] {
+	if g.allowed[tool] && !central {
 		g.mu.Unlock()
 		return true, ApprovalRequest{Tool: tool, Args: args, Timestamp: time.Now()}, ""
 	}
@@ -256,11 +365,25 @@ func (g *Gate) Check(tool string, args map[string]interface{}) (bool, ApprovalRe
 		req.Summary = "⚠ possible secret — " + req.Summary
 	}
 
+	if central {
+		dangerous = true
+		req.Risk = core.RiskHigh
+		req.Summary = fmt.Sprintf("⚠ high blast radius (%.0f%% of the repository depends on this file) — %s",
+			share*100, req.Summary)
+	}
+
 	// Normal level: only dangerous actions need approval.
 	if level == LevelNormal && !dangerous {
 		return true, req, ""
 	}
-	// (strict level → always prompt; relaxed already returned)
+	// (strict level → always prompt; relaxed already returned unless escalated)
+
+	// A judge may spare the user a prompt for routine low-risk work. It is
+	// consulted only after the classifier has already decided this needs
+	// approval, and it cannot clear a high/critical action or a secret.
+	if level == LevelNormal && !central && !argsContainSecret(g.scanner, args) && g.judgeAllows(req) {
+		return true, req, ""
+	}
 
 	allowed, feedback := g.ask(req)
 	return allowed, req, feedback
@@ -272,6 +395,7 @@ func (g *Gate) ask(req ApprovalRequest) (bool, string) {
 	g.mu.Lock()
 	approver := g.approver
 	onDec := g.onDecision
+	timeout := g.askTimeout
 	g.mu.Unlock()
 
 	// No approver available (e.g. server mode without one configured):
@@ -309,7 +433,7 @@ func (g *Gate) ask(req ApprovalRequest) (bool, string) {
 	g.asked++
 	g.mu.Unlock()
 
-	v := approver(req)
+	v := askWithTimeout(approver, req, timeout)
 
 	g.mu.Lock()
 	switch v.Decision {
@@ -329,6 +453,23 @@ func (g *Gate) ask(req ApprovalRequest) (bool, string) {
 	}
 
 	return v.Decision != DecisionDeny, v.Feedback
+}
+
+// askWithTimeout runs the approver and fails closed if no answer arrives in
+// time. An unattended agent that hits an approval prompt must stop, not block
+// forever holding the dispatch goroutine. The approver keeps running in its
+// own goroutine (it may be parked on stdin or an SSE round-trip and cannot be
+// cancelled); its late answer is simply discarded via the buffered channel.
+func askWithTimeout(approver Approver, req ApprovalRequest, timeout time.Duration) Verdict {
+	ch := make(chan Verdict, 1)
+	go func() { ch <- approver(req) }()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(timeout):
+		return Verdict{Decision: DecisionDeny,
+			Feedback: "approval timed out after " + timeout.String() + " — denied (fail closed)"}
+	}
 }
 
 // AutoApprover returns an approver that always allows (for the session),
@@ -402,6 +543,21 @@ func classify(tool string, args map[string]interface{}) (ApprovalRequest, bool) 
 		req.Risk = core.RiskMedium
 		req.Preview = fmt.Sprintf("git %s %s", action, extra)
 		return req, IsGitMutating(action)
+
+	case "github":
+		action, _ := args["action"].(string)
+		req.Summary = "github " + action
+		// Posting a review or a comment publishes under the user's account and
+		// cannot be taken back cleanly, so it always needs approval; reads do
+		// not. Risk is High because the action is public and attributed.
+		if action == "pr_review" || action == "issue_comment" {
+			req.Risk = core.RiskHigh
+			req.Preview = fmt.Sprintf("publish to GitHub as you\n%s #%v\n%s",
+				action, args["number"], strutil.Truncate(str(args["body"]), 800))
+			return req, true
+		}
+		req.Risk = core.RiskLow
+		return req, false
 
 	case "monitoring":
 		action, _ := args["action"].(string)
@@ -483,7 +639,10 @@ func argsContainSecret(scanner *security.SecretScanner, args map[string]interfac
 
 func IsGitMutating(action string) bool {
 	switch action {
-	case "add", "commit", "stash", "reset", "rm", "mv", "push", "pull", "merge", "rebase", "cherry-pick":
+	case "add", "commit", "stash", "reset", "rm", "mv", "push", "pull", "merge", "rebase", "cherry-pick",
+		// worktree add/remove create and delete checkouts on disk; listing is
+		// harmless but is not worth a separate classification.
+		"worktree":
 		return true
 	}
 	return false
@@ -698,4 +857,10 @@ func existsLabel(exists bool) string {
 		return "exists"
 	}
 	return "new"
+}
+
+// str coerces a tool argument to a string for previews.
+func str(v interface{}) string {
+	s, _ := v.(string)
+	return s
 }

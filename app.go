@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/cli"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
@@ -35,6 +36,7 @@ type AppRunner struct {
 	Compressor   *compression.Compressor
 	Kernel       *orchestrator.Kernel
 	Recorder     *tools.ChangeRecorder
+	Checkpoints  *checkpoint.Manager
 	Server       *server.Server
 
 	PluginLoader *plugin.Loader

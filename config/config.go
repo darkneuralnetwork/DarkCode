@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/darkcode/security"
 )
 
 // Config holds all agent configuration.
@@ -41,6 +43,47 @@ type Config struct {
 	// (e.g. a module cache like ~/go). The workspace and common caches are
 	// always writable.
 	SandboxWritable []string `json:"sandbox_writable,omitempty"`
+
+	// ExecutionBackend decides where shell commands run: "local" (default,
+	// confined by the sandbox), "docker" (a disposable container per command,
+	// with the workspace bind-mounted), or "ssh" (a remote host).
+	ExecutionBackend string `json:"execution_backend,omitempty"`
+	// ExecutionImage is the container image for the docker backend.
+	ExecutionImage string `json:"execution_image,omitempty"`
+	// ExecutionHost is the [user@]hostname for the ssh backend, and
+	// ExecutionPort its optional port.
+	ExecutionHost string `json:"execution_host,omitempty"`
+	ExecutionPort int    `json:"execution_port,omitempty"`
+
+	// DenyRules refuse matching tool calls outright, ahead of every permissive
+	// path — the relaxed safety level, a session-wide approval, or an approver
+	// that would say yes. Each rule is a tool name, optionally followed by
+	// ":pattern" matched against the call's string arguments with * and ?
+	// wildcards, e.g. "terminal:*rm -rf /*", "write_file:*/.ssh/*", "git:push".
+	DenyRules []string `json:"deny_rules,omitempty"`
+
+	// SmartApproval lets an auxiliary model auto-approve routine low-risk
+	// actions that the classifier flagged, to cut prompt fatigue. It can never
+	// approve a high/critical action, a deny-rule match, or a call carrying a
+	// secret — those always reach the user. Off by default.
+	SmartApproval bool `json:"smart_approval,omitempty"`
+
+	// ApprovalTimeoutSeconds bounds how long an approval prompt may block
+	// before the call is denied. 0 uses the 5-minute default. Denying on
+	// timeout keeps an unattended run from hanging forever on a prompt.
+	ApprovalTimeoutSeconds int `json:"approval_timeout_seconds,omitempty"`
+
+	// BlastRadiusThreshold escalates a file edit to require approval when the
+	// code graph says that share (0..1) of the repository depends on the file,
+	// even at a permissive safety level. 0 disables the check. 0.25 is a
+	// sensible starting point: it catches edits to genuinely central files
+	// without prompting on ordinary ones.
+	BlastRadiusThreshold float64 `json:"blast_radius_threshold,omitempty"`
+
+	// AirGap refuses every connection that leaves the machine. Loopback and
+	// private addresses still work, so local model servers keep running; no
+	// repository content can reach the internet.
+	AirGap bool `json:"air_gap,omitempty"`
 
 	MaxConcurrent   int  `json:"max_concurrent,omitempty"`
 	CompressContext bool `json:"compress_context,omitempty"`
@@ -176,6 +219,14 @@ type ModelConfig struct {
 	Provider string `json:"provider,omitempty"`
 	Tier     string `json:"tier,omitempty"` // reasoning | coding | fast | local | critic
 	Role     string `json:"role,omitempty"` // consensus role: critic | skeptic | knowledge_booster | creative | analyst | verifier | general
+	// APIKeys pools several credentials for this model. Calls rotate across
+	// them and a key that gets throttled is parked, which is what keeps a
+	// per-key free-tier quota from stalling the whole session. APIKey is used
+	// as well when set, so adding keys never invalidates an existing config.
+	APIKeys []string `json:"api_keys,omitempty"`
+	// ReasoningEffort ("low" | "medium" | "high") is sent to models that
+	// support it. Empty omits the field.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // ToolSourceConfig is the persistable definition of a tool source. It is the
@@ -497,6 +548,35 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("DARKCODE_API_KEY"); v != "" {
 		cfg.APIKey = v
+	}
+	cfg.resolveSecretRefs()
+}
+
+// resolveSecretRefs replaces any "op://", "bw://" or "pass://" credential with
+// the value fetched from the password manager, so a key can live in a vault
+// instead of in plaintext on disk. A failed lookup leaves the reference in
+// place and warns: the resulting auth error names the real problem, whereas a
+// silently blanked key would look like a missing config.
+func (cfg *Config) resolveSecretRefs() {
+	resolve := func(field, value string) string {
+		if !security.IsSecretRef(value) {
+			return value
+		}
+		secret, err := security.ResolveSecret(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not resolve %s from the password manager: %v\n", field, err)
+			return value
+		}
+		return secret
+	}
+
+	cfg.APIKey = resolve("api_key", cfg.APIKey)
+	for name, mc := range cfg.Models {
+		mc.APIKey = resolve("models."+name+".api_key", mc.APIKey)
+		for i, k := range mc.APIKeys {
+			mc.APIKeys[i] = resolve("models."+name+".api_keys", k)
+		}
+		cfg.Models[name] = mc
 	}
 }
 

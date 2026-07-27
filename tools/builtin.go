@@ -8,9 +8,14 @@ import (
 // RegisterBuiltinTools registers all built-in tools into the given registry.
 // This is called once at agent startup. Each tool gets its schema and handler
 // wired up so the LLM can discover and call them. sandbox (may be nil) confines
-// the terminal tool's shell commands.
-func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router core.ModelRouter, sandbox *security.Sandbox) {
+// the terminal tool's shell commands. An optional backend moves shell execution
+// off this machine (Docker or SSH); omitting it keeps the sandboxed local
+// default.
+func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router core.ModelRouter, sandbox *security.Sandbox, backend ...Backend) {
 	terminal := NewTerminalTool(sandbox)
+	if len(backend) > 0 && backend[0] != nil {
+		terminal.Backend = backend[0]
+	}
 	fileTool := NewFileTool()
 	searchTool := NewSearchTool()
 	webTool := NewWebTool(registry, router)

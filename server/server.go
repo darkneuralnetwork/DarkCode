@@ -542,9 +542,18 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/cascade", s.handleCascade)
 	mux.HandleFunc("/api/capability", s.handleCapability)
 
+	// OpenAI-compatible surface: any client that speaks that wire format can
+	// point its base_url here and use DarkCode as the model.
+	mux.HandleFunc("/v1/models", s.handleOpenAIModels)
+	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChat)
+
 	// Architecture extensions
+	mux.HandleFunc("/api/checkpoints", s.handleCheckpoints)
+	mux.HandleFunc("/api/checkpoints/diff", s.handleCheckpointDiff)
+	mux.HandleFunc("/api/rollback", s.handleRollback)
 	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/audit/recent", s.handleAuditRecent)
+	mux.HandleFunc("/api/audit/export", s.handleAuditExport)
 	mux.HandleFunc("/api/knowledge", s.handleKnowledgeGraph)
 	mux.HandleFunc("/api/learning/stats", s.handleLearningStats)
 	mux.HandleFunc("/api/agents/messages", s.handleAgentMessages)

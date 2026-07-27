@@ -43,6 +43,15 @@ type ContentPart struct {
 	Type     string        `json:"type"`
 	Text     string        `json:"text,omitempty"`
 	ImageURL *ImageURLPart `json:"image_url,omitempty"`
+	// CacheControl marks this part as a prompt-cache breakpoint. Anthropic
+	// (directly or via OpenRouter) caches only what is explicitly marked;
+	// other providers ignore the field, so it is safe to leave unset.
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
+}
+
+// CacheControl is a prompt-cache breakpoint. Only "ephemeral" is defined.
+type CacheControl struct {
+	Type string `json:"type"`
 }
 
 type ImageURLPart struct {

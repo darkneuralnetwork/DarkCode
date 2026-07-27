@@ -96,6 +96,22 @@ Every rung records whether it answered, so you can see exactly how many calls we
 
 Memory is a persistent intelligence layer, not chat history — and it's **system-wide**, shared across all your projects.
 
+The graph indexes **Go, TypeScript/JavaScript, Python, Rust and Java** into one
+uniform shape (defines · imports · references · extends), so a query never has
+to branch on language. Go is parsed exactly by `go/ast`; the rest use a
+dependency-free pattern scanner, and the difference is recorded as node
+confidence rather than hidden.
+
+Because the graph knows what references what, it answers questions no language
+server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
+
+| Query | Answers |
+| :-- | :-- |
+| `blast_radius` | "What breaks if I change this file?" — shown in the plan approval gate before you approve |
+| `health` | Repository health score with ranked structural issues |
+| `cycles` · `dead_code` · `untested` | Import cycles, unreferenced symbols, high-fan-in code with no tests |
+| `low_confidence` · `stale` | Beliefs worth re-checking; files indexed before the current `HEAD` |
+
 ```mermaid
 flowchart LR
     C["Conversation<br/>(short-term)"] --> E["Episodic<br/>past tasks"]
@@ -124,16 +140,41 @@ Pick the "brain" per request — `local` (offline), `cloud`, or `auto` (local-fi
 
 ---
 
+## ⏪ Undo — checkpoints & rollback
+
+Before **every** file-modifying action, DarkCode snapshots the workspace into a
+content-addressed store shared across projects, so a hundred checkpoints cost
+roughly the size of what actually changed.
+
+```bash
+/rollback            # list checkpoints
+/rollback diff 7     # what changed since checkpoint 7
+/rollback 7          # restore the workspace to checkpoint 7
+/rollback 7 main.go  # restore a single file
+```
+
+Rolling back also **rewinds the conversation** to match the filesystem —
+otherwise the agent keeps reasoning from turns describing files that no longer
+exist. The rollback is itself snapshotted first, so the undo can be undone.
+
+---
+
 ## 🔒 Security
 
 DarkCode executes real shell commands and edits files, so it treats safety as a first-class concern:
 
 - **Permission gate** — dangerous actions (destructive commands, writes, `git push`, interpreter one-liners, pipe-to-shell) require approval, with three levels: `strict` / `normal` / `relaxed`.
+- **Deny rules** — `deny_rules` refuse matching calls *before* every permissive path, so a configured refusal can't be overridden by the relaxed level or an earlier "allow for session".
+- **Fail-closed approvals** — an unanswered prompt denies rather than hanging an unattended run.
+- **Prompt-injection scanning** — every file read, fetched page, and GitHub body is scanned for instructions aimed at the model (override phrasing, exfiltration, zero-width/bidi characters, homograph URLs) and wrapped in a *this is data, not instructions* banner.
+- **Blast-radius escalation** — editing a file the code graph says much of the repo depends on requires approval even under permissive settings.
 - **Workspace confinement** — file writes are kept inside the active project, with symlink escapes blocked.
 - **Filesystem sandbox** — optional `bubblewrap`/`firejail` confinement so shell commands can only write inside the workspace. Modes: `off` / `auto` / `on` / `strict`.
-- **Secret scanning & SSRF guards** — credentials in tool args force a prompt; outbound fetches can't reach loopback or cloud-metadata endpoints.
+- **Execution backends** — run shell commands `local` (sandboxed), in a disposable `docker` container (all capabilities dropped, no network by default), or on a remote host over `ssh`.
+- **Air-gap mode** — `air_gap: true` refuses every connection leaving the machine, enforced at dial time; local model servers keep working.
+- **Secret scanning, vault-backed keys & SSRF guards** — credentials in tool args force a prompt; API keys can live in 1Password/Bitwarden/`pass` via `op://`, `bw://`, `pass://` references instead of plaintext config; outbound fetches can't reach loopback or cloud-metadata endpoints.
 
-> See the [Security chapter of the Wiki](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-security-model) for the full model.
+> The full model, including what it explicitly does **not** defend against, is in [**docs/THREAT_MODEL.md**](docs/THREAT_MODEL.md).
 
 ---
 
@@ -210,8 +251,19 @@ Config lives at **`~/.darkcode/config.json`** (one install serves every director
 | `memory_profile` | `lean` · `balanced` · `max` | Local model context window / RAM. |
 | `use_local_for_aux` | `true` / `false` | Route background calls to the local model (cost saver). |
 | `cost_limit_per_day_usd` | number | Optional spend cap. |
+| `execution_backend` | `local` · `docker` · `ssh` | Where shell commands run. |
+| `deny_rules` | list | Refuse matching calls outright, e.g. `["terminal:*rm -rf /*", "git:push"]`. |
+| `air_gap` | `true` / `false` | Block all outbound network (local models still work). |
+| `blast_radius_threshold` | 0–1 | Require approval for edits reaching this share of the repo. |
+| `smart_approval` | `true` / `false` | Let the aux model auto-approve routine low-risk calls. |
+| `approval_timeout_seconds` | number | Deny (never hang) when a prompt goes unanswered. |
 
-API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …). The full reference is in the [**Wiki → Configuration**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#%EF%B8%8F-configuration-reference).
+API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …), or from a password
+manager — set `api_key` to `op://Private/OpenAI/credential`, `bw://openai-key`, or `pass://ai/openai` and the
+value is fetched at startup instead of being stored on disk. `api_keys` accepts several credentials per model
+and rotates across them, parking any that gets rate-limited.
+
+The full reference is in the [**Wiki → Configuration**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#%EF%B8%8F-configuration-reference).
 
 ---
 
@@ -222,7 +274,9 @@ API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KE
 </div>
 
 - **Web UI** — conversations, live agent monitoring, blueprint/plan tracking, memory inspection, and knowledge-graph visibility.
-- **CLI** — a full slash-command palette (`/help`). Highlights: `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`, `/cascade`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
+- **CLI** — a full slash-command palette (`/help`). Highlights: `/rollback`, `/health`, `/session`, `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
+- **OpenAI-compatible API** — point any OpenAI client at `http://localhost:12345/v1` and use DarkCode as the model (Open WebUI, LibreChat, the `openai` SDK with a custom `base_url`).
+- **MCP** — DarkCode is both an MCP client (connect external tool servers) and an MCP server (expose its own tools, including the knowledge graph, to other agents).
 
 ---
 
@@ -231,10 +285,16 @@ API keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KE
 ```bash
 make ci          # fmt-check + vet + build + race tests (what CI runs)
 make test        # unit tests
-./build.sh 1.2.0 # cross-compile release artifacts into dist/
+make bench       # run the benchmark suite against the built binary
+make sbom        # bill of materials, read back out of the built binary
+./build.sh 1.2.1 # cross-compile release artifacts into dist/
 ```
 
-CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + a cross-compile matrix). Releases are cut with `build.sh` (linux `.deb`, windows `.exe`, `SHA256SUMS`).
+CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + benchmark-fixture validation + a cross-compile matrix).
+
+**Benchmarks.** `bench/` is a reproducible harness: each task is a directory with a prompt, an optional `setup.sh`, and a `verify.sh` whose exit status alone decides pass or fail — no LLM grades the outcome. Add tasks under `bench/tasks/`. CI can't score the suite (it needs a live model) but it does verify every fixture is still solvable, so a broken task is caught before a run scores zero for the wrong reason.
+
+**Releases** are cut with `build.sh`: linux `.deb`, windows `.exe`, an `SBOM.txt`, `SHA256SUMS`, and an optional detached GPG signature (`DARKCODE_SIGNING_KEY=<keyid> ./build.sh`). Builds are reproducible — `CGO_ENABLED=0 -trimpath -buildvcs=false` — so the same tag and toolchain produce identical bytes.
 
 ---
 
@@ -248,15 +308,18 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 
 - ✅ Local-first cascade, knowledge graph, resource-governed local models
 - ✅ Config-driven sandbox, CI, atomic memory, request idempotency
+- ✅ Checkpoints & rollback, prompt-injection defence, deny rules, air-gap mode
+- ✅ Multi-language code graph, blast radius, repository health
+- ✅ Prompt caching, credential rotation, benchmark harness, threat model
 - 🔭 SQLite-backed knowledge store for large graphs
-- 🔭 Deeper procedural memory & self-learning
-- 🔭 Distributed / multi-agent collaboration
+- 🔭 LSP breadth beyond the current bridge; debugger integration
+- 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome. Run `make ci` before opening a PR. We're especially interested in autonomous agents, LLM cost/memory optimization, and knowledge-graph reasoning.
+Contributions are welcome — see [**CONTRIBUTING.md**](CONTRIBUTING.md). Run `make ci` before opening a PR. We're especially interested in autonomous agents, LLM cost/memory optimization, and knowledge-graph reasoning.
 
 ## ⚖️ License
 

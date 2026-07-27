@@ -8,7 +8,6 @@ import (
 
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
-	"github.com/darkcode/plan"
 	"github.com/darkcode/router"
 )
 
@@ -385,7 +384,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// proposal is the turn's answer; the decision arrives next turn and is
 	// handled at Step 1.1.
 	if planApprovalRequired(planApprovalCfg, depth) {
-		preview := plan.Preview(g)
+		preview := k.previewWithImpact(g)
 		k.setPendingPlan(g)
 		k.log("plan", fmt.Sprintf("Plan awaiting user approval: %d task(s)", len(g.Nodes)))
 		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: preview})

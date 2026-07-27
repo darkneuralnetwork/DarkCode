@@ -6,10 +6,13 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/intelligence"
+	"github.com/darkcode/memory"
 	"github.com/darkcode/tools"
 )
 
@@ -21,20 +24,21 @@ type SyncStats struct {
 	Edges    int `json:"edges"`
 }
 
-// SyncWorkspaceKG scans the Go files under root and records their symbols,
-// imports, and reference counts in the knowledge graph as typed facts with
-// provenance. It is idempotent: nodes are upserted by ID and the KG's AddEdge
-// reinforces rather than duplicates, so periodic re-syncs keep the graph
-// fresh without growing it. Non-Go workspaces are a no-op (Stats zero).
+// SyncWorkspaceKG scans the source under root and records symbols, imports,
+// and reference counts in the knowledge graph as typed facts with provenance.
+// Go is parsed exactly by go/ast; TypeScript/JavaScript, Python, Rust and Java
+// are scanned by the pattern parser and produce the same node and edge shapes,
+// so callers never branch on language. It is idempotent: nodes are upserted by
+// ID and the KG's AddEdge reinforces rather than duplicates, so periodic
+// re-syncs keep the graph fresh without growing it.
 func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphStore) (SyncStats, error) {
 	var stats SyncStats
 	if kg == nil {
 		return stats, fmt.Errorf("nil knowledge graph")
 	}
+	// A workspace with no Go files still gets indexed by the second pass, so
+	// this must not return early.
 	files := collectGoFiles(root)
-	if len(files) == 0 {
-		return stats, nil
-	}
 	now := time.Now()
 	fset := token.NewFileSet()
 
@@ -52,9 +56,10 @@ func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphSto
 	identsByFile := make(map[string]map[string]bool, len(files))
 
 	type symbolFact struct {
-		def  definition
-		rel  string // defining file, relative
-		refs int    // number of OTHER files mentioning the identifier
+		def      definition
+		rel      string   // defining file, relative
+		refs     int      // number of OTHER files mentioning the identifier
+		refFiles []string // which files those are, for reverse lookup
 	}
 	var symbols []symbolFact
 	importsByFile := make(map[string][]importEntry)
@@ -96,9 +101,15 @@ func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphSto
 			}
 			if idents[name] {
 				symbols[i].refs++
+				symbols[i].refFiles = append(symbols[i].refFiles, rel)
 			}
 		}
 	}
+
+	// Version the index against the revision it was read at, so the graph can
+	// later report which of its beliefs predate the current HEAD. Empty
+	// outside a git repository — an unversioned fact is better than a fake one.
+	head := memory.GitHead(root)
 
 	// Write facts. File nodes first so edges always resolve.
 	seenFiles := make(map[string]bool)
@@ -107,11 +118,15 @@ func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphSto
 			return
 		}
 		seenFiles[rel] = true
+		props := map[string]string{"origin": "code_index"}
+		if head != "" {
+			props["commit"] = head
+		}
 		_ = kg.AddNode(&core.KGNode{
 			ID:         "file:" + rel,
 			Label:      rel,
 			Type:       core.KGNodeFile,
-			Properties: map[string]string{"origin": "code_index"},
+			Properties: props,
 			Provenance: rel,
 			Confidence: 1.0,
 			LastSeen:   now,
@@ -148,6 +163,19 @@ func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphSto
 		}); err == nil {
 			stats.Edges++
 		}
+		// Record WHICH files reference the symbol, not just how many. The
+		// count alone cannot answer "what breaks if I change this", which is
+		// what blast-radius analysis and dead-code detection both need.
+		for _, refFile := range s.refFiles {
+			addFileNode(refFile)
+			if err := kg.AddEdge(&core.KGEdge{
+				From: "file:" + refFile, To: symID,
+				Relation: core.KGRelReferences, Weight: 1.0,
+				Provenance: refFile, CreatedAt: now,
+			}); err == nil {
+				stats.Edges++
+			}
+		}
 	}
 
 	seenPkgs := make(map[string]bool)
@@ -182,7 +210,94 @@ func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphSto
 		}
 	}
 
+	syncOtherLanguages(ctx, root, kg, relPath, now, addFileNode, &stats)
 	return stats, nil
+}
+
+// syncOtherLanguages records the same fact shapes for the non-Go source files
+// (TypeScript/JavaScript, Python, Rust, Java) using the pattern scanner. The
+// node IDs, edge relations and provenance format are identical to the Go pass,
+// so a query against the graph does not need to know which language a symbol
+// came from — that uniformity is the point.
+func syncOtherLanguages(ctx context.Context, root string, kg core.KnowledgeGraphStore,
+	relPath func(string) string, now time.Time, addFileNode func(string), stats *SyncStats) {
+
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if info.IsDir() {
+			if n := info.Name(); n != "." && (n == "vendor" || n == "node_modules" || n == ".git" || n == "target" || n == "__pycache__") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		lang := intelligence.LanguageOf(path)
+		if lang == "" || lang == "go" { // Go is handled exactly, above
+			return nil
+		}
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		res := intelligence.ParseText(src, path)
+		if len(res.Symbols) == 0 && len(res.Imports) == 0 {
+			return nil
+		}
+
+		rel := relPath(path)
+		addFileNode(rel)
+
+		for _, sym := range res.Symbols {
+			provenance := fmt.Sprintf("%s:%d", rel, sym.Line)
+			symID := "symbol:" + sym.Name + "@" + rel
+			_ = kg.AddNode(&core.KGNode{
+				ID:    symID,
+				Label: sym.Name,
+				Type:  core.KGNodeSymbol,
+				Properties: map[string]string{
+					"origin": "code_index", "kind": sym.Kind, "language": lang,
+				},
+				Provenance: provenance,
+				// Pattern-scanned symbols are high-confidence but not exact the
+				// way go/ast is, and the graph's confidence field exists to
+				// carry precisely this distinction.
+				Confidence: 0.9,
+				LastSeen:   now,
+			})
+			stats.Symbols++
+			if err := kg.AddEdge(&core.KGEdge{
+				From: "file:" + rel, To: symID,
+				Relation: core.KGRelDefines, Weight: 1.0,
+				Provenance: provenance, CreatedAt: now,
+			}); err == nil {
+				stats.Edges++
+			}
+		}
+
+		dedup := make(map[string]bool, len(res.Imports))
+		for _, imp := range res.Imports {
+			if dedup[imp.Path] {
+				continue
+			}
+			dedup[imp.Path] = true
+			pkgID := "package:" + imp.Path
+			_ = kg.AddNode(&core.KGNode{
+				ID: pkgID, Label: imp.Path, Type: core.KGNodePackage,
+				Properties: map[string]string{"origin": "code_index", "language": lang},
+				Confidence: 0.9, LastSeen: now,
+			})
+			stats.Packages++
+			if err := kg.AddEdge(&core.KGEdge{
+				From: "file:" + rel, To: pkgID,
+				Relation: core.KGRelImports, Weight: 1.0,
+				Provenance: rel, CreatedAt: now,
+			}); err == nil {
+				stats.Edges++
+			}
+		}
+		return nil
+	})
 }
 
 // NewKGSyncTool exposes the workspace→KG sync as a deterministic tool so the

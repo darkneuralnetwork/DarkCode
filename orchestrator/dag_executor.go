@@ -81,6 +81,12 @@ func (k *Kernel) executePlannedGraph(ctx context.Context, g *plan.Graph, recallB
 	// silently logged.
 	merged = k.verifyOutput(ctx, goal, merged, verifyComplexityMin)
 
+	// Run each completed task's acceptance criteria and attach the evidence to
+	// the graph, so "done" is a checkable claim rather than a sub-agent's word.
+	if proof := k.verifyAcceptance(ctx, g); proof != "" {
+		merged += proof
+	}
+
 	// Store episodic memory, record learning feedback + audit + knowledge
 	// graph; skill extraction folds in via minSkillSuccess=2.
 	k.log("store", "Storing episodic memory")
@@ -125,6 +131,12 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 	var allResults []*core.SubAgentResult
 	processed := make(map[string]bool)
 
+	journal := NewExecJournal(k.runsDir, goal)
+	if n := journal.Resumable(); n > 0 {
+		k.log("execute", fmt.Sprintf("Resuming: %d task(s) already completed by a previous attempt", n))
+	}
+	journal.Append(ExecEvent{Kind: "run_started", Name: goal})
+
 	for {
 		// Get all tasks that are ready to run (all deps satisfied)
 		ready := d.GetReadyTasks(processed)
@@ -143,6 +155,28 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			// Deadlock — unprocessed nodes with unsatisfied deps
 			return allResults, fmt.Errorf("DAG deadlock: unresolvable dependencies")
 		}
+
+		// Replay anything a previous attempt already finished, so a resumed run
+		// does not re-pay for completed work.
+		var pending []*core.TaskNode
+		for _, node := range ready {
+			out, ok := journal.Completed(node.ID)
+			if !ok {
+				pending = append(pending, node)
+				continue
+			}
+			processed[node.ID] = true
+			d.MarkCompleted(node.ID)
+			d.SetOutput(node.ID, out)
+			allResults = append(allResults, &core.SubAgentResult{
+				Role: node.AgentRole, Goal: node.Goal, Success: true, Output: out,
+			})
+			k.log("execute", fmt.Sprintf("Task %s replayed from the previous run", node.ID))
+		}
+		if len(pending) == 0 {
+			continue // everything in this wave came from the journal
+		}
+		ready = pending
 
 		// Build agent configs for ready tasks. Each dependent receives its
 		// dependencies' outputs as context — without this, edges only
@@ -192,6 +226,7 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			if res != nil && res.Success {
 				d.MarkCompleted(node.ID)
 				d.SetOutput(node.ID, res.Output)
+				journal.Append(ExecEvent{Kind: "node_completed", Node: node.ID, Name: node.Name, Output: res.Output})
 				continue
 			}
 			errMsg := "sub-agent returned no result"
@@ -200,6 +235,7 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			}
 			d.UpdateStatus(node.ID, core.TaskFailed)
 			d.SetError(node.ID, errMsg)
+			journal.Append(ExecEvent{Kind: "node_failed", Node: node.ID, Name: node.Name, Error: errMsg})
 			for _, blocked := range d.CancelDescendants(node.ID) {
 				processed[blocked] = true
 				k.log("execute", fmt.Sprintf("Task %s blocked: dependency %s failed", blocked, node.ID))
@@ -210,6 +246,8 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 		}
 	}
 
+	// The run reached its end, so there is nothing left to resume.
+	journal.Finish()
 	return allResults, nil
 }
 

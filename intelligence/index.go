@@ -60,23 +60,25 @@ func (p *ProjectIndex) ScanWorkspace() error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(path, ".go") {
-			if strings.Contains(path, "/vendor/") {
-				return nil
-			}
+		lang := LanguageOf(path)
+		if lang == "" || strings.Contains(path, "/vendor/") || strings.Contains(path, "/node_modules/") {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		if lang == "go" {
 			goFiles++
-			data, rerr := os.ReadFile(path)
-			if rerr != nil {
-				return nil
-			}
 			res, perr := parser.Parse(data, path)
 			if perr != nil {
 				return nil
 			}
 			p.ingest(path, res)
-		} else if isSourceFile(path) {
-			otherFiles++
+			return nil
 		}
+		otherFiles++
+		p.ingest(path, ParseText(data, path))
 		return nil
 	})
 	if goFiles == 0 && otherFiles > 0 {
@@ -148,16 +150,6 @@ func (p *ProjectIndex) Watcher() *FileWatcher          { return p.watcher }
 // packageOf derives the Go package path from a file path (directory).
 func packageOf(file string) string {
 	return filepath.Dir(file)
-}
-
-// isSourceFile reports whether a non-Go file is a source file worth indexing.
-func isSourceFile(path string) bool {
-	for _, s := range []string{".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".java", ".c", ".cpp", ".h"} {
-		if strings.HasSuffix(path, s) {
-			return true
-		}
-	}
-	return false
 }
 
 // detectLanguage guesses the primary language from marker files.

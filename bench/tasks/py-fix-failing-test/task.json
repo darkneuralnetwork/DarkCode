@@ -1,0 +1,1 @@
+{"prompt": "The pytest suite in this directory fails. Fix the implementation in fizzbuzz.py so all tests pass. Do not modify the tests.", "timeout_seconds": 300}

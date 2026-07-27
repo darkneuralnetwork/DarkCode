@@ -13,6 +13,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/safeurl"
+	"github.com/darkcode/security"
 )
 
 // WebTool fetches web content via HTTP GET and orchestrates intelligent web searches.
@@ -76,7 +77,10 @@ func (t *WebTool) FetchURL(ctx context.Context, args map[string]interface{}) *To
 	return &ToolResult{
 		Name:    "web_fetch",
 		Success: true,
-		Output:  fmt.Sprintf("Status: %d\nURL: %s\n\n%s", resp.StatusCode, resp.Request.URL.String(), content),
+		// A fetched page is the least trustworthy input the agent handles, so
+		// it is scanned for text addressed to the model before being returned.
+		Output: fmt.Sprintf("Status: %d\nURL: %s\n\n%s", resp.StatusCode, resp.Request.URL.String(),
+			security.Wrap(resp.Request.URL.String(), content)),
 	}
 }
 

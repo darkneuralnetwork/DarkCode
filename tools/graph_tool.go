@@ -1,0 +1,173 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/darkcode/core"
+	"github.com/darkcode/memory"
+)
+
+// GraphTool exposes the code knowledge graph as a queryable agent tool.
+//
+// The graph already knows what every file defines, what it imports, and how
+// confident it is in each of those facts. Without a query surface the agent
+// can only reach it through generic recall, which means re-reading files to
+// answer questions the graph could answer for free. This is the difference
+// between owning an index and using one.
+type GraphTool struct {
+	KG        *memory.KnowledgeGraph
+	Workspace string
+}
+
+// Execute dispatches one graph query.
+func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
+	if t.KG == nil {
+		return &ToolResult{Name: "graph_query", Success: false, Error: "knowledge graph unavailable"}
+	}
+	action, _ := args["action"].(string)
+	query, _ := args["query"].(string)
+	limit := 25
+	if n, ok := args["limit"].(float64); ok && n > 0 {
+		limit = int(n)
+	}
+
+	var (
+		result   interface{}
+		headline string
+	)
+	switch action {
+	case "search":
+		matches := t.KG.Search(query, core.KGNodeType(str(args["type"])), limit)
+		result, headline = matches, fmt.Sprintf("%d node(s) matching %q", len(matches), query)
+
+	case "neighbors":
+		if query == "" {
+			return &ToolResult{Name: "graph_query", Success: false, Error: "query must be a node id for the neighbors action"}
+		}
+		matches := t.KG.Neighbors(query)
+		result, headline = matches, fmt.Sprintf("%d neighbour(s) of %s", len(matches), query)
+
+	case "subgraph":
+		depth := 2
+		if d, ok := args["depth"].(float64); ok && d > 0 {
+			depth = int(d)
+		}
+		nodes := t.KG.GetSubgraph(query, depth)
+		matches := make([]memory.Match, 0, len(nodes))
+		for _, n := range nodes {
+			matches = append(matches, memory.Match{
+				ID: n.ID, Label: n.Label, Type: string(n.Type),
+				Provenance: n.Provenance, Confidence: n.Confidence,
+			})
+		}
+		result, headline = matches, fmt.Sprintf("%d node(s) within %d hop(s) of %s", len(matches), depth, query)
+
+	case "low_confidence":
+		threshold := 0.5
+		if v, ok := args["threshold"].(float64); ok && v > 0 {
+			threshold = v
+		}
+		matches := t.KG.LowConfidence(threshold, limit)
+		result, headline = matches, fmt.Sprintf("%d belief(s) below confidence %.2f", len(matches), threshold)
+
+	case "stale":
+		matches := t.KG.StaleFiles(t.Workspace)
+		result, headline = matches, fmt.Sprintf("%d file(s) indexed at an older commit than HEAD", len(matches))
+
+	case "blast_radius":
+		files := stringList(args["files"])
+		if len(files) == 0 && query != "" {
+			files = []string{query}
+		}
+		if len(files) == 0 {
+			return &ToolResult{Name: "graph_query", Success: false, Error: "blast_radius needs files (or query as a single path)"}
+		}
+		depth := 2
+		if d, ok := args["depth"].(float64); ok && d > 0 {
+			depth = int(d)
+		}
+		imp := t.KG.BlastRadius(files, depth)
+		result = imp
+		headline = fmt.Sprintf("changing %d file(s) can reach %d other file(s) — severity %.0f%%",
+			len(files), len(imp.Affected), imp.Severity*100)
+
+	case "health":
+		rep := t.KG.Health()
+		result, headline = rep, fmt.Sprintf("health %.0f/100 across %d files, %d symbols, %d finding(s)",
+			rep.Score, rep.Files, rep.Symbols, len(rep.Findings))
+
+	case "dead_code":
+		f := t.KG.DeadSymbols()
+		result, headline = f, fmt.Sprintf("%d symbol(s) with no in-repo references", len(f))
+
+	case "cycles":
+		f := t.KG.Cycles()
+		result, headline = f, fmt.Sprintf("%d import cycle(s)", len(f))
+
+	case "untested":
+		f := t.KG.UntestedHotspots(limit)
+		result, headline = f, fmt.Sprintf("%d high-fan-in symbol(s) with no test references", len(f))
+
+	default:
+		return &ToolResult{Name: "graph_query", Success: false, Error: "unknown action " + action +
+			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested)"}
+	}
+
+	body, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return &ToolResult{Name: "graph_query", Success: false, Error: err.Error()}
+	}
+	return &ToolResult{Name: "graph_query", Success: true, Output: headline + "\n" + string(body)}
+}
+
+// stringList coerces a JSON array argument to []string, dropping non-strings.
+func stringList(v interface{}) []string {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if s, ok := it.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// RegisterGraphTool adds the graph query tool to the registry.
+func RegisterGraphTool(r *Registry, kg *memory.KnowledgeGraph, workspace string) {
+	t := &GraphTool{KG: kg, Workspace: workspace}
+	r.Register(&ToolEntry{
+		Name: "graph_query",
+		Description: strings.TrimSpace(`
+Query the persistent code knowledge graph: which files define which symbols, what imports what,
+how confident each fact is, and what a change would break. Prefer this over re-reading files when
+the question is structural ("where is X defined", "what depends on Y", "what will this break").
+Actions: search (find nodes by label), neighbors (direct edges of a node id), subgraph (n-hop
+neighbourhood), blast_radius (files a change can reach), health (repository health score and ranked
+issues), dead_code (unreferenced symbols), cycles (import cycles), untested (high-fan-in symbols with
+no test references), low_confidence (beliefs worth re-checking), stale (files indexed before HEAD).`),
+		Parameters: MustParseSchema(`{
+			"type": "object",
+			"properties": {
+				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale"], "description": "Which query to run"},
+				"query": {"type": "string", "description": "Search term, or a node id for neighbors/subgraph, or a single path for blast_radius"},
+				"files": {"type": "array", "description": "File paths for blast_radius"},
+				"type": {"type": "string", "enum": ["file", "symbol", "package", "concept", "decision", "fix", "api"], "description": "Restrict a search to one node type"},
+				"depth": {"type": "integer", "description": "Hops for subgraph or blast_radius (default 2)"},
+				"threshold": {"type": "number", "description": "Confidence ceiling for low_confidence (default 0.5)"},
+				"limit": {"type": "integer", "description": "Maximum results (default 25)"}
+			},
+			"required": ["action"]
+		}`),
+		Handler:  t.Execute,
+		Category: "knowledge",
+		// Reading the graph mutates nothing, so Chat mode can use it too.
+		ReadOnly:      true,
+		Deterministic: true,
+	})
+}

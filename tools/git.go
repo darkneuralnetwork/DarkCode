@@ -23,8 +23,8 @@ func (g *GitTool) Schema() string {
 		"properties": {
 			"action": {
 				"type": "string",
-				"description": "Git action: status, diff, log, branch, add, commit, stash, show",
-				"enum": ["status", "diff", "log", "branch", "add", "commit", "stash", "show"]
+				"description": "Git action: status, diff, log, branch, add, commit, stash, show, worktree",
+				"enum": ["status", "diff", "log", "branch", "add", "commit", "stash", "show", "worktree"]
 			},
 			"args": {
 				"type": "string",
@@ -105,6 +105,23 @@ func (g *GitTool) Execute(ctx context.Context, args map[string]interface{}) *Too
 		cmdArgs = []string{"show", "--stat"}
 		if extraArgs != "" {
 			cmdArgs = append(cmdArgs, strings.Fields(extraArgs)...)
+		}
+	case "worktree":
+		// Worktrees let a task be built and tested on its own branch without
+		// disturbing the checkout the user is looking at. Listing is free;
+		// add/remove mutate and are gated (see permission.IsGitMutating).
+		fields := strings.Fields(extraArgs)
+		if len(fields) == 0 {
+			fields = []string{"list"}
+		}
+		switch fields[0] {
+		case "list":
+			cmdArgs = []string{"worktree", "list"}
+		case "add", "remove", "prune":
+			cmdArgs = append([]string{"worktree"}, fields...)
+		default:
+			return &ToolResult{Name: "git", Success: false,
+				Error: "worktree sub-command must be list, add, remove, or prune"}
 		}
 	default:
 		return &ToolResult{Name: "git", Success: false, Error: fmt.Sprintf("unknown action: %s", action)}

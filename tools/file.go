@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/darkcode/security"
 )
 
 // FileTool provides file read/write/patch operations.
@@ -38,7 +40,11 @@ func (t *FileTool) ReadFile(ctx context.Context, args map[string]interface{}) *T
 	return &ToolResult{
 		Name:    "read_file",
 		Success: true,
-		Output:  result.String(),
+		// Repository files are attacker-controllable (a dependency's README, a
+		// generated file, a contributed test fixture). Wrap flags any content
+		// shaped like instructions addressed to the model; clean files are
+		// returned untouched.
+		Output: security.Wrap(path, result.String()),
 	}
 }
 
@@ -128,17 +134,23 @@ func (t *FileTool) PatchFile(ctx context.Context, args map[string]interface{}) *
 	}
 
 	content := string(data)
-	if !strings.Contains(content, oldStr) {
-		return &ToolResult{Name: "patch", Success: false, Error: "old_string not found in file"}
+	m := findSnippet(content, oldStr)
+	if m.err != "" {
+		return &ToolResult{Name: "patch", Success: false, Error: m.err}
 	}
 
+	note := ""
 	replaceAll, _ := args["replace_all"].(bool)
-	if replaceAll {
+	switch {
+	case m.fuzzy:
+		// A whitespace-tolerant match is unique by construction, so
+		// replace_all has nothing extra to do.
+		content = content[:m.start] + newStr + content[m.end:]
+		note = " (matched ignoring whitespace)"
+	case replaceAll:
 		content = strings.ReplaceAll(content, oldStr, newStr)
-	} else {
-		// Replace first occurrence only
-		idx := strings.Index(content, oldStr)
-		content = content[:idx] + newStr + content[idx+len(oldStr):]
+	default:
+		content = content[:m.start] + newStr + content[m.end:]
 	}
 
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -148,7 +160,7 @@ func (t *FileTool) PatchFile(ctx context.Context, args map[string]interface{}) *
 	return &ToolResult{
 		Name:    "patch",
 		Success: true,
-		Output:  fmt.Sprintf("Patched %s", path),
+		Output:  fmt.Sprintf("Patched %s%s", path, note),
 	}
 }
 

@@ -1,0 +1,1 @@
+{"prompt": "Add a Go test file for the Add function in calc.go. The test must cover positive numbers, negative numbers, and zero. Ensure `go test ./...` passes.", "timeout_seconds": 300}
