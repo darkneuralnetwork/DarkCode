@@ -204,6 +204,22 @@ func (k *Kernel) injectRecall(goal string, block string) string {
 	return block + "\n## Task\n" + goal
 }
 
+// annotateUncited appends a warning when an answer makes concrete structural
+// claims without citing any of the facts it was handed.
+//
+// The recall block asks the model to cite what it relies on; an answer that
+// asserts where code lives while ignoring every supplied fact is the shape of
+// a guess. Flagging it is cheaper than being wrong silently, and the user can
+// judge — so this annotates rather than suppresses.
+func annotateUncited(answer, recallBlock string) string {
+	facts := strings.Count(recallBlock, "- [F")
+	if !memory.UncitedClaim(answer, facts) {
+		return answer
+	}
+	return answer + "\n\n_⚠ This answer makes claims about the codebase without citing any of the " +
+		fmt.Sprintf("%d recalled fact(s)", facts) + " it was given — treat the specifics as unverified._"
+}
+
 // decisionFactConfidence is the write-time confidence for a decision fact.
 // Flat (unlike fixFactConfidence): a decision has no analogous "prior
 // failure" evidence to grade against — it's promoted from keyword

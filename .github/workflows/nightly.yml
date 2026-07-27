@@ -1,0 +1,58 @@
+name: Nightly
+
+# The per-PR gate is tuned to be fast. This is where the slower, flakier and
+# more thorough checks live — the ones worth knowing about but not worth
+# blocking a merge on.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: # so a maintainer can run it on demand
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -count=1 defeats the test cache: a nightly run that replays yesterday's
+      # cached results proves nothing.
+      - name: Tests (race, uncached)
+        run: go test -race -count=1 ./...
+
+      # Repeated runs surface order-dependence and genuine flakiness, which a
+      # single pass hides.
+      - name: Flake hunt
+        run: go test -count=5 -run 'Test' ./memory/ ./orchestrator/ ./tools/ ./permission/
+
+      - name: Coverage
+        run: |
+          go test -coverprofile=coverage.out ./... > /dev/null
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Benchmark fixtures
+        run: go test ./bench/ -run 'Shipped' -v
+
+      - name: Reproducible build check
+        run: |
+          # Two builds of the same tree must be byte-identical, or the
+          # "reproducible releases" claim in the README is false.
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/a .
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /tmp/b .
+          if ! cmp -s /tmp/a /tmp/b; then
+            echo "build is not reproducible: two builds of the same tree differ"
+            exit 1
+          fi
+          echo "reproducible: $(sha256sum /tmp/a | cut -d' ' -f1)"
+
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

@@ -23,7 +23,7 @@ var commandRegistry = []cmdInfo{
 	{"/help", "Session", "Search & run any command (this palette)"},
 	{"/new", "Session", "Start a fresh chat — clears context (keeps durable memory)"},
 	{"/rollback", "Session", "List checkpoints, or undo the agent's file changes"},
-	{"/session", "Session", "Summarise, export, or prune session history"},
+	{"/session", "Session", "Summarise, export, archive, resume, or prune sessions"},
 	{"/status", "Session", "Show the kernel/router status"},
 	{"/config", "Session", "Show the current configuration"},
 	{"/quit", "Session", "Exit darkcode"},
@@ -53,6 +53,7 @@ var commandRegistry = []cmdInfo{
 	{"/learning", "Knowledge & Memory", "Show learning-engine feedback"},
 	{"/audit", "Knowledge & Memory", "Show the action audit trail"},
 	{"/health", "Knowledge & Memory", "Repository health score and ranked structural issues"},
+	{"/evolution", "Knowledge & Memory", "What changed structurally between two commits"},
 
 	// Project
 	{"/project", "Project", "List / manage projects"},

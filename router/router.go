@@ -107,6 +107,15 @@ func NewRouter(mode core.RoutingMode, emitter *ui.EventEmitter) *Router {
 // SetAdvisor attaches a capability advisor so routing decisions can account
 // for hardware capabilities (e.g. prefer local models when the system is
 // powerful enough). Safe to call with nil to disable.
+// SetReliabilityPath persists per-model, per-role reliability across restarts,
+// so a model's track record accumulates instead of resetting every session.
+func (r *Router) SetReliabilityPath(path string) {
+	r.roleTracker.SetPersistPath(path)
+}
+
+// Reliability returns the tracked success rate of every model/role pair.
+func (r *Router) Reliability() []RoleWeight { return r.roleTracker.Stats() }
+
 func (r *Router) SetAdvisor(a *capability.Advisor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -592,6 +601,14 @@ func (r *Router) Consensus(ctx context.Context, messages []core.Message, goal st
 		weight := r.roleTracker.GetWeight(model.Role, model.Name)
 		if model.Client == nil {
 			results[idx] = roleResult{idx: idx, name: model.Name, role: model.Role, weight: weight, err: fmt.Errorf("no client")}
+			return
+		}
+		// A model that has repeatedly failed this role is skipped rather than
+		// paid for again. The primary is never skipped — it synthesises the
+		// final answer, so dropping it would leave nothing to merge into.
+		if idx != 0 && r.roleTracker.Unreliable(model.Role, model.Name) {
+			results[idx] = roleResult{idx: idx, name: model.Name, role: model.Role, weight: weight,
+				err: fmt.Errorf("skipped: repeatedly unreliable for role %s", model.Role)}
 			return
 		}
 		prompt := roleSystemPrompt(model.Role)

@@ -32,7 +32,9 @@ import (
 	"fmt"
 	"github.com/darkcode/internal/strutil"
 	"math"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -348,16 +350,22 @@ func FormatRecall(hits []RecallHit) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("## Relevant Past Context (hybrid recall)\n")
+	sb.WriteString("Each fact below carries a citation tag. When you rely on one, cite it as [F1], [F2], … " +
+		"so the claim can be traced back. State plainly when something is not supported by these facts.\n")
 	shown := 0
 	for _, h := range hits {
 		var line strings.Builder
-		line.WriteString("- [")
-		line.WriteString(h.Source)
-		line.WriteString("] ")
+		fmt.Fprintf(&line, "- [F%d] [%s] ", shown+1, h.Source)
 		line.WriteString(strutil.Truncate(h.Goal, 100))
 		if h.Snippet != "" {
 			line.WriteString(" — ")
 			line.WriteString(h.Snippet)
+		}
+		// The id is the structural provenance: it points back at the episodic
+		// entry or semantic key the fact came from, so a citation resolves to
+		// something real rather than to a number the model invented.
+		if h.ID != "" {
+			line.WriteString(" (source: " + h.ID + ")")
 		}
 		line.WriteString("\n")
 
@@ -372,6 +380,43 @@ func FormatRecall(hits []RecallHit) string {
 	}
 	return sb.String()
 }
+
+// citationTag matches the [F1] references the recall block asks for.
+var citationTag = regexp.MustCompile(`\[F(\d+)\]`)
+
+// CitedFacts returns the 1-based fact numbers an answer cited.
+func CitedFacts(answer string) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, m := range citationTag.FindAllStringSubmatch(answer, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+// UncitedClaim reports whether an answer asserts something concrete about the
+// codebase without citing any of the facts it was given.
+//
+// This is a nudge, not a verdict: it catches the case where recall supplied
+// evidence and the answer made specific structural claims anyway without
+// reference to it — the shape of a confident guess. An answer that cites
+// nothing because it needed nothing is not flagged, because it makes no such
+// claim.
+func UncitedClaim(answer string, factsInjected int) bool {
+	if factsInjected == 0 || len(CitedFacts(answer)) > 0 {
+		return false
+	}
+	return structuralClaim.MatchString(answer)
+}
+
+// structuralClaim matches assertions about where code lives or what it does —
+// the claims that ought to rest on an indexed fact.
+var structuralClaim = regexp.MustCompile(`(?i)\b(is defined in|is implemented in|lives in|is located in|` +
+	`is handled by|calls into|depends on|is called from|according to the code)\b`)
 
 // tokenize splits s into lowercased word tokens, dropping stopwords and
 // tokens shorter than 3 chars. This is the unit of overlap scoring.

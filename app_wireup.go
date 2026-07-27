@@ -598,6 +598,10 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// stopped instead of re-paying for every completed sub-task.
 	a.Kernel.SetRunsDir(defaultDarkcodeDir("runs"))
 
+	// Per-model reliability accumulates across sessions, so a model that keeps
+	// failing a role stops being asked to do it.
+	a.Router.SetReliabilityPath(filepath.Join(memDir, "model_reliability.json"))
+
 	// Cost governor: enforce optional spend caps against the process-wide
 	// usage tracker. Only installed when a budget is actually configured, so
 	// the default (no caps) means zero enforcement overhead.

@@ -319,7 +319,7 @@ func (k *Kernel) executeChatReadOnly(ctx context.Context, goal string, recallBlo
 		k.log("chat", "read-only loop failed ("+err.Error()+") — falling back to plain answer")
 		return k.executeDirectNoTools(ctx, goal, recallBlock)
 	}
-	output := loopRes.Output
+	output := annotateUncited(loopRes.Output, recallBlock)
 	k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
 	k.recordOutcome(goal, output, nil, true, "chat", 0, recallBlock)
 	if k.emitter != nil {

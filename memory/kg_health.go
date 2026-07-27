@@ -147,9 +147,21 @@ func (kg *KnowledgeGraph) DeadSymbols() []Finding {
 // possible signal that a layering boundary has been crossed, and it is
 // invisible from any single file.
 func (kg *KnowledgeGraph) Cycles() []Finding {
-	graph := kg.packageGraph()
-
 	var out []Finding
+	for _, cycle := range FindCycles(kg.packageGraph()) {
+		out = append(out, Finding{
+			Kind: "import-cycle", Subject: cycle[0],
+			Detail: strings.Join(cycle, " → "),
+			Weight: 0.9,
+		})
+	}
+	return out
+}
+
+// FindCycles returns every cycle in a directed graph, each as the node path
+// that closes it (first node repeated at the end). Output is deterministic so
+// two runs — or two commits — can be compared.
+func FindCycles(graph map[string][]string) [][]string {
 	// Colour-marking DFS: grey means "on the current path", so meeting a grey
 	// node closes a cycle.
 	const (
@@ -159,12 +171,13 @@ func (kg *KnowledgeGraph) Cycles() []Finding {
 	)
 	state := map[string]int{}
 	var stack []string
+	var cycles [][]string
 
 	var visit func(string)
-	visit = func(pkg string) {
-		state[pkg] = grey
-		stack = append(stack, pkg)
-		for _, dep := range graph[pkg] {
+	visit = func(node string) {
+		state[node] = grey
+		stack = append(stack, node)
+		for _, dep := range graph[node] {
 			switch state[dep] {
 			case white:
 				visit(dep)
@@ -172,31 +185,27 @@ func (kg *KnowledgeGraph) Cycles() []Finding {
 				// Report the cycle from where it was entered.
 				for i, p := range stack {
 					if p == dep {
-						out = append(out, Finding{
-							Kind: "import-cycle", Subject: dep,
-							Detail: strings.Join(append(append([]string{}, stack[i:]...), dep), " → "),
-							Weight: 0.9,
-						})
+						cycles = append(cycles, append(append([]string{}, stack[i:]...), dep))
 						break
 					}
 				}
 			}
 		}
 		stack = stack[:len(stack)-1]
-		state[pkg] = black
+		state[node] = black
 	}
 
-	pkgs := make([]string, 0, len(graph))
-	for p := range graph {
-		pkgs = append(pkgs, p)
+	nodes := make([]string, 0, len(graph))
+	for n := range graph {
+		nodes = append(nodes, n)
 	}
-	sort.Strings(pkgs) // deterministic output
-	for _, p := range pkgs {
-		if state[p] == white {
-			visit(p)
+	sort.Strings(nodes) // deterministic output
+	for _, n := range nodes {
+		if state[n] == white {
+			visit(n)
 		}
 	}
-	return out
+	return cycles
 }
 
 // packageGraph derives package → package edges from the file → package import

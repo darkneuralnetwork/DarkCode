@@ -89,6 +89,9 @@ func (c *Console) handleSlash(input string) bool {
 	case "/health":
 		c.handleHealth()
 
+	case "/evolution":
+		c.handleEvolution(parts[1:])
+
 	case "/session", "/sessions":
 		c.handleSession(parts[1:])
 

@@ -111,9 +111,55 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 		f := t.KG.UntestedHotspots(limit)
 		result, headline = f, fmt.Sprintf("%d high-fan-in symbol(s) with no test references", len(f))
 
+	case "defect_risk", "root_cause":
+		days := 365
+		if d, ok := args["days"].(float64); ok && d > 0 {
+			days = int(d)
+		}
+		hist, err := memory.MineDefectHistory(t.Workspace, days)
+		if err != nil {
+			return &ToolResult{Name: "graph_query", Success: false, Error: "reading git history: " + err.Error()}
+		}
+		if action == "defect_risk" {
+			risks := t.KG.DefectRisk(hist, limit)
+			result = risks
+			headline = fmt.Sprintf("%d defect-prone file(s) from %d fix commit(s) in the last %d days",
+				len(risks), hist.TotalFixes, days)
+			break
+		}
+		failing := stringList(args["files"])
+		if len(failing) == 0 && query != "" {
+			failing = []string{query}
+		}
+		if len(failing) == 0 {
+			return &ToolResult{Name: "graph_query", Success: false,
+				Error: "root_cause needs the failing file(s) in files (or query as a single path)"}
+		}
+		causes := t.KG.RankRootCauses(hist, failing, limit)
+		result = causes
+		headline = fmt.Sprintf("%d root-cause candidate(s) for a failure in %s", len(causes), strings.Join(failing, ", "))
+
+	case "evolution":
+		from, to := str(args["from"]), str(args["to"])
+		if from == "" {
+			from = "HEAD~1"
+		}
+		if to == "" {
+			to = "HEAD"
+		}
+		events, err := memory.DiffCommits(t.Workspace, from, to)
+		if err != nil {
+			return &ToolResult{Name: "graph_query", Success: false, Error: err.Error()}
+		}
+		if limit > 0 && len(events) > limit {
+			events = events[:limit]
+		}
+		result = events
+		headline = fmt.Sprintf("%d structural change(s) between %s and %s", len(events), from, to)
+
 	default:
 		return &ToolResult{Name: "graph_query", Success: false, Error: "unknown action " + action +
-			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested)"}
+			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause)"}
 	}
 
 	body, err := json.MarshalIndent(result, "", "  ")
@@ -150,16 +196,23 @@ the question is structural ("where is X defined", "what depends on Y", "what wil
 Actions: search (find nodes by label), neighbors (direct edges of a node id), subgraph (n-hop
 neighbourhood), blast_radius (files a change can reach), health (repository health score and ranked
 issues), dead_code (unreferenced symbols), cycles (import cycles), untested (high-fan-in symbols with
-no test references), low_confidence (beliefs worth re-checking), stale (files indexed before HEAD).`),
+no test references), low_confidence (beliefs worth re-checking), stale (files indexed before HEAD),
+evolution (what changed STRUCTURALLY between two commits — new dependencies, API breaks, cycles created —
+rather than a line diff), defect_risk (files most likely to contain bugs, from fix history plus graph
+centrality), root_cause (when a test fails, rank likely culprits by defect history AND graph distance from
+the failure). Every risk score carries the reasons behind it.`),
 		Parameters: MustParseSchema(`{
 			"type": "object",
 			"properties": {
-				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale"], "description": "Which query to run"},
+				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause"], "description": "Which query to run"},
 				"query": {"type": "string", "description": "Search term, or a node id for neighbors/subgraph, or a single path for blast_radius"},
-				"files": {"type": "array", "description": "File paths for blast_radius"},
+				"files": {"type": "array", "description": "File paths for blast_radius, or the failing files for root_cause"},
+				"days": {"type": "integer", "description": "History window for defect_risk/root_cause (default 365)"},
 				"type": {"type": "string", "enum": ["file", "symbol", "package", "concept", "decision", "fix", "api"], "description": "Restrict a search to one node type"},
 				"depth": {"type": "integer", "description": "Hops for subgraph or blast_radius (default 2)"},
 				"threshold": {"type": "number", "description": "Confidence ceiling for low_confidence (default 0.5)"},
+				"from": {"type": "string", "description": "Start commit for evolution (default HEAD~1)"},
+				"to": {"type": "string", "description": "End commit for evolution (default HEAD)"},
 				"limit": {"type": "integer", "description": "Maximum results (default 25)"}
 			},
 			"required": ["action"]

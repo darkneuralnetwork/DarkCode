@@ -110,7 +110,12 @@ server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
 | `blast_radius` | "What breaks if I change this file?" — shown in the plan approval gate before you approve |
 | `health` | Repository health score with ranked structural issues |
 | `cycles` · `dead_code` · `untested` | Import cycles, unreferenced symbols, high-fan-in code with no tests |
+| `evolution` | What changed *structurally* between two commits — new dependencies, API breaks, cycles created — not a line diff |
+| `defect_risk` · `root_cause` | Which files bugs cluster in, and — when a test fails — the likely culprits ranked by fix history × graph distance |
 | `low_confidence` · `stale` | Beliefs worth re-checking; files indexed before the current `HEAD` |
+
+Every risk score carries the reasons that produced it, so a weak signal reads as
+weak rather than as confident nonsense.
 
 ```mermaid
 flowchart LR
@@ -274,7 +279,7 @@ The full reference is in the [**Wiki → Configuration**](https://github.com/dar
 </div>
 
 - **Web UI** — conversations, live agent monitoring, blueprint/plan tracking, memory inspection, and knowledge-graph visibility.
-- **CLI** — a full slash-command palette (`/help`). Highlights: `/rollback`, `/health`, `/session`, `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
+- **CLI** — a full slash-command palette (`/help`). Highlights: `/rollback`, `/health`, `/evolution`, `/session`, `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
 - **OpenAI-compatible API** — point any OpenAI client at `http://localhost:12345/v1` and use DarkCode as the model (Open WebUI, LibreChat, the `openai` SDK with a custom `base_url`).
 - **MCP** — DarkCode is both an MCP client (connect external tool servers) and an MCP server (expose its own tools, including the knowledge graph, to other agents).
 
@@ -311,6 +316,7 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Checkpoints & rollback, prompt-injection defence, deny rules, air-gap mode
 - ✅ Multi-language code graph, blast radius, repository health
 - ✅ Prompt caching, credential rotation, benchmark harness, threat model
+- ✅ Semantic git history, predictive debugging, provenance citation
 - 🔭 SQLite-backed knowledge store for large graphs
 - 🔭 LSP breadth beyond the current bridge; debugger integration
 - 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)

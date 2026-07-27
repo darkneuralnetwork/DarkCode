@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -128,6 +129,48 @@ func (c *Console) handleHealth() {
 			break
 		}
 		fmt.Printf("   %s %s %s\n", paint(cYellow, "•"), paint(cWhite, f.Subject), paint(cGray, f.Detail))
+	}
+}
+
+// handleEvolution prints what changed structurally between two commits —
+// dependencies, API surface, cycles — rather than lines. Defaults to the last
+// commit. Usage: /evolution [from] [to]
+func (c *Console) handleEvolution(args []string) {
+	from, to := "HEAD~1", "HEAD"
+	if len(args) > 0 {
+		from = args[0]
+	}
+	if len(args) > 1 {
+		to = args[1]
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Println(paint(cRed, "  ✗ "+err.Error()))
+		return
+	}
+	fmt.Println(paint(cGray, fmt.Sprintf("  diffing structure %s → %s…", from, to)))
+	events, err := memory.DiffCommits(cwd, from, to)
+	if err != nil {
+		fmt.Println(paint(cRed, "  ✗ "+err.Error()))
+		return
+	}
+	if len(events) == 0 {
+		fmt.Println(paint(cGray, "  no structural change"))
+		return
+	}
+	for i, e := range events {
+		if i == 20 {
+			fmt.Println(paint(cGray, fmt.Sprintf("   …and %d more", len(events)-i)))
+			break
+		}
+		colour := cGray
+		switch {
+		case e.Severity >= 0.9:
+			colour = cRed
+		case e.Severity >= 0.5:
+			colour = cYellow
+		}
+		fmt.Printf("   %s %s\n", paint(colour, fmt.Sprintf("%-22s", e.Kind)), paint(cWhite, e.Detail))
 	}
 }
 
