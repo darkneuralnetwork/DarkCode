@@ -1,8 +1,6 @@
 package compression
 
 import (
-	"strings"
-
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 )
@@ -108,9 +106,8 @@ func resolveContextWindow(providerID, modelID string, cfgContextLength int) int 
 	return DefaultContextWindow
 }
 
-// EstimateTokens estimates the token count for a slice of messages using an
-// improved heuristic. Instead of the naive len/4, it uses word count * 1.3
-// which is much more accurate for mixed English/code content.
+// EstimateTokens estimates the token count for a slice of messages, adding the
+// per-message and per-tool-call overhead a bare string estimate cannot see.
 func EstimateTokens(messages []core.Message) int {
 	total := 0
 	for _, msg := range messages {
@@ -126,34 +123,15 @@ func EstimateTokens(messages []core.Message) int {
 }
 
 // EstimateStringTokens estimates the token count for a single string.
-// Uses word count * 1.3 as the primary heuristic (much more accurate than
-// len/4 for English text and code). Falls back to len/4 for very short
-// strings where word splitting is unreliable.
-func EstimateStringTokens(s string) int {
-	if len(s) == 0 {
-		return 0
-	}
-	// For very short strings, use char-based estimate
-	if len(s) < 20 {
-		return len(s)/4 + 1
-	}
-	// Word-based estimate: each word is ~1.3 tokens on average for English.
-	// Code and JSON tend to have more tokens per word, but also have more
-	// "words" (punctuation tokens), so it balances out.
-	words := len(strings.Fields(s))
-	estimate := int(float64(words) * 1.3)
-	// Sanity: never estimate less than len/6 (which is a very conservative
-	// lower bound) or more than len/2 (which covers heavily-tokenized content).
-	minEstimate := len(s) / 6
-	maxEstimate := len(s) / 2
-	if estimate < minEstimate {
-		estimate = minEstimate
-	}
-	if estimate > maxEstimate {
-		estimate = maxEstimate
-	}
-	return estimate
-}
+//
+// This used to count whitespace-separated words and scale by 1.3, which
+// matched English prose but ran roughly 29% low on source code — code has few
+// spaces for its length, so the estimate hit the conservative len/6 floor.
+// Reading low is the harmful direction here: the result is a context budget,
+// and an under-estimate packs too much into the window for the provider to
+// accept. It now defers to core.EstimateTokens, the single estimator every
+// package shares.
+func EstimateStringTokens(s string) int { return core.EstimateTokens(s) }
 
 // FitToWindow is the deterministic, no-LLM backstop that GUARANTEES a message
 // slice fits window−reserve tokens before it is sent to any model. It is the

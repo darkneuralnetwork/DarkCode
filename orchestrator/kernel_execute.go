@@ -8,6 +8,7 @@ import (
 
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
+	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/router"
 )
 
@@ -80,12 +81,12 @@ func (k *Kernel) injectProjectContext(goal string) string {
 	sb.WriteString("IMPORTANT EXECUTION DIRECTIVE:\nAll your implementations, tool calls, and responses MUST strictly adhere to the provided Implementation Plan, Architecture, and Task Workflow below. You are not allowed to deviate from these documents.\n\n")
 	if plan != "" {
 		sb.WriteString("## Implementation Plan & Architecture\n")
-		sb.WriteString(truncateMid(plan, maxPlanInjectBytes))
+		sb.WriteString(strutil.TruncateMid(plan, maxPlanInjectBytes))
 		sb.WriteString("\n\n")
 	}
 	if workflow != "" {
 		sb.WriteString("## Task Workflow\n")
-		sb.WriteString(truncateMid(workflow, maxPlanInjectBytes))
+		sb.WriteString(strutil.TruncateMid(workflow, maxPlanInjectBytes))
 		sb.WriteString("\n\n")
 	}
 	sb.WriteString("## Task Goal\n")
@@ -150,21 +151,6 @@ func NextPendingWorkflowTask(workflow string) (id, line string, ok bool) {
 		}
 	}
 	return "", "", false
-}
-
-// truncateMid returns s if it fits within maxBytes, otherwise a prefix +
-// truncation marker + suffix so the beginning and end of the plan are both
-// visible (the end is often the most current/important part).
-func truncateMid(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	head := maxBytes * 3 / 4
-	tail := maxBytes - head - len("\n…[truncated]…\n")
-	if tail < 0 {
-		tail = 0
-	}
-	return s[:head] + "\n…[truncated]…\n" + s[len(s)-tail:]
 }
 
 func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {

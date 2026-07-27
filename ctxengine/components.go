@@ -291,15 +291,7 @@ func NewTokenBudgetManager() *TokenBudgetManager { return &TokenBudgetManager{} 
 
 // EstimateTokens returns an approximate token count for a message.
 func (t *TokenBudgetManager) EstimateTokens(m core.Message) int {
-	return estimateTokensStr(contentStr(m))
-}
-
-func estimateTokensStr(s string) int {
-	if s == "" {
-		return 0
-	}
-	// ~4 chars per token is the standard rough estimate for mixed code/text.
-	return (len(s) + 3) / 4
+	return core.EstimateTokens(contentStr(m))
 }
 
 // TrimToBudget keeps the highest-ranked messages that fit within `limit`
@@ -358,7 +350,7 @@ func (c *AdaptiveCompressor) Compress(ctx context.Context, msgs []core.Message, 
 	}
 	total := 0
 	for _, m := range msgs {
-		total += estimateTokensStr(contentStr(m))
+		total += core.EstimateTokens(contentStr(m))
 	}
 	if total <= limit {
 		return msgs
@@ -367,7 +359,7 @@ func (c *AdaptiveCompressor) Compress(ctx context.Context, msgs []core.Message, 
 	cutoff := len(msgs)
 	running := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
-		running += estimateTokensStr(contentStr(msgs[i]))
+		running += core.EstimateTokens(contentStr(msgs[i]))
 		if running > limit {
 			cutoff = i + 1
 			break

@@ -72,7 +72,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 	for _, m := range system {
 		sysTokens += e.tokenBudget.EstimateTokens(m)
 	}
-	queryTokens := estimateTokensStr(req.Query)
+	queryTokens := core.EstimateTokens(req.Query)
 	convoBudget := req.AvailableTokens - sysTokens - queryTokens
 	if convoBudget < 0 {
 		convoBudget = req.AvailableTokens / 2

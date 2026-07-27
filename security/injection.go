@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/darkcode/internal/strutil"
 )
 
 // ============================================================================
@@ -157,10 +159,14 @@ func Wrap(source, content string) string {
 	return b.String()
 }
 
+// truncate renders a matched span as a single short line for a Finding.
+//
+// The cap goes through strutil so the cut lands on a rune boundary. That
+// matters more here than anywhere else in the codebase: the spans quoted into
+// findings are attacker-controlled, and several detectors fire precisely on
+// multi-byte characters — zero-width joiners, bidi overrides, homoglyphs — so
+// slicing raw bytes would routinely emit a mangled rune in the one report a
+// user reads to decide whether they are under attack.
 func truncate(s string) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	if len(s) > 120 {
-		return s[:120] + "…"
-	}
-	return s
+	return strutil.TruncateEllipsis(strings.TrimSpace(strings.ReplaceAll(s, "\n", " ")), 120)
 }

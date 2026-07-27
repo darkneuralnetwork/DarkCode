@@ -552,7 +552,7 @@ func classify(tool string, args map[string]interface{}) (ApprovalRequest, bool) 
 		req.Summary = "Run under the debugger"
 		req.Risk = core.RiskMedium
 		req.Preview = fmt.Sprintf("build and execute %s, stopping at %v:%v",
-			nonEmptyStr(str(args["dir"]), "the package under test"), args["file"], args["line"])
+			strutil.NonEmpty(str(args["dir"]), "the package under test"), args["file"], args["line"])
 		return req, true
 
 	case "github":
@@ -873,13 +873,5 @@ func existsLabel(exists bool) string {
 // str coerces a tool argument to a string for previews.
 func str(v interface{}) string {
 	s, _ := v.(string)
-	return s
-}
-
-// nonEmptyStr returns s, or fallback when s is blank.
-func nonEmptyStr(s, fallback string) string {
-	if strings.TrimSpace(s) == "" {
-		return fallback
-	}
 	return s
 }

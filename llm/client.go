@@ -15,6 +15,7 @@ import (
 
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
+	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/safeurl"
 )
@@ -206,10 +207,10 @@ func (c *Client) recordUsage(req *CompletionRequest, resp *CompletionResponse, l
 	}
 	// Estimate when the provider did not report usage.
 	if prompt == 0 && len(req.Messages) > 0 {
-		prompt = estimateTokens(messagesText(req.Messages))
+		prompt = core.EstimateTokens(messagesText(req.Messages))
 	}
 	if completion == 0 && resp != nil && len(resp.Choices) > 0 {
-		completion = estimateTokens(resp.Choices[0].Message.Content)
+		completion = core.EstimateTokens(resp.Choices[0].Message.Content)
 	}
 	if total == 0 {
 		total = prompt + completion
@@ -218,7 +219,7 @@ func (c *Client) recordUsage(req *CompletionRequest, resp *CompletionResponse, l
 	metrics.Default.Record(metrics.RequestRecord{
 		ID:               randomID(),
 		Timestamp:        time.Now(),
-		Model:            nonEmpty(req.Model, c.Model),
+		Model:            strutil.NonEmpty(req.Model, c.Model),
 		Provider:         c.Provider,
 		PromptTokens:     prompt,
 		CompletionTokens: completion,
@@ -228,38 +229,6 @@ func (c *Client) recordUsage(req *CompletionRequest, resp *CompletionResponse, l
 		Stream:           req.Stream,
 		Success:          success,
 	})
-}
-
-// estimateTokens gives a rough token count for costless telemetry when a
-// provider does not return usage data. It is rune-aware so that CJK text
-// (which tokenizes at roughly 1.5 chars/token for q4/BPE models) is not
-// over-counted the way a naive byte-length/4 heuristic would. ASCII keeps the
-// classic ~4 chars/token estimate so the common case is unchanged.
-func estimateTokens(s string) int {
-	if s == "" {
-		return 0
-	}
-	var asciiChars, cjkChars, otherChars int
-	for _, r := range s {
-		switch {
-		case r < 0x80:
-			asciiChars++
-		case r >= 0x3000 && r <= 0x30FF, // CJK symbols + Japanese kana
-			r >= 0x3400 && r <= 0x4DBF, // CJK Extension A
-			r >= 0x4E00 && r <= 0x9FFF, // CJK Unified Ideographs
-			r >= 0xAC00 && r <= 0xD7AF, // Hangul Syllables
-			r >= 0xF900 && r <= 0xFAFF, // CJK Compatibility Ideographs
-			r >= 0xFF00 && r <= 0xFFEF: // Halfwidth/Fullwidth Forms
-			cjkChars++
-		default:
-			otherChars++
-		}
-	}
-	tokens := asciiChars/4 + cjkChars*2/3 + otherChars/2
-	if tokens == 0 {
-		tokens = 1
-	}
-	return tokens
 }
 
 // messagesText flattens a message slice into a single string for estimation.
@@ -274,13 +243,6 @@ func messagesText(msgs []Message) string {
 		}
 	}
 	return sb.String()
-}
-
-func nonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func randomID() string {

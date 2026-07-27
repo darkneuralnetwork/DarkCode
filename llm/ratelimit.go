@@ -233,7 +233,7 @@ func (c *RateLimitedClient) observe(err error) {
 func estimateRequestTokens(req *core.CompletionRequest) float64 {
 	prompt := 0
 	for _, m := range req.Messages {
-		prompt += estimateTokens(m.ContentString())
+		prompt += core.EstimateTokens(m.ContentString())
 	}
 	out := 800
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {

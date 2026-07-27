@@ -466,22 +466,6 @@ func extractPaths(texts ...string) []string {
 	return paths
 }
 
-func truncateID(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
-}
-
-func truncateLabel(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
-}
-
 func generateSkillName(goal string) string {
 	// Create a snake_case name from the goal. Strip punctuation by chaining
 	// replacements on an accumulator — earlier code reassigned from the loop

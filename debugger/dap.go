@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/darkcode/internal/jsonframe"
+	"github.com/darkcode/internal/strutil"
 )
 
 // adapters maps a language to the DAP adapter that debugs it.
@@ -318,7 +319,7 @@ func inspectDAP(ctx context.Context, lang string, opts Options, breakpoints []Br
 				line = lines[i]
 			}
 			report.Unbound = append(report.Unbound,
-				fmt.Sprintf("%s:%d — %s", file, line, nonEmpty(bp.Message, "not verified by the adapter")))
+				fmt.Sprintf("%s:%d — %s", file, line, strutil.NonEmpty(bp.Message, "not verified by the adapter")))
 		}
 	}
 	if verified == 0 {
@@ -451,11 +452,4 @@ func (s *dapSession) locals(ctx context.Context, frameID int) []Variable {
 		}
 	}
 	return out
-}
-
-func nonEmpty(s, fallback string) string {
-	if strings.TrimSpace(s) == "" {
-		return fallback
-	}
-	return s
 }

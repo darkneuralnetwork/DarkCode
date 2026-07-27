@@ -87,7 +87,7 @@ func (kg *KnowledgeGraph) StructuralView(goal string, budgetTokens int) (string,
 	var savings Savings
 	for _, c := range candidates {
 		entry := renderFile(c)
-		if estimateTokens(b.String())+estimateTokens(entry) > budgetTokens {
+		if core.EstimateTokens(b.String())+core.EstimateTokens(entry) > budgetTokens {
 			break
 		}
 		b.WriteString(entry)
@@ -98,7 +98,7 @@ func (kg *KnowledgeGraph) StructuralView(goal string, budgetTokens int) (string,
 		return "", Savings{}
 	}
 	view := b.String()
-	savings.ViewTokens = estimateTokens(view)
+	savings.ViewTokens = core.EstimateTokens(view)
 	return view, savings
 }
 
@@ -220,9 +220,6 @@ func sourceTokens(path string) int {
 	}
 	return int(info.Size()) / charsPerToken
 }
-
-// estimateTokens is the same ~4 chars/token approximation used for reporting.
-func estimateTokens(s string) int { return len(s) / charsPerToken }
 
 // keywordsOf reduces a goal to the meaningful lowercase words used for
 // matching, splitting camelCase so "STMAdd" matches a goal mentioning "stm".

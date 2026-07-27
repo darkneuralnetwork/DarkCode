@@ -13,6 +13,7 @@ import (
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
+	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/loop"
 	"github.com/darkcode/memory"
@@ -603,7 +604,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 		}
 		k.compressor.SetClient(compClient, compModel)
 		k.log("compression", "Context compressor model: "+compModel+
-			" (user-selected="+nonEmpty(cfg.CompressorModel, "<primary>")+")")
+			" (user-selected="+strutil.NonEmpty(cfg.CompressorModel, "<primary>")+")")
 	}
 }
 
@@ -615,14 +616,6 @@ func (k *Kernel) CompressProjectContext(ctx context.Context, content, projectNam
 		return "", nil
 	}
 	return k.compressor.Summarize(ctx, content, projectName)
-}
-
-// nonEmpty returns s, or fallback if s is empty.
-func nonEmpty(s, fallback string) string {
-	if strings.TrimSpace(s) == "" {
-		return fallback
-	}
-	return s
 }
 
 // parseRoutingModeLocal mirrors main.parseRoutingMode without the import
