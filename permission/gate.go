@@ -545,6 +545,16 @@ func classify(tool string, args map[string]interface{}) (ApprovalRequest, bool) 
 		req.Preview = fmt.Sprintf("git %s %s", action, extra)
 		return req, IsGitMutating(action)
 
+	case "debug":
+		// Debugging compiles and executes the project's own code — the same
+		// class of action as the terminal tool, so it is gated the same way.
+		// Reaching the default branch would have made it silently free.
+		req.Summary = "Run under the debugger"
+		req.Risk = core.RiskMedium
+		req.Preview = fmt.Sprintf("build and execute %s, stopping at %v:%v",
+			nonEmptyStr(str(args["dir"]), "the package under test"), args["file"], args["line"])
+		return req, true
+
 	case "github":
 		action, _ := args["action"].(string)
 		req.Summary = "github " + action
@@ -863,5 +873,13 @@ func existsLabel(exists bool) string {
 // str coerces a tool argument to a string for previews.
 func str(v interface{}) string {
 	s, _ := v.(string)
+	return s
+}
+
+// nonEmptyStr returns s, or fallback when s is blank.
+func nonEmptyStr(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
 	return s
 }

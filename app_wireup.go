@@ -168,6 +168,9 @@ func (a *AppRunner) initTools(memDir string) {
 	// Servers start lazily on first query, so this costs nothing when none is
 	// installed.
 	a.LSP = tools.RegisterLSPTool(a.Registry, cwd)
+	// Reading runtime values beats guessing at them; needs delve on PATH and
+	// reports so plainly when it is missing.
+	tools.RegisterDebugTool(a.Registry, cwd)
 	go func() {
 		cwd, err := os.Getwd()
 		if err != nil {

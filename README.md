@@ -117,7 +117,11 @@ server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
 Every risk score carries the reasons that produced it, so a weak signal reads as
 weak rather than as confident nonsense.
 
-**And where a type checker is needed, one is used.** The graph is repository-wide
+**And where runtime truth is needed, it is read, not guessed.** The `debug` tool
+runs a test under delve, stops at a line, and reports every local in scope plus
+any expression you ask for — one call, no print statements, source untouched.
+
+**Where a type checker is needed, one is used.** The graph is repository-wide
 and durable but doesn't type-check; a language server does. The `lsp` tool asks
 gopls, typescript-language-server, pyright, rust-analyzer or jdtls for a symbol's
 real resolution, signature, references, and *actual compiler errors*. Servers
@@ -324,8 +328,9 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Prompt caching, credential rotation, benchmark harness, threat model
 - ✅ Semantic git history, predictive debugging, provenance citation
 - ✅ Language-server integration: real types, references and diagnostics
+- ✅ Debugger integration for Go: real runtime values at a breakpoint
 - 🔭 SQLite-backed knowledge store for large graphs
-- 🔭 Debugger integration (delve, debugpy, node-inspect)
+- 🔭 Debugger integration beyond Go (debugpy, node-inspect) via DAP
 - 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)
 
 ---
