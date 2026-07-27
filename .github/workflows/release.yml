@@ -1,0 +1,88 @@
+# Release: build the artifacts, attest how they were built, publish both.
+#
+# The pieces that already existed — reproducible builds, an SBOM read back out
+# of the linked binary, SHA256SUMS, an optional detached signature — answer
+# "are these the bytes you think they are". They do not answer "where did these
+# bytes come from", which is the question a supply-chain attack turns on. A
+# signature proves whoever held the key vouched for the file; it says nothing
+# about what built it.
+#
+# Provenance closes that. GitHub's attestation records the commit, the workflow
+# file, and the runner that produced each artifact, signs it against a
+# transparency log, and `gh attestation verify` checks the whole chain. A
+# tampered artifact fails not because the hash changed but because nothing
+# vouches for its origin.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build (without the leading v)
+        required: true
+
+permissions:
+  contents: write
+  # Both are required by attest-build-provenance: id-token to obtain the
+  # short-lived signing identity, attestations to record the result.
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags and full history: the SBOM and version string are derived from
+          # them, and a shallow clone would silently produce a different build.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false # a newer toolchain would break reproducibility
+
+      - name: Resolve version
+        id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release artifacts
+        run: ./build.sh "${{ steps.v.outputs.version }}"
+
+      # The reproducibility claim is tested rather than asserted: build twice
+      # and compare. A release that cannot be reproduced cannot be
+      # independently audited, whatever it is signed with.
+      - name: Verify the build is reproducible
+        run: |
+          mv dist dist-first
+          ./build.sh "${{ steps.v.outputs.version }}"
+          if ! diff <(sort dist-first/SHA256SUMS) <(sort dist/SHA256SUMS); then
+            echo "::error::two builds of the same tree produced different bytes"
+            exit 1
+          fi
+          rm -rf dist-first
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/*.deb
+            dist/*.exe
+            dist/SBOM.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" \
+            --title "v${{ steps.v.outputs.version }}" \
+            --generate-notes \
+            dist/*

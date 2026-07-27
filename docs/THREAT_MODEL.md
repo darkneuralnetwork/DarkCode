@@ -155,3 +155,41 @@ each task's acceptance criteria and attaches the evidence.
 Report vulnerabilities privately to the maintainers rather than in a public
 issue. Include the version (`darkcode --version`), the configuration, and a
 reproduction.
+
+## Verifying a release
+
+Four independent checks, each answering a different question.
+
+**Are these the bytes that were published?**
+
+```sh
+sha256sum -c SHA256SUMS
+```
+
+**Did the maintainer vouch for them?** Only when a signature was produced
+(`DARKCODE_SIGNING_KEY` set at build time):
+
+```sh
+gpg --verify SHA256SUMS.asc SHA256SUMS
+```
+
+**Where did they come from?** A signature says somebody with the key vouched
+for a file; it says nothing about what built it. Provenance records the commit,
+the workflow and the runner, signed against a transparency log:
+
+```sh
+gh attestation verify darkcode_1.2.2_amd64.deb --repo <owner>/darkcode
+```
+
+**Can they be reproduced?** Builds are `CGO_ENABLED=0 -trimpath
+-buildvcs=false` with a version-only ldflags string, so the same tag and Go
+toolchain yield identical bytes. The release workflow builds twice and fails if
+the checksums differ, and nightly CI does the same — the claim is tested rather
+than asserted.
+
+```sh
+./build.sh 1.2.2 && sha256sum -c SHA256SUMS
+```
+
+**What is inside?** `SBOM.txt` is read back out of the linked binary rather
+than generated alongside it, so it cannot drift from what actually shipped.
