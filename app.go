@@ -13,6 +13,7 @@ import (
 	"github.com/darkcode/cli"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
+	"github.com/darkcode/intelligence"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/permission"
@@ -37,6 +38,7 @@ type AppRunner struct {
 	Kernel       *orchestrator.Kernel
 	Recorder     *tools.ChangeRecorder
 	Checkpoints  *checkpoint.Manager
+	LSP          *intelligence.LSPClient
 	Server       *server.Server
 
 	PluginLoader *plugin.Loader
@@ -153,6 +155,9 @@ func (a *AppRunner) gracefulShutdown() {
 		}
 		if a.MemSystem != nil {
 			a.MemSystem.Shutdown() // flushes episodic/semantic/procedural/KG writers
+		}
+		if a.LSP != nil {
+			a.LSP.Shutdown() // stop any language server processes we started
 		}
 		a.Shutdown()
 	})

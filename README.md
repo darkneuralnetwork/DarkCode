@@ -117,6 +117,12 @@ server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
 Every risk score carries the reasons that produced it, so a weak signal reads as
 weak rather than as confident nonsense.
 
+**And where a type checker is needed, one is used.** The graph is repository-wide
+and durable but doesn't type-check; a language server does. The `lsp` tool asks
+gopls, typescript-language-server, pyright, rust-analyzer or jdtls for a symbol's
+real resolution, signature, references, and *actual compiler errors*. Servers
+start on demand, and a missing one falls back to the graph rather than failing.
+
 ```mermaid
 flowchart LR
     C["Conversation<br/>(short-term)"] --> E["Episodic<br/>past tasks"]
@@ -317,8 +323,9 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Multi-language code graph, blast radius, repository health
 - ✅ Prompt caching, credential rotation, benchmark harness, threat model
 - ✅ Semantic git history, predictive debugging, provenance citation
+- ✅ Language-server integration: real types, references and diagnostics
 - 🔭 SQLite-backed knowledge store for large graphs
-- 🔭 LSP breadth beyond the current bridge; debugger integration
+- 🔭 Debugger integration (delve, debugpy, node-inspect)
 - 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)
 
 ---

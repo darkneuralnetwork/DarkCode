@@ -33,7 +33,7 @@ func NewProjectIndex(rootPath string) *ProjectIndex {
 		imports:   NewImportGraph(),
 		classes:   NewClassGraph(),
 		workspace: &WorkspaceMetadata{RootPath: rootPath, Language: "go"},
-		lsp:       NewLSPBridge(),
+		lsp:       NewLSPBridge(rootPath),
 		watcher:   NewFileWatcher(rootPath, 0), // default interval
 	}
 }

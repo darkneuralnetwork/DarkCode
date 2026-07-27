@@ -12,8 +12,14 @@ type LSPBridge interface {
 	Hover(file string, line, col int) (string, error)
 }
 
-// NewLSPBridge returns the default LSP bridge (NoOp until a real LSP is wired).
-func NewLSPBridge() LSPBridge { return &noOpLSP{} }
+// NewLSPBridge returns a real LSP client rooted at the workspace. Language
+// servers are started lazily on first query, so an absent server costs nothing
+// and every method degrades to errLSPUnavailable for the AST fallback.
+func NewLSPBridge(root string) LSPBridge { return NewLSPClient(root) }
+
+// NewNoOpLSPBridge returns a bridge that never connects. For tests and for
+// callers that deliberately want the AST path only.
+func NewNoOpLSPBridge() LSPBridge { return &noOpLSP{} }
 
 type noOpLSP struct{}
 

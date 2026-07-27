@@ -164,6 +164,10 @@ func (a *AppRunner) initTools(memDir string) {
 		tools.RegisterGraphTool(a.Registry, kg, cwd)
 	}
 	tools.RegisterGitHubTool(a.Registry, cwd)
+	// A language server answers the type-aware questions the graph cannot.
+	// Servers start lazily on first query, so this costs nothing when none is
+	// installed.
+	a.LSP = tools.RegisterLSPTool(a.Registry, cwd)
 	go func() {
 		cwd, err := os.Getwd()
 		if err != nil {
