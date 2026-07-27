@@ -219,6 +219,15 @@ func (kg *KnowledgeGraph) packageGraph() map[string][]string {
 	}
 
 	graph := map[string][]string{}
+	// Every local package is a node, including leaves that import nothing.
+	// Keying only off outgoing edges would drop them entirely: a widely
+	// depended-upon types package would be invisible as a node while being
+	// counted as a dependency, which undercounts the graph and makes it
+	// impossible to reason about the package at all.
+	for dir := range localDirs {
+		graph[dir] = nil
+	}
+
 	seen := map[string]bool{}
 	for _, n := range kg.FindByType(core.KGNodeFile) {
 		from := path.Dir(n.Label)

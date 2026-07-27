@@ -113,6 +113,7 @@ server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
 | `evolution` | What changed *structurally* between two commits — new dependencies, API breaks, cycles created — not a line diff |
 | `defect_risk` · `root_cause` | Which files bugs cluster in, and — when a test fails — the likely culprits ranked by fix history × graph distance |
 | `structure` | The shape of the code relevant to a goal at **~1/30th the tokens** of reading the files |
+| `simulate` | "What if we split this package?" — measures a proposed change against the real graph before you write it |
 | `low_confidence` · `stale` | Beliefs worth re-checking; files indexed before the current `HEAD` |
 
 Every risk score carries the reasons that produced it, so a weak signal reads as
