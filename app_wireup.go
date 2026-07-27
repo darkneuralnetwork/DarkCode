@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/darkcode/candidate"
 	"github.com/darkcode/capability"
 	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/compression"
@@ -176,6 +177,9 @@ func (a *AppRunner) initTools(memDir string) {
 		a.Patterns = memory.NewPatternLibrary(a.Cfg.MemoryDir)
 		a.Patterns.Learn(cwd, kg.MinePatterns(cwd))
 		tools.RegisterGraphTool(a.Registry, kg, cwd, a.HealthDaemon, a.Patterns)
+		// Trying several fixes and keeping the one that passes needs each to be
+		// applied and rolled back, which the agent cannot do with write_file.
+		tools.RegisterCandidateTool(a.Registry, cwd, kg, a.Patterns, candidate.DefaultVerify(cwd))
 	}
 	tools.RegisterGitHubTool(a.Registry, cwd)
 	// One call for search-read-summarise, instead of the model spending a turn
