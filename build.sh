@@ -10,7 +10,7 @@
 set -euo pipefail
 
 APP="darkcode"
-VERSION="${1:-1.2.1}"
+VERSION="${1:-1.2.2}"
 OUT="dist"
 LDFLAGS="-s -w -X main.Version=${VERSION}"
 MAINTAINER="Team Dark Neural Network <contact@darkneuralnetwork.com>"
