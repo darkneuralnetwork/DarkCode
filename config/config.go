@@ -93,6 +93,14 @@ type Config struct {
 	// fast path. Default false (raw STM append) to preserve behavior.
 	UseCtxEngine bool `json:"use_ctx_engine,omitempty"`
 
+	// HealthDaemon runs the background structural watch. Off by default: it
+	// is useful but it is not free, and a user should opt into background
+	// work on their own machine rather than discover it.
+	HealthDaemon bool `json:"health_daemon,omitempty"`
+
+	// HealthCPUPercent bounds the daemon to this share of a single core.
+	HealthCPUPercent int `json:"health_cpu_percent,omitempty"`
+
 	// ExecutionProfile controls DAG + consensus parallelism: "parallel",
 	// "sequential" (safe on strict free-tier RPM limits), or "auto" (default:
 	// sequential when only free-tier cloud models are registered).
@@ -293,6 +301,7 @@ func DefaultConfig() *Config {
 		ExecutionProfile:      "auto",
 		PlanApproval:          "auto",
 		PlanDepth:             "auto",
+		HealthCPUPercent:      5,
 		AgenticLoop:           false,
 		MaxLoops:              3,
 		MemoryDir:             ".darkcode/memory",

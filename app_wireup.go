@@ -161,7 +161,16 @@ func (a *AppRunner) initTools(memDir string) {
 	a.Registry.Register(deterministic.NewKGSyncTool(deterministicKG))
 	cwd, _ := os.Getwd()
 	if kg, ok := deterministicKG.(*memory.KnowledgeGraph); ok {
-		tools.RegisterGraphTool(a.Registry, kg, cwd)
+		// The health daemon watches structure in the background so a cycle or
+		// a coupling trend is noticed when it appears, not when somebody
+		// happens to run a report. It holds itself to a share of one core, so
+		// it stays out of the way of the machine the user is working on.
+		a.HealthDaemon = memory.NewHealthDaemon(kg, a.Cfg.MemoryDir)
+		a.HealthDaemon.SetCPUPercent(a.Cfg.HealthCPUPercent)
+		if a.Cfg.HealthDaemon {
+			a.HealthDaemon.Start(context.Background())
+		}
+		tools.RegisterGraphTool(a.Registry, kg, cwd, a.HealthDaemon)
 	}
 	tools.RegisterGitHubTool(a.Registry, cwd)
 	// A language server answers the type-aware questions the graph cannot.

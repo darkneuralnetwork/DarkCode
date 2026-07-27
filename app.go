@@ -39,6 +39,7 @@ type AppRunner struct {
 	Recorder     *tools.ChangeRecorder
 	Checkpoints  *checkpoint.Manager
 	LSP          *intelligence.LSPClient
+	HealthDaemon *memory.HealthDaemon
 	Server       *server.Server
 
 	PluginLoader *plugin.Loader

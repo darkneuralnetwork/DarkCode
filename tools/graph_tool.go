@@ -20,6 +20,10 @@ import (
 type GraphTool struct {
 	KG        *memory.KnowledgeGraph
 	Workspace string
+	// Daemon supplies the health time series behind the trends and alerts
+	// actions. Nil when the daemon is switched off, which those actions
+	// report rather than treating as an error.
+	Daemon *memory.HealthDaemon
 }
 
 // Execute dispatches one graph query.
@@ -189,9 +193,33 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 		result = events
 		headline = fmt.Sprintf("%d structural change(s) between %s and %s", len(events), from, to)
 
+	case "trends", "alerts":
+		// Both read the health daemon's time series. Without a daemon the
+		// answer is "nothing has been watched yet", which is information —
+		// better than an error the model will retry.
+		if t.Daemon == nil {
+			result, headline = nil, "the health daemon is not running, so there is no history to read"
+			break
+		}
+		if action == "alerts" {
+			a := t.Daemon.Alerts()
+			if limit > 0 && len(a) > limit {
+				a = a[len(a)-limit:] // most recent
+			}
+			result, headline = a, fmt.Sprintf("%d structural alert(s)", len(a))
+			break
+		}
+		f := t.Daemon.Forecast()
+		result = f
+		if f.Generated {
+			headline = fmt.Sprintf("%d metric trend(s) over %d samples", len(f.Trends), len(t.Daemon.History()))
+		} else {
+			headline = "no trend yet: " + f.Note
+		}
+
 	default:
 		return &ToolResult{Name: "graph_query", Success: false, Error: "unknown action " + action +
-			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause, structure, simulate)"}
+			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause, structure, simulate, trends, alerts)"}
 	}
 
 	body, err := json.MarshalIndent(result, "", "  ")
@@ -217,8 +245,8 @@ func stringList(v interface{}) []string {
 }
 
 // RegisterGraphTool adds the graph query tool to the registry.
-func RegisterGraphTool(r *Registry, kg *memory.KnowledgeGraph, workspace string) {
-	t := &GraphTool{KG: kg, Workspace: workspace}
+func RegisterGraphTool(r *Registry, kg *memory.KnowledgeGraph, workspace string, daemon *memory.HealthDaemon) {
+	t := &GraphTool{KG: kg, Workspace: workspace, Daemon: daemon}
 	r.Register(&ToolEntry{
 		Name: "graph_query",
 		Description: strings.TrimSpace(`
@@ -240,7 +268,7 @@ reports the delta in cycles, coupling and dependency depth). Every risk score ca
 		Parameters: MustParseSchema(`{
 			"type": "object",
 			"properties": {
-				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause", "structure", "simulate"], "description": "Which query to run"},
+				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause", "structure", "simulate", "trends", "alerts"], "description": "Which query to run"},
 				"query": {"type": "string", "description": "Search term, or a node id for neighbors/subgraph, or a single path for blast_radius"},
 				"files": {"type": "array", "description": "File paths for blast_radius, or the failing files for root_cause"},
 				"days": {"type": "integer", "description": "History window for defect_risk/root_cause (default 365)"},
