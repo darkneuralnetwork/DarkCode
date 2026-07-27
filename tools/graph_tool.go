@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/darkcode/core"
@@ -196,6 +197,26 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 		result = events
 		headline = fmt.Sprintf("%d structural change(s) between %s and %s", len(events), from, to)
 
+	case "policy":
+		// Mined patterns say what the repository does; a policy says what it
+		// must. The difference matters the day somebody adds the import: a
+		// pattern quietly stops holding, a policy fails.
+		file := str(args["file"])
+		if file == "" {
+			file = filepath.Join(t.Workspace, "architecture.json")
+		}
+		pol, err := memory.LoadPolicy(file)
+		if err != nil {
+			return &ToolResult{Name: "graph_query", Success: false, Error: err.Error()}
+		}
+		if len(pol.Rules) == 0 {
+			return &ToolResult{Name: "graph_query", Success: true, Output: "no policy at " + file +
+				" — write one to turn an architectural decision into something that gets checked"}
+		}
+		breaches := t.KG.CheckPolicy(pol)
+		return &ToolResult{Name: "graph_query", Success: true,
+			Output: fmt.Sprintf("%d rule(s) checked\n%s", len(pol.Rules), memory.FormatBreaches(breaches))}
+
 	case "patterns", "violations":
 		// Conventions this repository actually follows, and where it breaks
 		// them. Rules learned in other repositories are included when a library
@@ -243,7 +264,7 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 
 	default:
 		return &ToolResult{Name: "graph_query", Success: false, Error: "unknown action " + action +
-			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause, structure, simulate, trends, alerts, patterns, violations)"}
+			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause, structure, simulate, trends, alerts, patterns, violations, policy)"}
 	}
 
 	body, err := json.MarshalIndent(result, "", "  ")
@@ -292,7 +313,7 @@ reports the delta in cycles, coupling and dependency depth). Every risk score ca
 		Parameters: MustParseSchema(`{
 			"type": "object",
 			"properties": {
-				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause", "structure", "simulate", "trends", "alerts", "patterns", "violations"], "description": "Which query to run"},
+				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause", "structure", "simulate", "trends", "alerts", "patterns", "violations", "policy"], "description": "Which query to run"},
 				"query": {"type": "string", "description": "Search term, or a node id for neighbors/subgraph, or a single path for blast_radius"},
 				"files": {"type": "array", "description": "File paths for blast_radius, or the failing files for root_cause"},
 				"days": {"type": "integer", "description": "History window for defect_risk/root_cause (default 365)"},
