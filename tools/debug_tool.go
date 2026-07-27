@@ -41,7 +41,7 @@ func (t *DebugTool) Execute(ctx context.Context, args map[string]interface{}) *T
 		dir = filepath.Dir(file)
 	}
 
-	opts := debugger.Options{Dir: dir, Run: str(args["test_run"])}
+	opts := debugger.Options{Dir: dir, Run: str(args["test_run"]), Program: file}
 	// Debugging a test is the common case; a main package is the exception.
 	opts.Test = opts.Run != ""
 	if v, ok := args["test"].(bool); ok {
@@ -73,12 +73,13 @@ func RegisterDebugTool(r *Registry, workspace string) {
 	r.Register(&ToolEntry{
 		Name: "debug",
 		Description: strings.TrimSpace(`
-Run a Go test or program under the debugger and report the real runtime values at a breakpoint:
+Run a test or program under the debugger and report the real runtime values at a breakpoint:
 every local in scope, any expressions you ask for, and the call stack. Use this instead of adding
 print statements — it is one call, it observes everything in scope rather than only what you thought
 to print, and it leaves the source untouched.
 Set test_run to debug a specific test (the usual case). The line must contain an executable
-statement. Requires delve: go install github.com/go-delve/delve/cmd/dlv@latest`),
+statement. Go needs delve (go install github.com/go-delve/delve/cmd/dlv@latest); Python needs debugpy
+(pip install debugpy). The language is inferred from the file.`),
 		Parameters: MustParseSchema(`{
 			"type": "object",
 			"properties": {

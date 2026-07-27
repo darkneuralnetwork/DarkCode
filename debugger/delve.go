@@ -46,6 +46,9 @@ type Options struct {
 	Run string
 	// Args are passed to the debugged program.
 	Args []string
+	// Program is the entry point for adapters that need one (DAP launches a
+	// file; delve builds a package). Ignored on the Go path.
+	Program string
 }
 
 // Breakpoint is a location to stop at.

@@ -25,11 +25,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/darkcode/internal/jsonframe"
 )
 
 // lspRequestTimeout bounds a single request. A wedged language server must
@@ -220,7 +221,7 @@ func startServer(lang, root string) (*server, error) {
 func (s *server) readLoop(r *bufio.Reader) {
 	defer s.markClosed()
 	for {
-		body, err := readMessage(r)
+		body, err := jsonframe.Read(r)
 		if err != nil {
 			return
 		}
@@ -367,8 +368,7 @@ func (s *server) write(msg interface{}) error {
 	if s.closed {
 		return errLSPUnavailable
 	}
-	_, err = fmt.Fprintf(s.stdin, "Content-Length: %d\r\n\r\n%s", len(body), body)
-	return err
+	return jsonframe.Write(s.stdin, body)
 }
 
 func (s *server) isClosed() bool {
@@ -395,33 +395,6 @@ func (s *server) stop() {
 		_ = s.cmd.Process.Kill()
 	}
 	_ = s.cmd.Wait()
-}
-
-// readMessage reads one Content-Length framed JSON body.
-func readMessage(r *bufio.Reader) ([]byte, error) {
-	length := 0
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break // end of headers
-		}
-		if name, value, ok := strings.Cut(line, ":"); ok &&
-			strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
-			length, _ = strconv.Atoi(strings.TrimSpace(value))
-		}
-	}
-	if length <= 0 {
-		return nil, fmt.Errorf("lsp: message with no Content-Length")
-	}
-	body := make([]byte, length)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return nil, err
-	}
-	return body, nil
 }
 
 // openFile tells the server about a file's current contents. LSP servers

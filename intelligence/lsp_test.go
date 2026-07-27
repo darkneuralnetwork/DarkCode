@@ -1,46 +1,13 @@
 package intelligence
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
-
-// The wire format is the part most likely to break silently, so it is tested
-// without needing any language server installed.
-func TestReadMessageParsesFraming(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`
-	raw := "Content-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
-	got, err := readMessage(bufio.NewReader(strings.NewReader(raw)))
-	if err != nil {
-		t.Fatalf("readMessage: %v", err)
-	}
-	if string(got) != body {
-		t.Errorf("got %q, want %q", got, body)
-	}
-}
-
-func TestReadMessageRejectsMissingLength(t *testing.T) {
-	if _, err := readMessage(bufio.NewReader(strings.NewReader("X-Other: 1\r\n\r\n{}"))); err == nil {
-		t.Error("a message with no Content-Length should error, not hang")
-	}
-}
-
-// Extra headers and header-case variation are both legal.
-func TestReadMessageToleratesHeaderVariation(t *testing.T) {
-	body := `{"a":1}`
-	raw := "content-length: " + strconv.Itoa(len(body)) + "\r\n" +
-		"Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n" + body
-	got, err := readMessage(bufio.NewReader(strings.NewReader(raw)))
-	if err != nil || string(got) != body {
-		t.Errorf("got %q, %v", got, err)
-	}
-}
 
 // LSP is 0-based; every API in this repo is 1-based. Getting that wrong is an
 // off-by-one nobody notices until a definition lands on the wrong line.

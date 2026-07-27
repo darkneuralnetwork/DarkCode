@@ -119,8 +119,10 @@ Every risk score carries the reasons that produced it, so a weak signal reads as
 weak rather than as confident nonsense.
 
 **And where runtime truth is needed, it is read, not guessed.** The `debug` tool
-runs a test under delve, stops at a line, and reports every local in scope plus
-any expression you ask for — one call, no print statements, source untouched.
+stops a running program at a line and reports every local in scope plus any
+expression you ask for — one call, no print statements, source untouched. Go
+goes through delve; Python and JavaScript through the Debug Adapter Protocol,
+behind the same tool.
 
 **Where a type checker is needed, one is used.** The graph is repository-wide
 and durable but doesn't type-check; a language server does. The `lsp` tool asks
@@ -329,10 +331,9 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Prompt caching, credential rotation, benchmark harness, threat model
 - ✅ Semantic git history, predictive debugging, provenance citation
 - ✅ Language-server integration: real types, references and diagnostics
-- ✅ Debugger integration for Go: real runtime values at a breakpoint
+- ✅ Debugger integration (Go, Python) — real runtime values at a breakpoint
 - ✅ Structural context compression — repo shape at ~1/30th the tokens
 - 🔭 SQLite-backed knowledge store for large graphs
-- 🔭 Debugger integration beyond Go (debugpy, node-inspect) via DAP
 - 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)
 
 ---

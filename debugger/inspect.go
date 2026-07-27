@@ -3,6 +3,7 @@ package debugger
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -43,6 +44,15 @@ const maxHits = 10
 func Inspect(ctx context.Context, opts Options, breakpoints []Breakpoint, exprs []string) (*Report, error) {
 	if len(breakpoints) == 0 {
 		return nil, fmt.Errorf("at least one breakpoint is required")
+	}
+	// Go is debugged through delve's own API; everything else speaks DAP.
+	// Dispatching here keeps one Report shape and one tool surface, so adding
+	// a language never changes what the caller does.
+	if lang := languageOf(breakpoints[0].File); lang != "go" {
+		if lang == "" {
+			return nil, fmt.Errorf("no debugger is configured for %s", breakpoints[0].File)
+		}
+		return inspectDAP(ctx, lang, opts, breakpoints, exprs)
 	}
 	session, err := Launch(ctx, opts)
 	if err != nil {
@@ -150,4 +160,20 @@ func (r *Report) Format() string {
 		fmt.Fprintf(&b, "\n(stopped after %d hits — narrow the breakpoint if you need more)\n", maxHits)
 	}
 	return b.String()
+}
+
+// languageOf maps a source file to the debugger family that handles it.
+// Kept local rather than reusing the code index's table: that one exists to
+// decide what to parse, and the two lists drift for good reasons — TypeScript
+// is parsed but debugged as JavaScript.
+func languageOf(file string) string {
+	switch strings.ToLower(filepath.Ext(file)) {
+	case ".go":
+		return "go"
+	case ".py", ".pyw":
+		return "python"
+	case ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts":
+		return "javascript"
+	}
+	return ""
 }
