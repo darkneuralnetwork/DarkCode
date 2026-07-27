@@ -38,6 +38,18 @@ import (
 	"github.com/darkcode/ui"
 )
 
+// nudgeRole is the role for a steer injected part-way through a conversation —
+// a self-evaluation, a stuck-loop warning, a budget notice.
+//
+// It is a user turn rather than a system one. Gemini folds system messages into
+// systemInstruction at the top of the request, so one appearing after a tool
+// response leaves the following tool call with nothing valid before it, and the
+// request is rejected outright: "function call turn must come immediately after
+// a user turn or after a function response turn". OpenAI tolerates the system
+// form, which is why this survived — but a user turn is accepted everywhere and
+// reads the same to the model.
+const nudgeRole = core.RoleUser
+
 // MaxObservationLen caps the size of a single tool's observation text that is
 // fed back into the conversation history. This is the "context window drift"
 // mitigation from the doc: raw tool output (verbose port scans, large file
@@ -233,8 +245,9 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 			if !vResult.Passed && len(vResult.Issues) > 0 {
 				// Self-correct by appending issues to context
 				issuePrompt := fmt.Sprintf("Verification failed with issues:\n%s\nPlease correct your output.", strings.Join(vResult.Issues, "\n"))
+				// Mid-conversation steers are user turns; see nudgeRole below.
 				messages = append(messages, core.Message{
-					Role:    core.RoleSystem,
+					Role:    nudgeRole,
 					Content: issuePrompt,
 				})
 				if l.emitter != nil {
@@ -246,7 +259,7 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 			if iteration < l.maxLoops {
 				if done, reason := l.evaluateGoalCompletion(ctx, client, modelName, goal, final); !done {
 					messages = append(messages, core.Message{
-						Role: core.RoleSystem,
+						Role: nudgeRole,
 						Content: "Self-evaluation: the goal is not yet fully met — " + reason +
 							"\nContinue working; do not repeat steps you've already completed.",
 					})
@@ -309,7 +322,7 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 				stuckFails[key]++
 				if stuckFails[key] == 3 {
 					messages = append(messages, core.Message{
-						Role:    core.RoleSystem,
+						Role:    nudgeRole,
 						Content: "You are stuck: " + r.Name + " has failed 3× with the same arguments. Change your approach or give the final answer now.",
 					})
 					if l.emitter != nil {

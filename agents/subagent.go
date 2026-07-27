@@ -164,15 +164,17 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 		}
 		offerTools := maxUses < perToolHardCap
 		if maxUses >= perToolSoftCap && !nudged && offerTools {
+			// A user turn, not a system one: see loop.nudgeRole — a system
+			// message after a tool response makes Gemini reject the next call.
 			a.messages = append(a.messages, core.Message{
-				Role:    core.RoleSystem,
+				Role:    core.RoleUser,
 				Content: "You have gathered enough information. Stop calling tools and answer the goal now, concisely, using what you already have.",
 			})
 			nudged = true
 		}
 		if !offerTools && !forcedFinal {
 			a.messages = append(a.messages, core.Message{
-				Role:    core.RoleSystem,
+				Role:    core.RoleUser,
 				Content: "Tool budget reached. Provide your FINAL answer now as plain text using the information already gathered. Do not request any more tools.",
 			})
 			forcedFinal = true

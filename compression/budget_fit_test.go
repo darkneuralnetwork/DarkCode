@@ -113,3 +113,78 @@ func TestFitClient_FallsBackToCfgContextLength(t *testing.T) {
 		t.Errorf("FitClient did not fall back to cfgContextLength=3000: %d", EstimateTokens(out))
 	}
 }
+
+// Shedding must never split a tool exchange. An orphaned tool response is
+// rejected outright by Gemini's OpenAI-compatible endpoint ("function call
+// turn must come immediately after a user turn or a function response turn"),
+// and the failure lands at the API boundary with nothing pointing back at the
+// trimmer that caused it.
+func TestFitToWindow_NeverOrphansToolMessages(t *testing.T) {
+	msgs := []core.Message{
+		{Role: core.RoleSystem, Content: "system"},
+		bigMsg(core.RoleUser, 1500),
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
+			{ID: "call-1", Function: core.FunctionCall{Name: "read_file", Arguments: "{}"}},
+		}},
+		{Role: core.RoleTool, ToolCallID: "call-1", Name: "read_file", Content: strings.Repeat("x", 4000)},
+		bigMsg(core.RoleAssistant, 1500),
+		{Role: core.RoleUser, Content: "the current question"},
+	}
+
+	out := FitToWindow(msgs, 800, 100)
+
+	asked := map[string]bool{}
+	for _, m := range out {
+		for _, tc := range m.ToolCalls {
+			asked[tc.ID] = true
+		}
+	}
+	answered := map[string]bool{}
+	for _, m := range out {
+		if m.Role == core.RoleTool {
+			if m.ToolCallID == "" {
+				t.Error("a tool message survived with no tool_call_id")
+				continue
+			}
+			answered[m.ToolCallID] = true
+			if !asked[m.ToolCallID] {
+				t.Errorf("orphaned tool response for %q — the call that asked for it was shed", m.ToolCallID)
+			}
+		}
+	}
+	for id := range asked {
+		if !answered[id] {
+			t.Errorf("tool call %q survived with no response — the call is left hanging", id)
+		}
+	}
+}
+
+// Repair must not throw away an assistant's prose just because its tool calls
+// lost their answers.
+func TestRepairToolPairsKeepsContentWhenDroppingCalls(t *testing.T) {
+	got := repairToolPairs([]core.Message{
+		{Role: core.RoleAssistant, Content: "here is my reasoning", ToolCalls: []core.ToolCall{
+			{ID: "gone", Function: core.FunctionCall{Name: "f"}},
+		}},
+	})
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want the assistant kept for its content", len(got))
+	}
+	if len(got[0].ToolCalls) != 0 {
+		t.Error("an unanswered tool call was kept")
+	}
+	if got[0].ContentString() != "here is my reasoning" {
+		t.Errorf("the assistant's content was lost: %q", got[0].ContentString())
+	}
+}
+
+// A complete exchange must pass through untouched.
+func TestRepairToolPairsLeavesCompleteExchangesAlone(t *testing.T) {
+	in := []core.Message{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "a", Function: core.FunctionCall{Name: "f"}}}},
+		{Role: core.RoleTool, ToolCallID: "a", Name: "f", Content: "result"},
+	}
+	if got := repairToolPairs(in); len(got) != 2 {
+		t.Errorf("a complete exchange was altered: %d of 2 kept", len(got))
+	}
+}

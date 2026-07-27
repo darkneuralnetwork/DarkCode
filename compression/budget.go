@@ -1,6 +1,8 @@
 package compression
 
 import (
+	"strings"
+
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 )
@@ -188,10 +190,10 @@ func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
 		kept[i] = false
 	}
 	if estimateKept(messages, kept) <= budget {
-		return collectKept(messages, kept)
+		return repairToolPairs(collectKept(messages, kept))
 	}
 
-	out := collectKept(messages, kept)
+	out := repairToolPairs(collectKept(messages, kept))
 	for EstimateTokens(out) > budget {
 		bi, bTok := -1, 0
 		for i := range out {
@@ -285,4 +287,65 @@ func ExceedsBudgetBy(messages []core.Message, budget int) int {
 		return 0
 	}
 	return tokens - budget
+}
+
+// repairToolPairs drops tool-call/tool-response pairs that shedding has broken
+// apart.
+//
+// FitToWindow removes whole messages oldest-first, which is fine for prose and
+// wrong for tool use: an assistant message carrying tool_calls and the role=tool
+// messages answering it are one indivisible exchange. Drop the assistant and the
+// responses become orphans; drop a response and the call is left unanswered.
+//
+// OpenAI tolerates both. Gemini's OpenAI-compatible endpoint does not — it
+// rejects the request outright with "function call turn must come immediately
+// after a user turn or a function response turn", and the failure surfaces at
+// the API boundary with nothing pointing back at the trimmer that caused it.
+// So the invariant is enforced here: a tool exchange is kept whole or not at
+// all.
+func repairToolPairs(msgs []core.Message) []core.Message {
+	// Which calls still have an assistant asking for them, and which have a
+	// response.
+	asked := map[string]bool{}
+	answered := map[string]bool{}
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			asked[tc.ID] = true
+		}
+		if m.Role == core.RoleTool && m.ToolCallID != "" {
+			answered[m.ToolCallID] = true
+		}
+	}
+
+	out := make([]core.Message, 0, len(msgs))
+	for _, m := range msgs {
+		// A response whose call was shed is an orphan.
+		if m.Role == core.RoleTool {
+			if m.ToolCallID == "" || !asked[m.ToolCallID] {
+				continue
+			}
+			out = append(out, m)
+			continue
+		}
+		// An assistant whose responses were shed leaves a call hanging. Keep
+		// the message when it carries other content, minus the calls; drop it
+		// when the calls were all it had.
+		if len(m.ToolCalls) > 0 {
+			complete := true
+			for _, tc := range m.ToolCalls {
+				if !answered[tc.ID] {
+					complete = false
+					break
+				}
+			}
+			if !complete {
+				if strings.TrimSpace(m.ContentString()) == "" {
+					continue
+				}
+				m.ToolCalls = nil
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }

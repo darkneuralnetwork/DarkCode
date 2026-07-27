@@ -116,9 +116,32 @@ type BinaryAgent struct {
 	Args []string // extra flags; the prompt is appended after -q
 }
 
+// resolve makes the agent path absolute.
+//
+// Each task runs with cmd.Dir set to its own temporary workspace, so a
+// relative path like "./darkcode" — which is what the Makefile and the
+// package documentation both pass — is looked up inside that workspace and
+// never found. The failure then surfaces once per task as "no such file or
+// directory", which reads like every task failing rather than like the agent
+// never having been started.
+func (b BinaryAgent) resolve() (string, error) {
+	if filepath.IsAbs(b.Path) {
+		return b.Path, nil
+	}
+	// A bare name with no separator is a PATH lookup, not a relative path.
+	if !strings.ContainsRune(b.Path, filepath.Separator) {
+		return exec.LookPath(b.Path)
+	}
+	return filepath.Abs(b.Path)
+}
+
 func (b BinaryAgent) Run(ctx context.Context, workspace, prompt string) error {
+	path, err := b.resolve()
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", b.Path, err)
+	}
 	args := append(append([]string{}, b.Args...), "-q", prompt)
-	cmd := exec.CommandContext(ctx, b.Path, args...)
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = workspace
 	out, err := cmd.CombinedOutput()
 	if err != nil {
