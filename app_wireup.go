@@ -180,6 +180,9 @@ func (a *AppRunner) initTools(memDir string) {
 		// Trying several fixes and keeping the one that passes needs each to be
 		// applied and rolled back, which the agent cannot do with write_file.
 		tools.RegisterCandidateTool(a.Registry, cwd, kg, a.Patterns, candidate.DefaultVerify(cwd))
+		// Structural findings become branches only once the verifier has passed
+		// with the change applied. Nothing is pushed.
+		tools.RegisterSelfHealTool(a.Registry, cwd, kg, a.Patterns, candidate.DefaultVerify(cwd))
 	}
 	tools.RegisterGitHubTool(a.Registry, cwd)
 	// One call for search-read-summarise, instead of the model spending a turn

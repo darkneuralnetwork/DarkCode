@@ -61,6 +61,11 @@ func FileTrial(workspace string, verify string) TrialFunc {
 	}
 }
 
+// Apply writes every file in p and returns a function restoring the previous
+// state. Exported for callers that keep a patch rather than trialling it, and
+// still need the undo for their own failure path.
+func Apply(workspace string, p Patch) (undo func(), err error) { return applyPatch(workspace, p) }
+
 // applyPatch writes every file in p and returns a function restoring the
 // previous state. The undo is returned even when the write fails part way, so
 // a partially applied patch is still fully reverted.
