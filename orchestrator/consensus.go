@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/memory"
 )
 
 func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble string) (string, error) {
@@ -27,7 +29,60 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 		return "", err
 	}
 
-	return consensus.Synthesized, nil
+	return k.adjudicate(consensus), nil
+}
+
+// adjudicate settles a consensus round on structural evidence rather than on
+// the synthesiser's judgement.
+//
+// Aggregating opinions cannot detect a confidently wrong contributor. The
+// graph can: each candidate's checkable claims — this symbol exists, it lives
+// in that file, this package imports that one — are verified, and a candidate
+// whose claims survive better than the synthesis replaces it.
+//
+// The synthesis keeps ties. It saw every contribution, so it is the right
+// default whenever the evidence does not actually distinguish the candidates.
+func (k *Kernel) adjudicate(consensus *core.ConsensusResult) string {
+	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
+	if !ok || kg == nil || consensus == nil {
+		return consensus.Synthesized
+	}
+
+	candidates := []string{consensus.Synthesized}
+	labels := []string{"synthesis"}
+	for _, c := range consensus.Contributions {
+		if strings.TrimSpace(c.Output) != "" {
+			candidates = append(candidates, c.Output)
+			labels = append(labels, c.Model)
+		}
+	}
+	if len(candidates) < 2 {
+		return consensus.Synthesized
+	}
+
+	best, supports := kg.AdjudicateCandidates(candidates)
+	if best < 0 || supports[0].Checked == 0 {
+		return consensus.Synthesized // nothing checkable; opinion is all there is
+	}
+
+	// Report what the graph refuted in the answer we are about to return,
+	// so a surviving error is visible rather than silently authoritative.
+	chosen := consensus.Synthesized
+	if best != 0 && supports[best].Score() > supports[0].Score() {
+		chosen = candidates[best]
+		k.log("consensus", fmt.Sprintf(
+			"Adjudicated on structure: %s (%d/%d claims verified) over the synthesis (%d/%d)",
+			labels[best], supports[best].Verified, supports[best].Checked,
+			supports[0].Verified, supports[0].Checked))
+	}
+	if wrong := supports[best].Contradicted(); len(wrong) > 0 && best == 0 {
+		var lines []string
+		for _, c := range wrong {
+			lines = append(lines, "- "+c.Detail)
+		}
+		chosen += "\n\n_⚠ The code graph contradicts part of this answer:_\n" + strings.Join(lines, "\n")
+	}
+	return chosen
 }
 
 // runConsensusOnOutput runs a consensus synthesis round on an already-produced
@@ -67,7 +122,7 @@ func (k *Kernel) runConsensusOnOutput(ctx context.Context, userGoal, output, too
 		return "", err
 	}
 
-	return consensus.Synthesized, nil
+	return k.adjudicate(consensus), nil
 }
 
 func (k *Kernel) mergeWithConsensus(ctx context.Context, results []*core.SubAgentResult, goal string) (string, error) {

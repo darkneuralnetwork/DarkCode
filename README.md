@@ -153,7 +153,7 @@ Use the smallest capable model for every action. Routing has three modes:
 | :-- | :-- |
 | `single` | One primary model handles everything. |
 | `escalation` | Start small/local; escalate to a stronger model only when needed. |
-| `consensus` | Multiple models answer; the primary synthesizes the final result. |
+| `consensus` | Multiple models answer; the primary synthesizes, then the **code graph adjudicates** — a candidate whose claims survive verification beats one that merely sounds confident. |
 
 Pick the "brain" per request — `local` (offline), `cloud`, or `auto` (local-first). Supported providers: **OpenAI, Anthropic, OpenRouter, Google, Groq, DeepSeek, Mistral, xAI, Together, Ollama, LM Studio,** and the built-in **embedded** local engine.
 
