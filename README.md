@@ -112,6 +112,7 @@ server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
 | `cycles` · `dead_code` · `untested` | Import cycles, unreferenced symbols, high-fan-in code with no tests |
 | `evolution` | What changed *structurally* between two commits — new dependencies, API breaks, cycles created — not a line diff |
 | `defect_risk` · `root_cause` | Which files bugs cluster in, and — when a test fails — the likely culprits ranked by fix history × graph distance |
+| `structure` | The shape of the code relevant to a goal at **~1/30th the tokens** of reading the files |
 | `low_confidence` · `stale` | Beliefs worth re-checking; files indexed before the current `HEAD` |
 
 Every risk score carries the reasons that produced it, so a weak signal reads as
@@ -329,6 +330,7 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Semantic git history, predictive debugging, provenance citation
 - ✅ Language-server integration: real types, references and diagnostics
 - ✅ Debugger integration for Go: real runtime values at a breakpoint
+- ✅ Structural context compression — repo shape at ~1/30th the tokens
 - 🔭 SQLite-backed knowledge store for large graphs
 - 🔭 Debugger integration beyond Go (debugpy, node-inspect) via DAP
 - 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)

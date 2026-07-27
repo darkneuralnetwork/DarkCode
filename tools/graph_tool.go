@@ -139,6 +139,26 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 		result = causes
 		headline = fmt.Sprintf("%d root-cause candidate(s) for a failure in %s", len(causes), strings.Join(failing, ", "))
 
+	case "structure":
+		if query == "" {
+			return &ToolResult{Name: "graph_query", Success: false,
+				Error: "structure needs query — describe what you are working on"}
+		}
+		budget := 800
+		if b, ok := args["budget_tokens"].(float64); ok && b > 0 {
+			budget = int(b)
+		}
+		view, sv := t.KG.StructuralView(query, budget)
+		if view == "" {
+			return &ToolResult{Name: "graph_query", Success: true,
+				Output: "no indexed code matched that description — read the files directly"}
+		}
+		// The skeleton is prose for the model, not a JSON payload, so it is
+		// returned as-is with the measurement appended.
+		return &ToolResult{Name: "graph_query", Success: true, Output: fmt.Sprintf(
+			"%s\n%d file(s) as %d tokens instead of ~%d (%.0fx smaller)",
+			view, sv.Files, sv.ViewTokens, sv.SourceTokens, sv.Ratio())}
+
 	case "evolution":
 		from, to := str(args["from"]), str(args["to"])
 		if from == "" {
@@ -159,7 +179,7 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 
 	default:
 		return &ToolResult{Name: "graph_query", Success: false, Error: "unknown action " + action +
-			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause)"}
+			" (want: search, neighbors, subgraph, low_confidence, stale, blast_radius, health, dead_code, cycles, untested, evolution, defect_risk, root_cause, structure)"}
 	}
 
 	body, err := json.MarshalIndent(result, "", "  ")
@@ -200,14 +220,17 @@ no test references), low_confidence (beliefs worth re-checking), stale (files in
 evolution (what changed STRUCTURALLY between two commits — new dependencies, API breaks, cycles created —
 rather than a line diff), defect_risk (files most likely to contain bugs, from fix history plus graph
 centrality), root_cause (when a test fails, rank likely culprits by defect history AND graph distance from
-the failure). Every risk score carries the reasons behind it.`),
+the failure), structure (a compact skeleton of the code relevant to a goal — signatures, fan-in and
+dependencies at roughly a thirtieth the tokens of the source; prefer it over reading many files, then read
+full source only for what you are actually editing). Every risk score carries the reasons behind it.`),
 		Parameters: MustParseSchema(`{
 			"type": "object",
 			"properties": {
-				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause"], "description": "Which query to run"},
+				"action": {"type": "string", "enum": ["search", "neighbors", "subgraph", "blast_radius", "health", "dead_code", "cycles", "untested", "low_confidence", "stale", "evolution", "defect_risk", "root_cause", "structure"], "description": "Which query to run"},
 				"query": {"type": "string", "description": "Search term, or a node id for neighbors/subgraph, or a single path for blast_radius"},
 				"files": {"type": "array", "description": "File paths for blast_radius, or the failing files for root_cause"},
 				"days": {"type": "integer", "description": "History window for defect_risk/root_cause (default 365)"},
+				"budget_tokens": {"type": "integer", "description": "Token budget for the structure action (default 800)"},
 				"type": {"type": "string", "enum": ["file", "symbol", "package", "concept", "decision", "fix", "api"], "description": "Restrict a search to one node type"},
 				"depth": {"type": "integer", "description": "Hops for subgraph or blast_radius (default 2)"},
 				"threshold": {"type": "number", "description": "Confidence ceiling for low_confidence (default 0.5)"},
