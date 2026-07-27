@@ -1,3 +1,7 @@
+---
+title: Threat model
+---
+
 # DarkCode Threat Model
 
 A coding agent reads untrusted text and then runs commands and edits files with

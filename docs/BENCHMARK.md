@@ -1,3 +1,7 @@
+---
+title: Running the benchmark
+---
+
 # Running the benchmark
 
 The harness is complete and the agent has been driven end-to-end through it.

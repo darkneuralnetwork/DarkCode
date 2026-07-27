@@ -1,0 +1,23 @@
+# Jekyll configuration for the documentation site.
+#
+# GitHub Pages renders the markdown that already exists in this repository, so
+# the site has no build step of its own and no source of truth separate from
+# the docs people read on GitHub. Writing a static-site generator — or taking a
+# dependency on one — would mean maintaining a markdown renderer to publish
+# files that are already rendered perfectly well.
+#
+# The consequence worth keeping: a doc cannot go stale relative to the site,
+# because they are the same file.
+title: DarkCode
+description: A local-first coding agent that understands your repository structurally.
+theme: jekyll-theme-primer
+
+# The response to the competitive report is working material, not documentation.
+exclude:
+  - REPORT_RESPONSE.md
+  - images/
+
+# Relative links between docs keep working on GitHub and on the site.
+relative_links:
+  enabled: true
+  collections: true

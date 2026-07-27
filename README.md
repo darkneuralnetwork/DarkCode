@@ -320,6 +320,11 @@ CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + ben
 
 ## 📚 Documentation
 
+The docs are published at **https://darkneuralnetwork.github.io/darkcode/** —
+the same markdown files as below, rendered. There is no separate documentation
+source, so a page cannot go stale relative to the repository.
+
+
 The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) covers everything in depth — installation, first-run setup, every concept, the full CLI and configuration reference, the security model, local-LLM tuning, the HTTP API, and troubleshooting.
 
 ---
