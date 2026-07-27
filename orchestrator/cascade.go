@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -228,7 +229,7 @@ func (k *Kernel) detectReAsk(goal string, now time.Time) string {
 
 	// Log outside the lock (k.log locks k.mu itself).
 	if raisedRung >= 0 {
-		k.log("cascade", "Rung "+itoaCascade(raisedRung)+" retry ratio too high — raised its answer threshold (needs higher confidence to answer locally now)")
+		k.log("cascade", "Rung "+strconv.Itoa(raisedRung)+" retry ratio too high — raised its answer threshold (needs higher confidence to answer locally now)")
 	}
 
 	// Fact-level demotion (write-back governance, local-first upgrade Phase D
@@ -298,7 +299,7 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 			AnsweredNodeIDs: nodeIDs,
 		})
 		if answered {
-			k.log("cascade", "Rung "+itoaCascade(rung)+" ("+name+") answered without LLM: "+conf.Reason)
+			k.log("cascade", "Rung "+strconv.Itoa(rung)+" ("+name+") answered without LLM: "+conf.Reason)
 		}
 		return answer, answered
 	}
@@ -451,14 +452,4 @@ func matchCapture(re *regexp.Regexp, s string) string {
 		}
 	}
 	return ""
-}
-
-// itoaCascade renders a small rung index without strconv (matching the
-// deterministic package's zero-dep style is unnecessary here, but the rung
-// range is 0–5 so a table is simplest).
-func itoaCascade(n int) string {
-	if n >= 0 && n <= 9 {
-		return string(rune('0' + n))
-	}
-	return "?"
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
@@ -551,6 +552,7 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/checkpoints", s.handleCheckpoints)
 	mux.HandleFunc("/api/checkpoints/diff", s.handleCheckpointDiff)
 	mux.HandleFunc("/api/rollback", s.handleRollback)
+	mux.HandleFunc("/api/runs", s.handleRunEvents)
 	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/audit/recent", s.handleAuditRecent)
 	mux.HandleFunc("/api/audit/export", s.handleAuditExport)

@@ -18,12 +18,13 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/capability"
 	"github.com/darkcode/core"

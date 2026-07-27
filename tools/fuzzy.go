@@ -11,6 +11,7 @@ package tools
 // worse than failing to patch, so ambiguity is an error rather than a guess.
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -78,30 +79,7 @@ func findSnippet(content, old string) matchResult {
 	default:
 		// Silently picking one would be a coin flip over which region gets
 		// rewritten.
-		return matchResult{err: "old_string matches " + itoa(len(matches)) +
+		return matchResult{err: "old_string matches " + strconv.Itoa(len(matches)) +
 			" places when whitespace is ignored — include more surrounding context to disambiguate"}
 	}
-}
-
-// itoa avoids pulling strconv in for one call site.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

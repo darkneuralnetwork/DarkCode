@@ -68,7 +68,10 @@ func (c *Console) handleRollback(args []string) {
 		return
 	}
 
-	entry, changes, err := c.ckpt.Rollback(n)
+	// Go through the kernel rather than the store directly: it owns rewinding
+	// the transcript and softening the graph's confidence in the reverted
+	// files, and the CLI and HTTP surfaces must not drift on any of that.
+	entry, changes, err := c.kernel.RollbackTo(n)
 	if err != nil {
 		fmt.Println(paint(cRed, "  ✗ "+err.Error()))
 		return
@@ -76,7 +79,6 @@ func (c *Console) handleRollback(args []string) {
 	for _, ch := range changes {
 		fmt.Println("   " + paint(statusColor(ch.Status), fmt.Sprintf("%-9s %s", reverseStatus(ch.Status), ch.Path)))
 	}
-	c.mem.STMTruncate(entry.Turn)
 	fmt.Println(paint(cGreen, fmt.Sprintf("  ✓ rolled back to checkpoint #%d — %d file(s) restored, conversation rewound",
 		entry.ID, len(changes))))
 }

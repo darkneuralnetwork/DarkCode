@@ -30,7 +30,6 @@ package memory
 
 import (
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"math"
 	"regexp"
 	"sort"
@@ -38,6 +37,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/core"
 )

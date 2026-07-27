@@ -31,6 +31,24 @@ that review their supply chain. A PR that adds a dependency needs to argue why
 the standard library genuinely cannot do the job. "It is more convenient" is
 not that argument.
 
+### Dependencies we evaluated and declined
+
+Measured, not assumed, so nobody has to redo the work. Baseline: a 15 MB
+static binary, `CGO_ENABLED=0`, four direct dependencies.
+
+| Candidate | What it would replace | Measured cost | Verdict |
+| :-- | :-- | :-- | :-- |
+| `go-tree-sitter` | `intelligence/langparse.go` (~280 lines) | **Does not compile with `CGO_ENABLED=0` at all** — the core `Node` type lives in a CGo file | **No.** Costs the static binary, the linux/386 + windows + darwin cross-compile matrix, and reproducible builds. Trading all of that for 280 lines is not close. |
+| `modernc.org/sqlite` | knowledge-graph JSON persistence (~80 lines) | +4.3 MB binary, +25 modules | **No.** It would *add* code (schema, migrations, queries), not remove it. Worth revisiting only when a real graph outgrows the JSON store — for scale, never for tidiness. |
+| `modelcontextprotocol/go-sdk` | `tools/mcp_client.go` + `server/mcp.go` | +3.9 MB, +11 modules including `cloud.google.com/go/compute/metadata`, `golang-jwt`, `oauth2` | **No.** Pulling GCP metadata access into an agent whose SSRF guard exists specifically to block cloud-metadata endpoints is a security-posture conflict, not just weight. |
+| `go-github` | `tools/github.go` (~230 lines) | +2 modules for 8 endpoints of a very large API surface | **No.** Eight REST calls over stdlib `net/http` is less code than the integration layer would be. |
+
+The general finding: the code that would benefit most from a library
+(multi-language parsing) is the one case where the library is CGo-only, and
+everything else we hand-rolled is domain logic — blast radius, defect
+topology, semantic history — that no library provides. Adding dependencies
+here would grow the binary and the audit surface without shrinking the source.
+
 **Honesty in output.** The agent must not report success it has not verified.
 If a check did not run, say it did not run. See `orchestrator/acceptance.go`
 for the pattern: unverifiable criteria are recorded as unverified rather than

@@ -2,8 +2,9 @@ package orchestrator
 
 import (
 	"fmt"
-	"github.com/darkcode/core"
 	"strings"
+
+	"github.com/darkcode/core"
 )
 
 // ErrorManager handles LLM and system errors, providing auto-fixes for known

@@ -28,7 +28,6 @@ package permission
 
 import (
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +35,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/security"

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"go/token"
+	"strconv"
 	"strings"
 
 	"github.com/darkcode/tools"
@@ -56,11 +57,11 @@ func NewDefinitionsTool() *tools.ToolEntry {
 			if len(found) == 0 {
 				return &tools.ToolResult{
 					Name: "deterministic_definitions", Success: true,
-					Output: "No declaration of \"" + symbol + "\" found in " + itoa(len(files)) + " Go file(s) under " + root + ".",
+					Output: "No declaration of \"" + symbol + "\" found in " + strconv.Itoa(len(files)) + " Go file(s) under " + root + ".",
 				}
 			}
 			var b strings.Builder
-			fmt.Fprintf(&b, "Found %s declaration(s) of %q:\n", itoa(len(found)), symbol)
+			fmt.Fprintf(&b, "Found %s declaration(s) of %q:\n", strconv.Itoa(len(found)), symbol)
 			for _, d := range found {
 				if d.Receiver != "" {
 					fmt.Fprintf(&b, "  %s (method on %s) — %s:%d\n", d.Name, d.Receiver, d.File, d.Line)

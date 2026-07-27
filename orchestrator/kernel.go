@@ -20,6 +20,7 @@ import (
 	"github.com/darkcode/permission"
 	"github.com/darkcode/plan"
 	"github.com/darkcode/router"
+	"github.com/darkcode/safeurl"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
 )
@@ -350,7 +351,41 @@ func (k *Kernel) RollbackTo(n int) (checkpoint.Entry, []checkpoint.Change, error
 		return checkpoint.Entry{}, nil, err
 	}
 	k.memory.STMTruncate(entry.Turn)
+	k.softenBeliefsAfterRollback(changes)
 	return entry, changes, nil
+}
+
+// rollbackConfidenceDecay is how much a rolled-back file's beliefs lose, and
+// how fast that loss fades across the graph. Values are deliberately modest:
+// the facts are suspect, not refuted, and re-indexing restores them.
+const (
+	rollbackConfidenceDecay = -0.2
+	rollbackDecayFactor     = 0.5
+	rollbackDecayHops       = 2
+)
+
+// softenBeliefsAfterRollback lowers confidence in what the graph believes about
+// the files a rollback just rewrote, and — with decay — about their neighbours.
+//
+// A rollback is evidence: the code on disk is no longer what the graph was
+// indexed against, so every fact derived from those files is now questionable,
+// and facts about the code that references them slightly less so. Leaving the
+// graph at full confidence would have the agent citing beliefs about a file
+// that has since been reverted underneath it.
+func (k *Kernel) softenBeliefsAfterRollback(changes []checkpoint.Change) {
+	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
+	if !ok || kg == nil || len(changes) == 0 {
+		return
+	}
+	softened := 0
+	for _, c := range changes {
+		softened += kg.PropagateConfidence("file:"+c.Path,
+			rollbackConfidenceDecay, rollbackDecayFactor, rollbackDecayHops)
+	}
+	if softened > 0 {
+		k.log("memory", fmt.Sprintf(
+			"Rollback: lowered confidence in %d belief(s) derived from the reverted files", softened))
+	}
 }
 
 // SetApprovalCallback is a legacy bridge: it wraps the simple bool callback
@@ -700,6 +735,24 @@ func (k *Kernel) GetTaskLog() []TaskLogEntry {
 // ============================================================================
 
 func (k *Kernel) Status() string {
+	// Air-gap and per-model reliability are states the user has no other way
+	// to confirm — a silently-inactive air gap is exactly the kind of thing
+	// someone would rather find out here than after the fact.
+	egress := "on (outbound network allowed)"
+	if safeurl.AirGapped() {
+		egress = "OFF — air-gapped, no outbound network"
+	}
+	var reliability string
+	for _, w := range k.router.Reliability() {
+		if w.TotalCalls >= 3 {
+			reliability += fmt.Sprintf("    %s as %s: %.0f%% over %d call(s)\n",
+				w.ModelName, w.Role, w.SuccessRate*100, w.TotalCalls)
+		}
+	}
+	if reliability == "" {
+		reliability = "    (not enough calls recorded yet)\n"
+	}
+
 	return fmt.Sprintf(
 		"Orchestrator Kernel:\n"+
 			"  Routing mode: %s\n"+
@@ -708,6 +761,8 @@ func (k *Kernel) Status() string {
 			"  Max concurrent: %d\n"+
 			"  Compress context: %v\n"+
 			"  Task log entries: %d\n"+
+			"  Egress: %s\n"+
+			"  Model reliability:\n%s"+
 			"\n%s",
 		k.cfg.RoutingMode,
 		k.cfg.UIMode,
@@ -715,6 +770,8 @@ func (k *Kernel) Status() string {
 		k.cfg.MaxConcurrent,
 		k.cfg.CompressContext,
 		len(k.taskLog),
+		egress,
+		reliability,
 		k.memory.Summary(),
 	)
 }

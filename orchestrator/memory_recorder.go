@@ -2,9 +2,10 @@ package orchestrator
 
 import (
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"strings"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
@@ -143,13 +144,11 @@ func (k *Kernel) recordOutcome(goal, output string, results []*core.SubAgentResu
 	}
 }
 
-// injectRecall prepends a compact "Relevant Past Context" block to the goal
-// when the hybrid retriever finds related past tasks/knowledge. This is the
+// getRecallBlock returns a compact "Relevant Past Context" block for the goal,
+// or an empty string when there are no hits and no retriever. This is the
 // lightweight RAG half of the hybrid KG+retrieval architecture: it gives the
-// planner the benefit of prior executions (e.g. recalling a past "calculator"
-// task when asked to "build an arithmetic tool") without any embedding-model
-// getRecallBlock returns a compact "Relevant Past Context" block for the goal
-// or an empty string if there are no hits or no retriever.
+// planner the benefit of prior executions (recalling a past "calculator" task
+// when asked to "build an arithmetic tool") with no embedding model required.
 func (k *Kernel) getRecallBlock(goal string) string {
 	if k.retriever == nil {
 		return ""

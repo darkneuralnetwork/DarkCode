@@ -5,6 +5,7 @@ package deterministic
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/darkcode/tools"
@@ -43,7 +44,7 @@ func NewReferencesTool() *tools.ToolEntry {
 			count := strings.Count(out, "\n") + 1
 			return &tools.ToolResult{
 				Name: "deterministic_references", Success: true,
-				Output: strings.TrimSpace(truncateOutput(out)) + "\n\n---\n" + itoa(count) + " reference(s) across the workspace.",
+				Output: strings.TrimSpace(truncateOutput(out)) + "\n\n---\n" + strconv.Itoa(count) + " reference(s) across the workspace.",
 			}
 		},
 	}

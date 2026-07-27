@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/darkcode/core"
@@ -140,7 +141,7 @@ func SyncWorkspaceKG(ctx context.Context, root string, kg core.KnowledgeGraphSto
 		props := map[string]string{
 			"origin":     "code_index",
 			"kind":       s.def.Kind,
-			"references": itoa(s.refs),
+			"references": strconv.Itoa(s.refs),
 		}
 		if s.def.Receiver != "" {
 			props["receiver"] = s.def.Receiver

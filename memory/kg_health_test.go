@@ -204,3 +204,44 @@ func TestHealthOfCleanGraph(t *testing.T) {
 		t.Errorf("empty graph scored %.1f, want 100", rep.Score)
 	}
 }
+
+// A rollback is evidence that the graph's beliefs about the reverted files are
+// stale. Confidence must fall for them, and less so for their neighbours.
+func TestPropagateConfidenceSoftensRolledBackFiles(t *testing.T) {
+	kg := healthGraph(t)
+
+	before := map[string]float64{}
+	for _, id := range []string{"file:core/types.go", "symbol:Config@core/types.go", "file:api/server.go"} {
+		n, ok := kg.GetNode(id)
+		if !ok {
+			t.Fatalf("%s missing from the fixture", id)
+		}
+		before[id] = n.Confidence
+	}
+
+	// Same call the kernel makes after a rollback of core/types.go.
+	changed := kg.PropagateConfidence("file:core/types.go", -0.2, 0.5, 2)
+	if changed == 0 {
+		t.Fatal("nothing was softened")
+	}
+
+	root, _ := kg.GetNode("file:core/types.go")
+	sym, _ := kg.GetNode("symbol:Config@core/types.go")
+	if root.Confidence >= before["file:core/types.go"] {
+		t.Error("the reverted file's confidence did not fall")
+	}
+	rootDrop := before["file:core/types.go"] - root.Confidence
+	symDrop := before["symbol:Config@core/types.go"] - sym.Confidence
+	if symDrop <= 0 {
+		t.Error("symbols defined by the reverted file should also be softened")
+	}
+	if symDrop >= rootDrop {
+		t.Errorf("neighbour fell %.3f vs root %.3f — the effect must decay", symDrop, rootDrop)
+	}
+	// Confidence must stay in range.
+	for _, n := range kg.AllNodes() {
+		if n.Confidence < 0 || n.Confidence > 1 {
+			t.Errorf("%s confidence %.3f out of range", n.ID, n.Confidence)
+		}
+	}
+}

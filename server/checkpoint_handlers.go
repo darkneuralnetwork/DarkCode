@@ -25,6 +25,25 @@ func (s *Server) handleCheckpoints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"checkpoints": out, "count": len(out)})
 }
 
+// handleRunEvents returns the recorded execution timeline for a goal: which
+// task started, finished or failed, in order, with what output.
+//
+// This is the replay foundation — the same journal that lets a crashed run
+// resume is the ordered record a post-mortem (or a timeline UI) needs.
+func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
+	if s.kernel == nil {
+		writeError(w, http.StatusServiceUnavailable, "kernel not initialized")
+		return
+	}
+	goal := r.URL.Query().Get("goal")
+	if goal == "" {
+		writeError(w, http.StatusBadRequest, "goal is required (the run is keyed by it)")
+		return
+	}
+	events := s.kernel.RunEvents(goal)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"events": events, "count": len(events)})
+}
+
 // handleCheckpointDiff reports how the working tree differs from a checkpoint.
 func (s *Server) handleCheckpointDiff(w http.ResponseWriter, r *http.Request) {
 	if s.kernel == nil || s.kernel.Checkpoints() == nil {

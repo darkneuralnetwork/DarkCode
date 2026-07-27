@@ -23,9 +23,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"strings"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/agents"
 	"github.com/darkcode/compression"

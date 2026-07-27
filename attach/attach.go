@@ -17,8 +17,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/darkcode/safeurl"
 	"time"
+
+	"github.com/darkcode/safeurl"
 )
 
 // Type constants for the supported attachment kinds.

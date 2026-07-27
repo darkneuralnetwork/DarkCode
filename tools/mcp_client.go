@@ -27,7 +27,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"io"
 	"net/http"
 	"os"
@@ -36,6 +35,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 )
 
 // MCPClient is the contract for talking to an MCP server. The SourceManager

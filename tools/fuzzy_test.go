@@ -113,11 +113,3 @@ func TestPatchStillReportsMissingSnippet(t *testing.T) {
 		t.Error("patching a snippet that does not exist should fail")
 	}
 }
-
-func TestItoa(t *testing.T) {
-	for n, want := range map[int]string{0: "0", 7: "7", 42: "42", -13: "-13", 1000: "1000"} {
-		if got := itoa(n); got != want {
-			t.Errorf("itoa(%d) = %q, want %q", n, got, want)
-		}
-	}
-}

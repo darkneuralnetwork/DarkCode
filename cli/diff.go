@@ -13,9 +13,10 @@ package cli
 
 import (
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"io"
 	"strings"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/core"
 )

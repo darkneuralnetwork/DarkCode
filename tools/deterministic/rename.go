@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/darkcode/core"
@@ -123,7 +124,7 @@ func astRename(ctx context.Context, files []goFile, oldName, newName string, dry
 	if totalHits == 0 {
 		return &tools.ToolResult{
 			Name: "deterministic_rename", Success: true,
-			Output: "No occurrences of \"" + oldName + "\" in " + itoa(len(files)) + " Go file(s). Nothing to rename.",
+			Output: "No occurrences of \"" + oldName + "\" in " + strconv.Itoa(len(files)) + " Go file(s). Nothing to rename.",
 		}
 	}
 	var b strings.Builder

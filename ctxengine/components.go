@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -382,30 +383,8 @@ func (c *AdaptiveCompressor) Compress(ctx context.Context, msgs []core.Message, 
 		return append([]core.Message{summary}, recent...)
 	}
 	// No summarizer: keep a truncated reference of the oldest message.
-	ref := core.Message{Role: core.RoleSystem, Content: "[Earlier context compressed — " + itoa(len(older)) + " messages omitted]"}
+	ref := core.Message{Role: core.RoleSystem, Content: "[Earlier context compressed — " + strconv.Itoa(len(older)) + " messages omitted]"}
 	return append([]core.Message{ref}, recent...)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }
 
 // errors

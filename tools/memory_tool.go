@@ -3,8 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
-	"github.com/darkcode/internal/strutil"
 	"strings"
+
+	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
