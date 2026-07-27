@@ -40,6 +40,7 @@ type AppRunner struct {
 	Checkpoints  *checkpoint.Manager
 	LSP          *intelligence.LSPClient
 	HealthDaemon *memory.HealthDaemon
+	Patterns     *memory.PatternLibrary
 	Server       *server.Server
 
 	PluginLoader *plugin.Loader

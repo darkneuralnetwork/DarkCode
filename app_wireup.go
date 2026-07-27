@@ -170,7 +170,12 @@ func (a *AppRunner) initTools(memDir string) {
 		if a.Cfg.HealthDaemon {
 			a.HealthDaemon.Start(context.Background())
 		}
-		tools.RegisterGraphTool(a.Registry, kg, cwd, a.HealthDaemon)
+		// Conventions mined here are kept in a library that outlives this
+		// repository, so a rule followed in one codebase can be checked in
+		// the next.
+		a.Patterns = memory.NewPatternLibrary(a.Cfg.MemoryDir)
+		a.Patterns.Learn(cwd, kg.MinePatterns(cwd))
+		tools.RegisterGraphTool(a.Registry, kg, cwd, a.HealthDaemon, a.Patterns)
 	}
 	tools.RegisterGitHubTool(a.Registry, cwd)
 	// One call for search-read-summarise, instead of the model spending a turn
