@@ -32,6 +32,7 @@ func main() {
 		uiMode      bool
 		tuiFlag     bool
 		guiFlag     bool
+		acpFlag     bool
 		portFlag    string
 		routingMode string
 		safetyLevel string
@@ -52,6 +53,7 @@ func main() {
 	flag.BoolVar(&uiMode, "ui", false, "Enable UI event streaming mode")
 	flag.BoolVar(&tuiFlag, "tui", false, "Start new BubbleTea TUI mode")
 	flag.BoolVar(&guiFlag, "gui", false, "Start GUI mode: web UI + API on http://localhost:12345")
+	flag.BoolVar(&acpFlag, "acp", false, "Serve the Agent Client Protocol on stdio (for Zed, VS Code and JetBrains)")
 	flag.StringVar(&portFlag, "port", "", "Port for HTTP server (default: 12345 for --gui)")
 	flag.StringVar(&routingMode, "mode", "", "Routing mode: single, escalation, consensus")
 	flag.StringVar(&safetyLevel, "safety", "", "Safety level: strict, normal, relaxed")
@@ -153,13 +155,17 @@ func main() {
 	}
 
 	// === ORCHESTRATOR MODE ===
-	runOrchestrator(cfg, query, statusFlag, portFlag, guiFlag, bindAddr)
+	runOrchestrator(cfg, query, statusFlag, portFlag, guiFlag, acpFlag, bindAddr)
 }
 
 // runOrchestrator wires the full 6-layer system and runs the query.
-func runOrchestrator(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) {
+func runOrchestrator(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag, acpFlag bool, bindAddr string) {
 	runner := NewAppRunner(cfg, query, statusOnly, portFlag, guiFlag, bindAddr)
 	runner.WireUp()
+	if acpFlag {
+		runner.RunACP()
+		return
+	}
 	runner.Execute()
 }
 

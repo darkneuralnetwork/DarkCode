@@ -294,6 +294,7 @@ The full reference is in the [**Wiki → Configuration**](https://github.com/dar
 - **Web UI** — conversations, live agent monitoring, blueprint/plan tracking, memory inspection, and knowledge-graph visibility.
 - **CLI** — a full slash-command palette (`/help`). Highlights: `/rollback`, `/health`, `/evolution`, `/session`, `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
 - **OpenAI-compatible API** — point any OpenAI client at `http://localhost:12345/v1` and use DarkCode as the model (Open WebUI, LibreChat, the `openai` SDK with a custom `base_url`).
+- **Editors** — `darkcode --acp` serves the [Agent Client Protocol](https://agentclientprotocol.com), so Zed and the VS Code / JetBrains bridges drive it with no editor-specific code. Verified against Zed's official client SDK.
 - **MCP** — DarkCode is both an MCP client (connect external tool servers) and an MCP server (expose its own tools, including the knowledge graph, to other agents).
 
 ---
@@ -332,9 +333,9 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Semantic git history, predictive debugging, provenance citation
 - ✅ Language-server integration: real types, references and diagnostics
 - ✅ Debugger integration (Go, Python) — real runtime values at a breakpoint
+- ✅ Editor integration over ACP (Zed, VS Code, JetBrains)
 - ✅ Structural context compression — repo shape at ~1/30th the tokens
 - 🔭 SQLite-backed knowledge store for large graphs
-- 🔭 IDE integration via ACP (VS Code / Zed / JetBrains)
 
 ---
 
