@@ -942,7 +942,11 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
    ════════════════════════════════════════════════════════════════════════ */
 .mem-grid, .learn-grid {
   flex: 1; overflow-y: auto; padding: 28px; min-height: 0;
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; align-content: start;
+  /* Reflow rather than insisting on two columns: below ~700px each card gets
+     less room than its own content needs and the panel scrolls sideways. The
+     same auto-fill/minmax shape is used by every other card grid here. */
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 22px; align-content: start;
 }
 .mem-card { display: flex; flex-direction: column; height: 340px; border-radius: var(--radius-md); background: var(--bg-panel); border: 1px solid var(--border); }
 .mem-card-head {
@@ -1192,6 +1196,44 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 @media (max-width: 760px) {
   .server-info, .badges, .kbd-hint { display: none; }
   .app-header { gap: 10px; padding: 0 10px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   NARROW WINDOWS
+   Rows built from fixed pixel columns cannot shrink: .audit-item reserves
+   420px and .tool-exec-item 310px before their flexible column gets anything,
+   so below roughly 700px they push the panel into a sideways scroll instead of
+   wrapping. Both are label/value rows, and the labels are what a reader scans,
+   so they stack rather than truncate.
+   ════════════════════════════════════════════════════════════════════════ */
+/* A flex item defaults to min-width:auto, which means "never shrink below my
+   content". The log category strip is wider than a narrow window, and because
+   every ancestor inherited that default the intrinsic width propagated all the
+   way up — the strip's own overflow-x:auto could never engage, because nothing
+   was constraining it to scroll inside. Letting these shrink is what makes the
+   scroll happen where it was already asked for. */
+.glass-panel,
+.events-list,
+.log-category-tabs { min-width: 0; }
+
+@media (max-width: 820px) {
+  .audit-item,
+  .tool-exec-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 12px 14px;
+  }
+  /* Each cell becomes its own line, so the row needs a visible boundary. */
+  .audit-item > *,
+  .tool-exec-item > * { min-width: 0; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 700px) {
+  /* Panels carry 28px of padding on both sides, which is most of a phone's
+     width. */
+  .mem-grid, .learn-grid { padding: 14px; gap: 14px; }
+  .audit-list { margin: 14px; }
+  .chart-grid { gap: 10px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
