@@ -21,3 +21,7 @@ coverage.out
 *~
 .idea/
 .vscode/
+
+# Working notes and drafts kept beside the source but not part of it
+*_NOTES.md
+*_DRAFT.md
