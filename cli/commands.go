@@ -47,7 +47,7 @@ var commandRegistry = []cmdInfo{
 	// Knowledge & memory
 	{"/ingest", "Knowledge & Memory", "Teach the system a file, directory, URL, or text"},
 	{"/memory", "Knowledge & Memory", "Show the memory summary"},
-	{"/skills", "Knowledge & Memory", "List learned procedural skills"},
+	{"/skills", "Knowledge & Memory", "List skills, or /skills import <dir> to load written ones"},
 	{"/episodes", "Knowledge & Memory", "List episodic memory (past tasks)"},
 	{"/know", "Knowledge & Memory", "Browse the knowledge graph"},
 	{"/learning", "Knowledge & Memory", "Show learning-engine feedback"},

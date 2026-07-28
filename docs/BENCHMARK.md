@@ -45,22 +45,13 @@ directory, and an approval prompt in a headless run blocks forever.
 every task fails with a connection refused that looks like a network problem
 rather than a missing setting.
 
-## Quota
+## Cost
 
-Free-tier Gemini keys carry a small daily request cap — around 20 requests per
-day. One benchmark task costs several requests, so the four shipped tasks can
-exhaust a free key in a single run, and the quota error arrives as a task
-*failure*, which scores worse than not running at all.
-
-Check the report before believing a number:
-
-```sh
-jq '.results[] | select(.error | test("429|quota"))' bench-report.json
-```
-
-Any hit there means the run is invalid, not that the agent is bad. Use a key
-with billing enabled, or a local model via Ollama, for a score worth
-publishing.
+One task is roughly 35k input and 2.5k output tokens across six loop
+iterations, so the whole suite is cheap: about **$0.03** for the four shipped
+tasks on a fast model, or **under a dollar** for a hundred. Use a key with
+billing enabled — a rate-limited key reports its refusals as task *failures*,
+which produces a wrong number rather than an error.
 
 ## What a real run needs
 

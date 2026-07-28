@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/memory"
 )
 
 // skill_extractor.go — the learning loop.
@@ -126,9 +127,25 @@ func (k *Kernel) recallSkill(goal string) string {
 
 	s := best[0].skill
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Relevant Past Procedure — %s\n", s.Name)
-	fmt.Fprintf(&b, "_Worked %d time(s), %.0f%% success. Adapt it; don't follow it blindly._\n",
-		s.UseCount, s.SuccessRate*100)
+
+	// Two kinds of skill reach this point, and they carry different authority.
+	// A learned one has a success rate measured from real runs on this machine.
+	// An imported one was written down by somebody and has never been tried
+	// here, so "worked 0 time(s), 0% success" would be both untrue and
+	// actively harmful — it teaches the model to distrust good guidance for
+	// the sole reason that it is new. Say which kind it is.
+	if s.Metadata["origin"] == memory.OriginImported {
+		fmt.Fprintf(&b, "## Relevant Written Procedure — %s\n", s.Name)
+		b.WriteString("_Authored guidance, not measured here")
+		if s.UseCount > 0 {
+			fmt.Fprintf(&b, "; applied %d time(s) since, %.0f%% success", s.UseCount, s.SuccessRate*100)
+		}
+		b.WriteString(". Adapt it; don't follow it blindly._\n")
+	} else {
+		fmt.Fprintf(&b, "## Relevant Past Procedure — %s\n", s.Name)
+		fmt.Fprintf(&b, "_Worked %d time(s), %.0f%% success. Adapt it; don't follow it blindly._\n",
+			s.UseCount, s.SuccessRate*100)
+	}
 	for _, step := range s.Steps {
 		if step.Tool != "" {
 			fmt.Fprintf(&b, "%d. [%s] %s\n", step.Order, step.Tool, step.Action)

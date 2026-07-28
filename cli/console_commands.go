@@ -8,6 +8,7 @@ import (
 
 	"github.com/darkcode/cli/tui"
 	"github.com/darkcode/ingest"
+	"github.com/darkcode/memory"
 	"github.com/darkcode/provider/embedded"
 )
 
@@ -95,11 +96,23 @@ func (c *Console) handleSlash(input string) bool {
 	case "/session", "/sessions":
 		c.handleSession(parts[1:])
 
-	case "/skills":
-		c.printSkills()
-
 	case "/episodes":
 		c.printEpisodes()
+
+	case "/skills":
+		// Import written-down procedure into procedural memory. Without a path
+		// this lists what is already stored, since "what do I know?" is asked
+		// more often than "learn this".
+		if len(parts) > 2 && parts[1] == "import" {
+			found, err := c.mem.ImportSkills(parts[2])
+			if err != nil {
+				fmt.Println("import failed:", err)
+				break
+			}
+			fmt.Print(memory.FormatImport(found))
+			break
+		}
+		c.printSkills()
 
 	case "/know", "/knowledge":
 		if len(parts) > 1 {
