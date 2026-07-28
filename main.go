@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/darkcode/cli"
-	"github.com/darkcode/cli/tui"
 	"github.com/darkcode/config"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/orchestrator"
@@ -30,7 +29,6 @@ func main() {
 		statusFlag  bool
 		help        bool
 		uiMode      bool
-		tuiFlag     bool
 		guiFlag     bool
 		acpFlag     bool
 		portFlag    string
@@ -51,7 +49,6 @@ func main() {
 	flag.BoolVar(&statusFlag, "status", false, "Show orchestrator system status and exit")
 	flag.BoolVar(&help, "help", false, "Show help")
 	flag.BoolVar(&uiMode, "ui", false, "Enable UI event streaming mode")
-	flag.BoolVar(&tuiFlag, "tui", false, "Start new BubbleTea TUI mode")
 	flag.BoolVar(&guiFlag, "gui", false, "Start GUI mode: web UI + API on http://localhost:12345")
 	flag.BoolVar(&acpFlag, "acp", false, "Serve the Agent Client Protocol on stdio (for Zed, VS Code and JetBrains)")
 	flag.StringVar(&portFlag, "port", "", "Port for HTTP server (default: 12345 for --gui)")
@@ -85,14 +82,6 @@ func main() {
 	// Handle --tools flag early — no API key needed
 	if toolsFlag {
 		listToolsStandalone()
-		os.Exit(0)
-	}
-
-	if tuiFlag {
-		if err := tui.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-			os.Exit(1)
-		}
 		os.Exit(0)
 	}
 
