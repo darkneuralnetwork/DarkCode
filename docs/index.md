@@ -22,6 +22,7 @@ dependencies.
 
 | Page | What it covers |
 | :-- | :-- |
+| [Policy](POLICY.md) | Restricting tools, approvals and model choice from one file — and why it can only ever tighten |
 | [Threat model](THREAT_MODEL.md) | What DarkCode defends against, what it does not, and how to verify a release |
 | [Benchmarks](BENCHMARK.md) | Running the suite, and why a quota error invalidates a score rather than lowering it |
 | [Contributing](https://github.com/darkneuralnetwork/darkcode/blob/main/CONTRIBUTING.md) | Repository history, dependency policy, and the measurements behind it |

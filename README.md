@@ -114,10 +114,26 @@ server can — from the CLI (`/health`) or as an agent tool (`graph_query`):
 | `defect_risk` · `root_cause` | Which files bugs cluster in, and — when a test fails — the likely culprits ranked by fix history × graph distance |
 | `structure` | The shape of the code relevant to a goal at **~1/30th the tokens** of reading the files |
 | `simulate` | "What if we split this package?" — measures a proposed change against the real graph before you write it |
+| `patterns` · `violations` | Conventions this repository actually keeps, and the files that break them |
+| `policy` | Architecture you declared — forbidden dependencies, coupling ceilings, coverage floors — checked rather than hoped for |
+| `trends` · `alerts` | Where the structure is heading, and what changed since last time |
 | `low_confidence` · `stale` | Beliefs worth re-checking; files indexed before the current `HEAD` |
 
 Every risk score carries the reasons that produced it, so a weak signal reads as
 weak rather than as confident nonsense.
+
+**Structure is watched, not only asked about.** An optional background daemon
+re-scans on a schedule and raises an alert when something *changes* — a cycle
+that appeared this week, coupling climbing for a month, a hotspot that just lost
+its last test. It holds to a share of one core (5% by default) by measuring each
+scan and resting proportionally, so a repository ten times larger scans ten times
+less often instead of costing ten times the CPU. Alerts fire on transitions, so a
+cycle that has been there for a year stays quiet.
+
+That series is also a time base: `trends` fits each metric against time and
+reports R² next to the slope, calling anything below a weak fit *"no discernible
+trend"* rather than giving it a confident date. A projection nobody can audit is
+worse than none, because it gets believed.
 
 **And where runtime truth is needed, it is read, not guessed.** The `debug` tool
 stops a running program at a line and reports every local in scope plus any
@@ -176,6 +192,79 @@ Rolling back also **rewinds the conversation** to match the filesystem —
 otherwise the agent keeps reasoning from turns describing files that no longer
 exist. The rollback is itself snapshotted first, so the undo can be undone.
 
+Every run is also recorded as an ordered event log, so a finished task can be
+**scrubbed through** afterwards — which step ran, what it produced, where it
+went wrong — rather than reconstructed from a wall of output.
+
+---
+
+## ✅ Changes that have been run, not just written
+
+Asking a model for a fix gets you one attempt. Asking three times gets you three,
+and the interesting question is which to keep — so `rank_patches` applies each
+candidate on its own, runs the project's verifier, and restores the tree.
+
+The ranking is deliberately **lexicographic, not a weighted blend**: does it
+apply, does the verifier pass, and only then how much of the repository it
+disturbs. A patch that passes beats every patch that does not, however tidy they
+look — averaging those into one number is exactly how a neat broken patch wins.
+When nothing passes it says *keep none* rather than crowning the least bad.
+
+`self_heal` builds on that. It turns structural findings — an untested hotspot, a
+file breaking a convention the rest of its package keeps — into a branch, but
+**only after the verifier exits zero with the change applied**. A finding whose
+candidates all fail produces nothing rather than a hopeful suggestion, and the
+gate is re-applied at staging rather than trusted from the caller.
+
+Nothing is ever pushed and no pull request is opened. The fix lands on its own
+branch, the checkout returns to where it started, and a dirty tree is refused
+outright — staging on top of uncommitted work would mix the two.
+
+---
+
+## 🔎 Research
+
+`research` answers a question from several sources in one call: it finds
+candidate pages, reads them concurrently, reduces each to readable text, and
+returns one sourced digest. Using `web_search` and `web_fetch` by hand costs a
+model turn per step — search, read the list, pick a link, fetch, discover it was
+the wrong link — and leaves the raw HTML sitting in the context window afterwards.
+
+Every passage keeps its source as `[S1]`, `[S2]`, so a claim can be cited rather
+than laundered. Every URL goes through the SSRF guard, including ones discovered
+mid-run, and every fetched page is scanned for prompt injection — a page that
+carries indicators is flagged in the digest instead of being quietly blended in.
+
+---
+
+## 📋 Policy
+
+One file — `.darkcode/policy.json` — says what an install may do: which tools
+run, how much passes without a human looking, and **which models code may be
+sent to**. That last one is the point; the rest can be reasoned about locally,
+while the choice of model decides whether source leaves the machine.
+
+```json
+{
+  "tools":       { "allow_only": ["read_file", "graph_*", "lsp"] },
+  "permissions": { "min_safety_level": "strict", "max_blast_radius": 0.1 },
+  "models":      { "require_local": true }
+}
+```
+
+**A policy can only restrict.** It can forbid a tool the config allows, shorten a
+timeout, or take a model away — never the reverse. Without that rule, dropping a
+policy next to the binary would be a way to *gain* permissions rather than lose
+them.
+
+A forbidden model is never registered with the router, so no path can reach it —
+not the tier lookup, not consensus fan-out, not a role selector. `require_local`
+is checked against the provider's own local flag, so a hosted endpoint can't slip
+through by naming itself after a local one, and it refuses providers it can't
+identify: *unknown* is not an acceptable answer to "does this leave the machine".
+
+Full reference: [docs/POLICY.md](docs/POLICY.md).
+
 ---
 
 ## 🔒 Security
@@ -192,6 +281,8 @@ DarkCode executes real shell commands and edits files, so it treats safety as a 
 - **Execution backends** — run shell commands `local` (sandboxed), in a disposable `docker` container (all capabilities dropped, no network by default), or on a remote host over `ssh`.
 - **Air-gap mode** — `air_gap: true` refuses every connection leaving the machine, enforced at dial time; local model servers keep working.
 - **Secret scanning, vault-backed keys & SSRF guards** — credentials in tool args force a prompt; API keys can live in 1Password/Bitwarden/`pass` via `op://`, `bw://`, `pass://` references instead of plaintext config; outbound fetches can't reach loopback or cloud-metadata endpoints.
+- **Policy as code** — a separate `policy.json` that can tighten tools, approvals and model choice, and can never loosen them. See [Policy](#-policy).
+- **Editor sessions are gated too** — under ACP, approvals go to the editor's own dialog via `session/request_permission`. Anything that isn't an explicit approval — a timeout, a cancellation, an editor that doesn't implement it — denies, so running inside an editor is never the loosest way to run the agent.
 
 > The full model, including what it explicitly does **not** defend against, is in [**docs/THREAT_MODEL.md**](docs/THREAT_MODEL.md).
 
@@ -312,6 +403,13 @@ make sbom        # bill of materials, read back out of the built binary
 
 CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + benchmark-fixture validation + a cross-compile matrix).
 
+**Release integrity.** Builds are reproducible — `CGO_ENABLED=0`, `-trimpath`,
+`-buildvcs=false` — and the nightly job rebuilds the same tree twice and compares
+the bytes, so the claim is tested rather than asserted. Each release carries
+`SHA256SUMS`, an SBOM read back out of the linked binary, an optional detached
+GPG signature, and a provenance attestation recording *where* an artefact was
+built and from which commit, not only what it hashes to.
+
 **Benchmarks.** `bench/` is a reproducible harness: each task is a directory with a prompt, an optional `setup.sh`, and a `verify.sh` whose exit status alone decides pass or fail — no LLM grades the outcome. Add tasks under `bench/tasks/`. CI can't score the suite (it needs a live model) but it does verify every fixture is still solvable, so a broken task is caught before a run scores zero for the wrong reason.
 
 **Releases** are cut with `build.sh`: linux `.deb`, windows `.exe`, an `SBOM.txt`, `SHA256SUMS`, and an optional detached GPG signature (`DARKCODE_SIGNING_KEY=<keyid> ./build.sh`). Builds are reproducible — `CGO_ENABLED=0 -trimpath -buildvcs=false` — so the same tag and toolchain produce identical bytes.
@@ -338,9 +436,14 @@ The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) cove
 - ✅ Prompt caching, credential rotation, benchmark harness, threat model
 - ✅ Semantic git history, predictive debugging, provenance citation
 - ✅ Language-server integration: real types, references and diagnostics
-- ✅ Debugger integration (Go, Python) — real runtime values at a breakpoint
-- ✅ Editor integration over ACP (Zed, VS Code, JetBrains)
+- ✅ Debugger integration (Go, Python, JavaScript) — real runtime values at a breakpoint
+- ✅ Editor integration over ACP (Zed, VS Code, JetBrains), with approvals in the editor
 - ✅ Structural context compression — repo shape at ~1/30th the tokens
+- ✅ Continuous health daemon under a hard CPU budget, with trends and alerts
+- ✅ Proof-gated editing — candidate patches ranked by the verifier, not by looks
+- ✅ Policy as code for tools, approvals and model choice
+- ✅ Build provenance attestation for release artefacts
+- 🔭 A published benchmark number
 - 🔭 SQLite-backed knowledge store for large graphs
 
 ---
