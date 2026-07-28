@@ -251,8 +251,8 @@ func (m *Manager) find(n int) (Entry, bool) {
 
 // Change describes one difference between a checkpoint and the working tree.
 type Change struct {
-	Path   string
-	Status string // "modified" | "created" | "deleted"
+	Path   string `json:"path"`
+	Status string `json:"status"` // "modified" | "created" | "deleted"
 }
 
 // Diff reports how the working tree differs from checkpoint n.
@@ -293,6 +293,78 @@ func (m *Manager) Diff(n int) ([]Change, Entry, error) {
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
 	return changes, e, nil
+}
+
+// contain resolves a workspace-relative path and refuses anything that lands
+// outside the workspace. Diff content is reachable over HTTP, so an unchecked
+// path here would be an arbitrary-file read rather than a mere bad request.
+// Symlinks are resolved before the check because a link inside the workspace
+// may still point out of it; a path that doesn't exist (a deleted file) can't
+// be resolved and is judged on its cleaned form alone.
+func (m *Manager) contain(rel string) (string, error) {
+	outside := func(p, root string) bool {
+		return p != root && !strings.HasPrefix(p+string(filepath.Separator), root+string(filepath.Separator))
+	}
+	abs := filepath.Join(m.workspace, rel)
+	if outside(abs, m.workspace) {
+		return "", fmt.Errorf("path outside workspace: %s", rel)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		root, rerr := filepath.EvalSymlinks(m.workspace)
+		if rerr != nil {
+			root = m.workspace
+		}
+		if outside(resolved, root) {
+			return "", fmt.Errorf("path outside workspace: %s", rel)
+		}
+	}
+	return abs, nil
+}
+
+// FileDiff returns the content of rel as captured in checkpoint n and as it
+// stands in the working tree now, so a caller can render what changed instead
+// of only naming the file. An empty before with a non-empty after means the
+// file was created after the checkpoint; the reverse means it was deleted.
+//
+// This is deliberately per-file: Entry.Files is a whole-workspace manifest, far
+// too large to attach to a listing, and content is only ever needed for the one
+// file a reader opened.
+func (m *Manager) FileDiff(n int, rel string) (before, after string, err error) {
+	e, ok := m.find(n)
+	if !ok {
+		return "", "", fmt.Errorf("no checkpoint %d", n)
+	}
+	abs, err := m.contain(rel)
+	if err != nil {
+		return "", "", err
+	}
+	hash, recorded := e.Files[rel]
+	if recorded {
+		if hash == "" {
+			return "", "", fmt.Errorf("%s was too large to capture in checkpoint %d", rel, e.ID)
+		}
+		data, rerr := os.ReadFile(m.blobPath(hash))
+		if rerr != nil {
+			return "", "", fmt.Errorf("read blob: %w", rerr)
+		}
+		before = string(data)
+	}
+	// Absent now means deleted since the checkpoint — a difference to report,
+	// not a failure.
+	data, rerr := os.ReadFile(abs)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return "", "", rerr
+	}
+	// Neither in the checkpoint nor on disk: the caller named a path that has
+	// no history and no present, which is a mistake rather than an empty diff.
+	// Reporting it as one would render as an unchanged file and hide the typo.
+	if !recorded && rerr != nil {
+		return "", "", fmt.Errorf("no such file in checkpoint %d or the workspace: %s", e.ID, rel)
+	}
+	if rerr == nil {
+		after = string(data)
+	}
+	return before, after, nil
 }
 
 // Rollback restores the workspace to checkpoint n. A snapshot of the current

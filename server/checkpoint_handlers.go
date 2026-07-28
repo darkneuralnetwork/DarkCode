@@ -55,6 +55,23 @@ func (s *Server) handleCheckpointDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+
+	// ?file= asks for one file's before/after content. Kept off the listing
+	// response on purpose: the list names every changed file, and attaching
+	// both versions of each would make a large run's diff enormous when a
+	// reader only ever opens one file at a time.
+	if file := r.URL.Query().Get("file"); file != "" {
+		before, after, ferr := s.kernel.Checkpoints().FileDiff(id, file)
+		if ferr != nil {
+			writeError(w, http.StatusNotFound, ferr.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id": id, "file": file, "before": before, "after": after,
+		})
+		return
+	}
+
 	changes, entry, err := s.kernel.Checkpoints().Diff(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())

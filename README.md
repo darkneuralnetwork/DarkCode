@@ -88,7 +88,7 @@ flowchart LR
     R3 -->|hit| A
 ```
 
-Every rung records whether it answered, so you can see exactly how many calls were avoided (`/cascade` in the GUI, `/api/cascade`). More usage → deeper knowledge → better retrieval → **fewer API calls → lower cost.**
+Every rung records whether it answered, so you can see exactly how many calls were avoided (**Cognition Cascade** in the GUI, `/api/cascade`). More usage → deeper knowledge → better retrieval → **fewer API calls → lower cost.**
 
 ---
 
