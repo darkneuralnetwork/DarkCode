@@ -4,21 +4,14 @@
     <h2 class="gradient-text" style="margin: 0; font-size: 24px;">Cognition</h2>
   </div>
 
-  <!-- TOP ROW: Projects & Project Intelligence -->
-  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
-    
-    <!-- Projects -->
-    <div class="glass-panel" id="cog-projects-panel" style="padding: 20px; display: flex; flex-direction: column;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">📁 Project Workspace</h3>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn-glow" id="proj-refresh" style="padding: 4px 10px; font-size: 11px;">Reload</button>
-          <button class="btn-glow primary" id="proj-new" style="padding: 4px 10px; font-size: 11px;">+ New</button>
-          <button class="fe-btn max-btn" data-target="cog-projects-panel">⛶</button>
-        </div>
-      </div>
-      <div class="proj-grid" id="proj-grid" style="flex: 1;"></div>
-    </div>
+  <!--
+    Project Intelligence, memory and the knowledge graph.
+
+    The project workspace used to sit here too. Blueprint owns it now, since a
+    project's plan and its files belong beside the run that changes them — and
+    two panels sharing an element id meant whichever loaded last won.
+  -->
+  <div class="cog-grid">
 
     <!-- Intelligence KPIs -->
     <div class="glass-panel" id="cog-intelligence-panel" style="padding: 20px; display: flex; flex-direction: column;">

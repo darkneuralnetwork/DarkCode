@@ -553,6 +553,7 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/checkpoints/diff", s.handleCheckpointDiff)
 	mux.HandleFunc("/api/rollback", s.handleRollback)
 	mux.HandleFunc("/api/runs", s.handleRunEvents)
+	mux.HandleFunc("/api/plan", s.handlePlan)
 	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/audit/recent", s.handleAuditRecent)
 	mux.HandleFunc("/api/audit/export", s.handleAuditExport)

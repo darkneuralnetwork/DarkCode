@@ -264,3 +264,24 @@ func (k *Kernel) handlePendingPlan(ctx context.Context, msg string) (string, boo
 		return preview, true, nil
 	}
 }
+
+// CurrentPlan returns the plan a viewer should be looking at, and whether it is
+// still awaiting a decision.
+//
+// Two graphs can be current at once and they mean different things: one waiting
+// at the approval gate, and the last one executed. A viewer wants the pending
+// one when it exists — that is the decision in front of the user — and the
+// executed one otherwise, so the panel shows what just happened rather than
+// going blank between runs.
+//
+// Unlike ConsumeApprovedPlan this does not clear anything. A read for display
+// must be repeatable; a panel that emptied the model by rendering it would show
+// the plan once and never again.
+func (k *Kernel) CurrentPlan() (g *plan.Graph, pending bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.pendingPlan != nil && time.Since(k.pendingPlan.created) <= pendingPlanTTL {
+		return k.pendingPlan.graph, true
+	}
+	return k.lastRunPlan, false
+}

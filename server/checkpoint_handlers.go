@@ -117,3 +117,25 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		"id": entry.ID, "turn": entry.Turn, "changes": changes, "count": len(changes),
 	})
 }
+
+// handlePlan serves the plan graph a viewer should be looking at: the one
+// awaiting approval when there is one, otherwise the last executed.
+//
+// The graph carries what a reader needs to judge a run — each task's goal, the
+// agent assigned, what it depends on, its acceptance criteria and its status —
+// and none of it was reachable from the browser, so the Blueprint tab could
+// only ever show a progress bar and a project list.
+func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	if s.kernel == nil {
+		writeError(w, http.StatusServiceUnavailable, "kernel not initialized")
+		return
+	}
+	g, pending := s.kernel.CurrentPlan()
+	if g == nil {
+		// No plan is a normal state — nothing has run yet. Saying so beats a
+		// 404 the caller has to interpret.
+		writeJSON(w, http.StatusOK, map[string]interface{}{"plan": nil, "pending": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"plan": g, "pending": pending})
+}
