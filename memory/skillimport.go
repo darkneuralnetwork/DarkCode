@@ -276,6 +276,12 @@ func (s *System) ImportSkills(dir string) ([]ImportedSkill, error) {
 			found[i].Skill = nil
 		}
 	}
+	// Writes are normally debounced, which is right for skills trickling out of
+	// finished runs and wrong here. An import is a deliberate bulk act whose
+	// whole point is that the skills are there afterwards; returning success
+	// while the file is still two seconds from being written means a caller that
+	// exits promptly — a script, a one-shot command — silently loses the lot.
+	s.FlushProcedural()
 	return found, nil
 }
 

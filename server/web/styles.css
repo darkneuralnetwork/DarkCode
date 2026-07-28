@@ -2290,3 +2290,13 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .cog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 24px; }
 .cognition-layout { min-width: 0; }
 .cognition-layout .glass-panel { min-width: 0; }
+
+/* Memory tiers. The grid reflows rather than fixing a column count: an inline
+   two-column rule here was overriding the shared card-grid style and was the
+   one place a narrow window still forced side-by-side panels. */
+.mem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); grid-auto-rows: minmax(100px, auto); gap: 14px; }
+.cog-mem-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+.mc-count { font-family: var(--font-mono); font-size: 10px; color: var(--text-mute); }
+.mc-sub { font-size: 11px; color: var(--text-mute); padding: 0 12px 8px; line-height: 1.5; }
+.mc-sub code { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.mem-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }

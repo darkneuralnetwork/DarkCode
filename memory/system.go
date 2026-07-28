@@ -480,6 +480,14 @@ func (s *System) SemanticAll() []*core.SemanticEntry {
 // PROCEDURAL MEMORY — reusable skills/workflows
 // ============================================================================
 
+// FlushProcedural writes procedural memory to disk immediately, for callers
+// that cannot wait out the debounce — a bulk import, or a process about to end.
+func (s *System) FlushProcedural() {
+	if s.proceduralWriter != nil {
+		s.proceduralWriter.FlushNow()
+	}
+}
+
 // ProceduralAdd stores a new skill.
 func (s *System) ProceduralAdd(skill *core.Skill) error {
 	s.mu.Lock()

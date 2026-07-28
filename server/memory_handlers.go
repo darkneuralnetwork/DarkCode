@@ -14,13 +14,17 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Keys name the tier they carry. They used to be aspirational — procedural
+	// skills were served as "user" and semantic facts as "architecture", so the
+	// interface labelled a list of learned procedures "User Memory", which is
+	// where nobody would look for them. Two further keys held a sentence
+	// explaining they were unimplemented, which reads to any consumer as a tier
+	// containing one string.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"conversation": s.memSystem.STMGet(),
-		"session":      []interface{}{"Session memory tracks short-term context across tasks (Beta)."},
-		"project":      s.memSystem.EpisodicGet(),
-		"workspace":    []interface{}{"Workspace context connects project memory to file system state (Beta)."},
-		"user":         s.memSystem.ProceduralAll(),
-		"architecture": s.memSystem.SemanticAll(),
+		"conversation": s.memSystem.STMGet(),        // short-term: this conversation
+		"episodic":     s.memSystem.EpisodicGet(),   // past tasks and their outcomes
+		"semantic":     s.memSystem.SemanticAll(),   // durable facts
+		"procedural":   s.memSystem.ProceduralAll(), // skills, learned and imported
 	})
 }
 

@@ -6,13 +6,11 @@ async function loadMemory() {
     const res = await fetch(API + "/api/memory");
     const data = await res.json();
     renderMemList("mem-conversation", "mem-conversation-count", data.conversation, "message");
-    renderMemList("mem-session", "mem-session-count", data.session, "state");
-    renderMemList("mem-project", "mem-project-count", data.project, "episode");
-    renderMemList("mem-workspace", "mem-workspace-count", data.workspace, "file");
-    renderMemList("mem-user", "mem-user-count", data.user, "preference");
-    renderMemList("mem-architecture", "mem-architecture-count", data.architecture, "fact");
+    renderMemList("mem-episodic", "mem-episodic-count", data.episodic, "episode");
+    renderMemList("mem-semantic", "mem-semantic-count", data.semantic, "fact");
+    renderMemList("mem-procedural", "mem-procedural-count", data.procedural, "skill");
   } catch (err) {
-    ["conversation","session","project","workspace","user","architecture"].forEach((k) => {
+    ["conversation","episodic","semantic","procedural"].forEach((k) => {
       const el = $("#mem-" + k); if (el) el.innerHTML = `<div class="mem-empty">Failed: ${esc(err.message)}</div>`;
     });
   }

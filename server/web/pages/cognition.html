@@ -48,41 +48,36 @@
   </div>
 
   <!-- MIDDLE ROW: Memory & Knowledge Graph -->
-  <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+  <div class="cog-mem-row">
 
     <!-- 4-Tier Memory -->
     <div class="glass-panel" id="cog-memory-panel" style="padding: 20px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🧠 6-Tier Cognitive Architecture</h3>
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🧠 Memory</h3>
         <div style="display: flex; gap: 8px;">
           <button class="btn-glow" id="mem-refresh" style="padding: 4px 10px; font-size: 11px;">Sync Memory</button>
           <button class="fe-btn max-btn" data-target="cog-memory-panel">⛶</button>
         </div>
       </div>
-      <div class="mem-grid" id="mem-grid" style="grid-template-columns: 1fr 1fr; grid-auto-rows: minmax(100px, auto);">
+      <div class="mem-grid" id="mem-grid">
         <div class="mem-card glass-panel" data-type="conversation">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">💬</span> <h3>Conversation</h3></div></div>
+          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">💬</span> <h3>Conversation</h3></div><span class="mc-count" id="mem-conversation-count"></span></div>
           <div class="mem-card-body custom-scrollbar" id="mem-conversation"></div>
         </div>
-        <div class="mem-card glass-panel" data-type="session">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">⚡</span> <h3>Session</h3></div></div>
-          <div class="mem-card-body custom-scrollbar" id="mem-session"></div>
+        <div class="mem-card glass-panel" data-type="episodic">
+          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">📜</span> <h3>Episodic</h3></div><span class="mc-count" id="mem-episodic-count"></span></div>
+          <div class="mc-sub">Past tasks and how they turned out.</div>
+          <div class="mem-card-body custom-scrollbar" id="mem-episodic"></div>
         </div>
-        <div class="mem-card glass-panel" data-type="project">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">📁</span> <h3>Project</h3></div></div>
-          <div class="mem-card-body custom-scrollbar" id="mem-project"></div>
+        <div class="mem-card glass-panel" data-type="semantic">
+          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">🗂</span> <h3>Semantic</h3></div><span class="mc-count" id="mem-semantic-count"></span></div>
+          <div class="mc-sub">Durable facts, each with where it came from.</div>
+          <div class="mem-card-body custom-scrollbar" id="mem-semantic"></div>
         </div>
-        <div class="mem-card glass-panel" data-type="workspace">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">🏢</span> <h3>Workspace</h3></div></div>
-          <div class="mem-card-body custom-scrollbar" id="mem-workspace"></div>
-        </div>
-        <div class="mem-card glass-panel" data-type="user">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">👤</span> <h3>User</h3></div></div>
-          <div class="mem-card-body custom-scrollbar" id="mem-user"></div>
-        </div>
-        <div class="mem-card glass-panel" data-type="architecture">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">🏛️</span> <h3>Architecture</h3></div></div>
-          <div class="mem-card-body custom-scrollbar" id="mem-architecture"></div>
+        <div class="mem-card glass-panel" data-type="procedural">
+          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">🛠</span> <h3>Procedural</h3></div><span class="mc-count" id="mem-procedural-count"></span></div>
+          <div class="mc-sub">Skills — learned from runs here, or imported with <code>/skills import</code>.</div>
+          <div class="mem-card-body custom-scrollbar" id="mem-procedural"></div>
         </div>
       </div>
     </div>

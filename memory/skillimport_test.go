@@ -332,3 +332,30 @@ func TestImportedSkillStartsNeutral(t *testing.T) {
 		t.Errorf("SuccessRate = %v; an untried skill is neither proven nor disproven", s.SuccessRate)
 	}
 }
+
+// An import must be on disk when it returns.
+//
+// Writes are debounced, which suits skills trickling out of finished runs and
+// not a deliberate bulk import: a caller that exits promptly — a script, a
+// one-shot command — would report success and lose everything.
+func TestImportIsDurableImmediately(t *testing.T) {
+	dir := t.TempDir()
+	sys, err := NewSystem(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeSkill(t, root, "systematic-debugging", wellFormed)
+	if _, err := sys.ImportSkills(root); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the file straight off disk without waiting for any debounce.
+	blob, err := os.ReadFile(filepath.Join(dir, "procedural.json"))
+	if err != nil {
+		t.Fatalf("procedural.json was not written: %v", err)
+	}
+	if !strings.Contains(string(blob), "systematic-debugging") {
+		t.Errorf("the imported skill is not in the persisted file")
+	}
+}
