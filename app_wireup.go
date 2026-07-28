@@ -34,6 +34,7 @@ import (
 )
 
 func (a *AppRunner) WireUp() {
+	a.loadPolicy()
 	a.initObservabilityAndSecurity()
 	memDir := a.initMemoryAndProjects()
 	// Router must exist before tools: RegisterBuiltinTools hands it to the web
@@ -318,7 +319,7 @@ func (a *AppRunner) initRouterAndModels() {
 	for _, mc := range a.Cfg.Models {
 		t := core.ParseModelTier(mc.Tier)
 		client := createClient(mc)
-		a.Router.RegisterModel(t, llm.WrapCloud(client, mc.Provider, mc.Model), mc.Model)
+		a.registerModel(t, llm.WrapCloud(client, mc.Provider, mc.Model), mc.Provider, mc.Model)
 		a.Router.SetModelRole(mc.Model, mc.Role)
 		pingModelAsync(client, mc.Model)
 	}
@@ -332,7 +333,7 @@ func (a *AppRunner) initRouterAndModels() {
 		primaryClient = createClient(config.ModelConfig{Provider: a.Cfg.Provider, BaseURL: a.Cfg.BaseURL, APIKey: a.Cfg.APIKey, Model: a.Cfg.Model})
 		if endpointUsable(a.Cfg.Provider, a.Cfg.BaseURL, a.Cfg.Model) {
 			tier := core.PrimaryTierForMode(routingMode)
-			a.Router.RegisterModel(tier, llm.WrapCloud(primaryClient, a.Cfg.Provider, a.Cfg.Model), a.Cfg.Model)
+			a.registerModel(tier, llm.WrapCloud(primaryClient, a.Cfg.Provider, a.Cfg.Model), a.Cfg.Provider, a.Cfg.Model)
 			a.Router.MarkPrimary(a.Cfg.Model)
 			pingModelAsync(primaryClient, a.Cfg.Model)
 		}
@@ -353,7 +354,7 @@ func (a *AppRunner) initRouterAndModels() {
 		// registered, so the preflight can report that no model is available.
 		if primaryClient != nil && endpointUsable(a.Cfg.Provider, a.Cfg.BaseURL, fallbackModel) {
 			tier := core.PrimaryTierForMode(routingMode)
-			a.Router.RegisterModel(tier, llm.WrapCloud(primaryClient, a.Cfg.Provider, fallbackModel), fallbackModel)
+			a.registerModel(tier, llm.WrapCloud(primaryClient, a.Cfg.Provider, fallbackModel), a.Cfg.Provider, fallbackModel)
 			a.Router.MarkPrimary(fallbackModel)
 			pingModelAsync(primaryClient, fallbackModel)
 		}
@@ -540,7 +541,7 @@ func (a *AppRunner) loadLocalLLM(routingMode core.RoutingMode) core.LLMClient {
 		// EmbeddedClient's model-swap guard instead of bypassing it via the
 		// raw inner client.
 		wrapped := llm.WithRetry(emb, llm.DefaultRetryOpts)
-		a.Router.RegisterModel(tier, wrapped, m.ID)
+		a.registerModel(tier, wrapped, localProviderID, m.ID)
 		if loaded == nil {
 			// Raw client, NOT the retry wrapper: embedding calls sit on the
 			// recall hot path and must fail fast to the keyword fallback,
@@ -548,7 +549,7 @@ func (a *AppRunner) loadLocalLLM(routingMode core.RoutingMode) core.LLMClient {
 			loaded = emb
 		}
 		if isPrimary {
-			a.Router.RegisterModel(core.PrimaryTierForMode(routingMode), wrapped, m.ID)
+			a.registerModel(core.PrimaryTierForMode(routingMode), wrapped, localProviderID, m.ID)
 			a.Router.MarkPrimary(m.ID)
 			// Hot-swap the compressor onto the local model so STM compression
 			// has a client when no cloud primary/fast tier exists yet.
@@ -647,6 +648,7 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 
 	gate := a.Kernel.Gate()
 	gate.SetDenyRules(a.Cfg.DenyRules)
+	gate.SetAllowedTools(a.Policy.Tools.AllowOnly)
 	gate.SetAskTimeout(time.Duration(a.Cfg.ApprovalTimeoutSeconds) * time.Second)
 	// Smart approvals: ask the auxiliary model whether a flagged low-risk call
 	// is routine. Anything other than a clear "safe" — including an error, a
@@ -714,4 +716,59 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	gate.SetApprover(modeApprover.Approve)
 	a.Kernel.SetModeApprover(modeApprover)
 	a.Server = server.NewServer(a.Cfg, a.Registry, a.MemSystem, a.Emitter, a.Kernel, serverApprover, a.ProjectStore, a.SourceMgr)
+}
+
+// localProviderID names the built-in provider that serves models running on
+// this machine, so a policy asking for local-only can recognise them.
+const localProviderID = "embedded"
+
+// registerModel adds a model to the router unless policy forbids it.
+//
+// The check sits at registration rather than at routing: a model that never
+// enters the router cannot be reached by any path — not the tier lookup, not
+// consensus fan-out, not a role selector — so there is one place to get right
+// instead of one per call site.
+//
+// A refusal is logged. "No model available for tier reasoning" is a baffling
+// thing to read when the cause is a policy two directories away.
+func (a *AppRunner) registerModel(tier core.ModelTier, client core.LLMClient, provider, model string) {
+	if ok, why := a.Policy.ModelAllowed(provider, model); !ok {
+		fmt.Fprintf(os.Stderr, "policy: not registering %s/%s — %s\n", provider, model, why)
+		return
+	}
+	a.Router.RegisterModel(tier, client, model)
+}
+
+// policyFileName is the policy read from the workspace, then from the install
+// root. A repository can tighten what the install permits; it can never widen
+// it, because Apply only ever moves a setting in the restrictive direction.
+const policyFileName = "policy.json"
+
+// loadPolicy reads the restriction set and folds it into the configuration.
+//
+// It runs before anything else in WireUp, since every later step reads the
+// config it tightens. A malformed policy is fatal rather than ignored: the
+// difference between "no policy" and "a policy nobody could parse" is the
+// difference between an install that was never restricted and one that thinks
+// it is.
+func (a *AppRunner) loadPolicy() {
+	paths := []string{filepath.Join(".darkcode", policyFileName)}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".darkcode", policyFileName))
+	}
+
+	for _, path := range paths {
+		p, err := config.LoadPolicy(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if p.Empty() {
+			continue
+		}
+		a.Policy = p
+		p.Apply(a.Cfg)
+		fmt.Fprintf(os.Stderr, "policy: %s applied\n", path)
+		return
+	}
 }

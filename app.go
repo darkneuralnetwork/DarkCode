@@ -40,8 +40,11 @@ type AppRunner struct {
 	Checkpoints  *checkpoint.Manager
 	LSP          *intelligence.LSPClient
 	HealthDaemon *memory.HealthDaemon
-	Patterns     *memory.PatternLibrary
-	Server       *server.Server
+	// Policy is the restriction set applied on top of Cfg. Empty when no
+	// policy file is present, which is the common case.
+	Policy   config.Policy
+	Patterns *memory.PatternLibrary
+	Server   *server.Server
 
 	PluginLoader *plugin.Loader
 	PluginHost   *plugin.Host

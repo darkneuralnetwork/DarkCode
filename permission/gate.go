@@ -149,6 +149,9 @@ type Gate struct {
 
 	// denyRules refuse matching calls ahead of every permissive path.
 	denyRules []DenyRule
+	// allowedTools, when non-empty, is a whitelist; anything unlisted is
+	// refused regardless of level or prior session approval.
+	allowedTools []string
 
 	// askTimeout bounds how long an approval prompt may block. On expiry the
 	// call is denied (fail closed) rather than left hanging forever.
@@ -187,6 +190,35 @@ func (g *Gate) SetDenyRules(rules []string) {
 	g.mu.Lock()
 	g.denyRules = ParseDenyRules(rules)
 	g.mu.Unlock()
+}
+
+// SetAllowedTools installs an allow-list: once set, any tool not named is
+// refused. Names support a trailing "*". An empty list removes the list, which
+// is the default — most installs want deny rules, not a whitelist.
+//
+// This is a second, independent refusal rather than an inversion of the deny
+// rules. Both are checked, and either one refusing is enough: an allow-list
+// that silently overrode a deny rule would turn "permit these tools" into
+// "permit these tools even the ones I banned".
+func (g *Gate) SetAllowedTools(names []string) {
+	g.mu.Lock()
+	g.allowedTools = append([]string(nil), names...)
+	g.mu.Unlock()
+}
+
+// notAllowed reports whether an allow-list is in force and excludes this tool.
+func (g *Gate) notAllowed(tool string) bool {
+	if len(g.allowedTools) == 0 {
+		return false
+	}
+	for _, pattern := range g.allowedTools {
+		if pattern == "*" ||
+			(strings.HasSuffix(pattern, "*") && strings.HasPrefix(tool, strings.TrimSuffix(pattern, "*"))) ||
+			pattern == tool {
+			return false
+		}
+	}
+	return true
 }
 
 // SetAskTimeout bounds how long an approval prompt may block before the call
@@ -310,6 +342,26 @@ func (g *Gate) Stats() Stats {
 // denied, the caller should skip execution and surface a "permission denied"
 // result carrying the feedback.
 func (g *Gate) Check(tool string, args map[string]interface{}) (bool, ApprovalRequest, string) {
+	// An allow-list is checked with the deny rules, ahead of the relaxed fast
+	// path, the session cache and the approver, for the same reason they are: a
+	// whitelist that a relaxed level or an earlier "allow for session" could
+	// step around would not be a whitelist.
+	g.mu.Lock()
+	excluded := g.notAllowed(tool)
+	g.mu.Unlock()
+	if excluded {
+		req := ApprovalRequest{Tool: tool, Args: args, Timestamp: time.Now(), Risk: core.RiskHigh,
+			Summary: "not in the permitted tool list"}
+		g.mu.Lock()
+		g.deniedCount++
+		onDec := g.onDecision
+		g.mu.Unlock()
+		if onDec != nil {
+			onDec(req, DecisionDeny)
+		}
+		return false, req, "refused: " + strconv.Quote(tool) + " is not in the permitted tool list"
+	}
+
 	// Deny rules come first — ahead of the relaxed fast path, the session
 	// cache, and the approver — so a configured refusal cannot be overridden
 	// by how the session was set up or by an earlier "allow for session".
