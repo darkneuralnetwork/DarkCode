@@ -22,7 +22,13 @@ VERSION="${1:-1.3.1}"
 # independently.
 #
 # Defaulting to the commit date rather than the clock means the same commit
-# yields the same bytes on any machine, on any day.
+# yields the same bytes on any day.
+#
+# Reproducibility is over source *and toolchain*, not source alone: the Go
+# compiler is part of the input, so a different version produces different
+# object code however clean the rest of the build is. CI pins itself to the
+# version in go.mod for exactly this reason. To reproduce a published release,
+# match the toolchain recorded in its SBOM.
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
   SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct 2>/dev/null || echo 0)"
 fi

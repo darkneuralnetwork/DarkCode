@@ -170,12 +170,24 @@ Four independent checks, each answering a different question.
 sha256sum -c SHA256SUMS
 ```
 
-**Did the maintainer vouch for them?** Only when a signature was produced
-(`DARKCODE_SIGNING_KEY` set at build time):
+**Did the maintainer vouch for them?** When `SHA256SUMS.asc` is present:
 
 ```sh
+gpg --import SIGNING-KEY.asc          # once, from the repository root
 gpg --verify SHA256SUMS.asc SHA256SUMS
 ```
+
+The signing key is `975E171B 9C23AEA5 5AC1B548 7DE09494 F7C6430E`. Check the
+fingerprint against a source other than this repository before trusting it —
+a key published alongside the thing it signs proves only that both came from
+whoever controls the repository.
+
+The signature covers `SHA256SUMS`, so one verification carries every artifact:
+check the signature, then check the hashes.
+
+This is a different claim from the build attestation. The attestation says
+which workflow, at which commit, on which runner produced a file. The signature
+says a person vouched for it. Neither substitutes for the other.
 
 **Where did they come from?** A signature says somebody with the key vouched
 for a file; it says nothing about what built it. Provenance records the commit,
