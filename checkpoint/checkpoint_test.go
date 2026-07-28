@@ -254,3 +254,77 @@ func TestDottedProjectDirsAreCheckpointed(t *testing.T) {
 		t.Errorf("ci.yml = %q, want the checkpointed content", got)
 	}
 }
+
+// A traversal names a path no checkpoint recorded, which is exactly the branch
+// that treats "unrecorded" as "created afterwards, so delete it". Rolling one
+// back must be refused rather than reaching outside the workspace.
+func TestRollbackFileRefusesPathsOutsideWorkspace(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "a.txt", "a1")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "victim.txt")
+	if err := os.WriteFile(outside, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(ws, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.RollbackFile(1, rel); err == nil {
+		t.Errorf("RollbackFile(%q) succeeded, want a containment error", rel)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("file outside the workspace was deleted: %v", err)
+	}
+}
+
+// The lexical check alone is not enough: a symlink inside the workspace can
+// point out of it while the joined path still looks contained.
+func TestRollbackFileRefusesSymlinkEscape(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "a.txt", "a1")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+
+	outsideDir := t.TempDir()
+	victim := filepath.Join(outsideDir, "victim.txt")
+	if err := os.WriteFile(victim, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(ws, "link")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	if err := m.RollbackFile(1, "link/victim.txt"); err == nil {
+		t.Error("RollbackFile through a symlink succeeded, want a containment error")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("file outside the workspace was deleted through a symlink: %v", err)
+	}
+}
+
+// Containment must not break the ordinary case it guards: restoring a file the
+// checkpoint recorded as deleted writes a path that does not exist yet, so
+// resolution has to tolerate a missing leaf.
+func TestRollbackFileRestoresDeletedFile(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "nested/gone.txt", "original")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(ws, "nested")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.RollbackFile(1, "nested/gone.txt"); err != nil {
+		t.Fatalf("RollbackFile: %v", err)
+	}
+	if got := read(t, ws, "nested/gone.txt"); got != "original" {
+		t.Errorf("gone.txt = %q, want it restored", got)
+	}
+}
