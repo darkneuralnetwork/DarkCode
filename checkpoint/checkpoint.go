@@ -308,7 +308,14 @@ func (m *Manager) Rollback(n int) (Entry, []Change, error) {
 		return Entry{}, nil, fmt.Errorf("pre-rollback snapshot: %w", err)
 	}
 	for _, c := range changes {
-		abs := filepath.Join(m.workspace, c.Path)
+		// Paths from walk() are relative to the workspace by construction, but
+		// "deleted" entries come from the manifest, which round-trips through
+		// log.json on disk — containment here keeps a tampered log from
+		// redirecting a restore outside the workspace.
+		abs, err := m.contain(c.Path)
+		if err != nil {
+			return Entry{}, nil, err
+		}
 		if c.Status == "created" {
 			if err := os.Remove(abs); err != nil {
 				return Entry{}, nil, err
@@ -322,6 +329,57 @@ func (m *Manager) Rollback(n int) (Entry, []Change, error) {
 	return e, changes, nil
 }
 
+// contain resolves a workspace-relative path to an absolute one, refusing
+// anything that lands outside the workspace.
+//
+// Rollback paths arrive from the HTTP API, where a name like
+// "../../../etc/hosts" is unrecorded in every checkpoint — and the unrecorded
+// branch of RollbackFile deletes what it is handed. Containment is what keeps
+// an undo button from becoming an arbitrary-delete primitive.
+//
+// The check runs twice. The lexical pass catches "..", which filepath.Join has
+// already collapsed. The second pass resolves symlinks, because a link inside
+// the workspace pointing out of it is lexically innocent. A path that does not
+// exist yet is legitimate here (restoring a deleted file writes a missing
+// path), so resolution falls back to the nearest existing ancestor; the
+// remaining components are ".."-free after the Join and cannot escape it.
+func (m *Manager) contain(rel string) (string, error) {
+	abs := filepath.Join(m.workspace, rel)
+	if !within(m.workspace, abs) {
+		return "", fmt.Errorf("path %q escapes the workspace", rel)
+	}
+	// The workspace itself may be reached through a symlink (/var on macOS,
+	// most temp dirs), so compare resolved against resolved.
+	root, err := filepath.EvalSymlinks(m.workspace)
+	if err != nil {
+		root = m.workspace
+	}
+	for probe := abs; ; {
+		resolved, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			if !within(root, resolved) {
+				return "", fmt.Errorf("path %q escapes the workspace via a symlink", rel)
+			}
+			break
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break // reached the filesystem root without finding anything
+		}
+		probe = parent
+	}
+	return abs, nil
+}
+
+// within reports whether path is root or sits beneath it. Both must be clean
+// and absolute; the separator guards against /work matching /workspace-other.
+func within(root, path string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
 // RollbackFile restores a single path from checkpoint n, leaving the rest of
 // the workspace untouched.
 func (m *Manager) RollbackFile(n int, rel string) error {
@@ -329,10 +387,14 @@ func (m *Manager) RollbackFile(n int, rel string) error {
 	if !ok {
 		return fmt.Errorf("no checkpoint %d", n)
 	}
+	abs, err := m.contain(rel)
+	if err != nil {
+		return err
+	}
 	hash, recorded := e.Files[rel]
 	if !recorded {
 		// The file did not exist at that point; undoing means removing it.
-		err := os.Remove(filepath.Join(m.workspace, rel))
+		err := os.Remove(abs)
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -341,7 +403,7 @@ func (m *Manager) RollbackFile(n int, rel string) error {
 	if hash == "" {
 		return fmt.Errorf("%s was too large to capture in checkpoint %d", rel, e.ID)
 	}
-	return m.restore(filepath.Join(m.workspace, rel), hash)
+	return m.restore(abs, hash)
 }
 
 func (m *Manager) restore(abs, hash string) error {
