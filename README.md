@@ -398,7 +398,7 @@ make ci          # fmt-check + vet + build + race tests (what CI runs)
 make test        # unit tests
 make bench       # run the benchmark suite against the built binary
 make sbom        # bill of materials, read back out of the built binary
-./build.sh 1.3.0 # cross-compile release artifacts into dist/
+./build.sh 1.3.1 # cross-compile release artifacts into dist/
 ```
 
 CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + benchmark-fixture validation + a cross-compile matrix).
