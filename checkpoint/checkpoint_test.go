@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -326,5 +327,112 @@ func TestRollbackFileRestoresDeletedFile(t *testing.T) {
 	}
 	if got := read(t, ws, "nested/gone.txt"); got != "original" {
 		t.Errorf("gone.txt = %q, want it restored", got)
+	}
+}
+
+// FileDiff must report both sides of a change, and must express creation and
+// deletion as an empty side rather than as an error — a created file has no
+// "before" and a deleted one has no "after", but both are differences a
+// reader needs to see.
+func TestFileDiffReportsBothSides(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "keep.txt", "original")
+	write(t, ws, "gone.txt", "delete me later")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ws, "keep.txt", "modified")
+	write(t, ws, "added.txt", "brand new")
+	if err := os.Remove(filepath.Join(ws, "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, rel, before, after string }{
+		{"modified", "keep.txt", "original", "modified"},
+		{"created", "added.txt", "", "brand new"},
+		{"deleted", "gone.txt", "delete me later", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after, err := m.FileDiff(1, tc.rel)
+			if err != nil {
+				t.Fatalf("FileDiff: %v", err)
+			}
+			if before != tc.before {
+				t.Errorf("before = %q, want %q", before, tc.before)
+			}
+			if after != tc.after {
+				t.Errorf("after = %q, want %q", after, tc.after)
+			}
+		})
+	}
+}
+
+// FileDiff is reachable over HTTP, so a traversal would be an arbitrary-file
+// read. Escaping paths must be refused rather than served.
+func TestFileDiffRefusesPathsOutsideWorkspace(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "in.txt", "inside")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(filepath.Dir(ws), "secret.txt")
+	if err := os.WriteFile(secret, []byte("top secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rel := range []string{"../secret.txt", "sub/../../secret.txt"} {
+		if _, after, err := m.FileDiff(1, rel); err == nil {
+			t.Errorf("FileDiff(%q) = %q, want a refusal", rel, after)
+		}
+	}
+}
+
+// A symlink living inside the workspace can still point out of it, so
+// containment has to be judged after resolution, not before.
+func TestFileDiffRefusesSymlinkEscape(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "in.txt", "inside")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(filepath.Dir(ws), "secret.txt")
+	if err := os.WriteFile(secret, []byte("top secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(ws, "link.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, after, err := m.FileDiff(1, "link.txt"); err == nil {
+		t.Errorf("FileDiff through symlink = %q, want a refusal", after)
+	}
+}
+
+// An oversize file is recorded as present-but-uncaptured; asking for its
+// content must say so plainly instead of reporting an empty "before" that
+// would render as a whole-file deletion.
+func TestFileDiffReportsUncapturedFile(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "big.bin", strings.Repeat("x", maxFileSize+1))
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := m.FileDiff(1, "big.bin")
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Errorf("err = %v, want a 'too large' explanation", err)
+	}
+}
+
+// A path with neither a recorded version nor a file on disk is a mistake, not
+// an empty diff — reporting it as one would render as "unchanged" and hide the
+// error.
+func TestFileDiffRejectsUnknownPath(t *testing.T) {
+	m, ws := newTestManager(t)
+	write(t, ws, "real.txt", "content")
+	if _, err := m.Snapshot("test", "base"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.FileDiff(1, "never/existed.txt"); err == nil {
+		t.Error("FileDiff on an unknown path succeeded, want an error")
 	}
 }

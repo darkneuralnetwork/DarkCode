@@ -81,6 +81,9 @@ const NAV_META = {
   registry:   { ico: "🔧",  label: "Tool Registry" },
   cognition:  { ico: "🧠",  label: "Cognition" },
   telemetry:  { ico: "📊",  label: "Telemetry" },
+  replay:     { ico: "⏱",  label: "Execution Replay" },
+  changes:    { ico: "↩",  label: "Changes & Rollback" },
+  cascade:    { ico: "💸",  label: "Cognition Cascade" },
   config:     { ico: "⚙️",  label: "Configurations" },
   // Legacy granular tabs (kept for command-palette / fallback compatibility).
   chat:       { ico: "💬",  label: "Chat Console" },
@@ -152,6 +155,9 @@ function switchTab(tab) {
     registry: "Tool Registry",
     cognition: "Cognition",
     telemetry: "Telemetry",
+    replay: "Execution Replay",
+    changes: "Changes & Rollback",
+    cascade: "Cognition Cascade",
     config: "Configurations"
   };
   const meta = NAV_META[tab] || { ico: "", label: titles[tab] || tab };
