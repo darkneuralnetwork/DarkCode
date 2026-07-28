@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -78,7 +79,47 @@ func TestWebHandlerServesVendoredAssetsOffline(t *testing.T) {
 	fr := httptest.NewRequest("GET", "/fonts/fonts.css", nil)
 	fw := httptest.NewRecorder()
 	h.ServeHTTP(fw, fr)
-	if strings.Contains(fw.Body.String(), "gstatic.com") {
+	css := fw.Body.String()
+	if strings.Contains(css, "gstatic.com") {
 		t.Error("fonts.css still references gstatic.com — woff2 URLs were not localized")
+	}
+
+	// Every font the CSS names must actually be served.
+	//
+	// Checking only that fonts.css exists left a hole big enough to walk
+	// through: the stylesheet was committed while the .woff2 files it points
+	// at were not, so a fresh clone answered 404 for all thirteen and the
+	// browser quietly fell back to a system font. Nothing failed, the test
+	// stayed green, and the offline guarantee was gone.
+	faces := regexp.MustCompile(`url\(([^)]+\.woff2)\)`).FindAllStringSubmatch(css, -1)
+	if len(faces) == 0 {
+		t.Fatal("fonts.css names no woff2 files — the vendoring step did not run")
+	}
+	// Checking the status code is not enough. webHandler falls back to
+	// index.html for any path it cannot find, so a missing font answers 200
+	// with a page of HTML — the browser gets markup where it expected a
+	// typeface, fails quietly, and substitutes a system font. The only honest
+	// test is whether the bytes are a font.
+	seen := map[string]bool{}
+	for _, m := range faces {
+		ref := strings.Trim(m[1], `"'`)
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", ref, nil))
+		body := w.Body.Bytes()
+		if w.Code != http.StatusOK {
+			t.Errorf("font %s: status %d", ref, w.Code)
+			continue
+		}
+		// woff2 files begin with the signature "wOF2".
+		if len(body) < 4 || string(body[:4]) != "wOF2" {
+			t.Errorf("font %s: served %d bytes that are not woff2 — referenced by "+
+				"fonts.css but not embedded, so the SPA fallback returned index.html",
+				ref, len(body))
+		}
 	}
 }
