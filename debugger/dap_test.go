@@ -133,12 +133,21 @@ func TestInspectRejectsUnsupportedLanguage(t *testing.T) {
 }
 
 // A missing adapter must name what to install rather than fail obscurely.
+//
+// Asserting on one exact phrase made this test agree with whatever the message
+// happened to say. On a machine with js-debug installed it skips, so a reworded
+// error looked fine locally and broke every runner that did not have it. It now
+// checks what the reader actually needs: which component, and how to point at
+// an existing copy.
 func TestMissingAdapterIsExplicit(t *testing.T) {
 	_, err := launchDAP(context.Background(), "javascript", Options{Dir: t.TempDir()})
 	if err == nil {
-		t.Skip("js-debug-adapter happens to be installed")
+		t.Skip("a JavaScript debug adapter is installed here")
 	}
-	if !strings.Contains(err.Error(), "not installed") {
-		t.Errorf("error should say what is missing, got: %v", err)
+	msg := err.Error()
+	for _, want := range []string{"js-debug", "DARKCODE_JS_DEBUG"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the error should mention %q so the reader knows what to do: %v", want, msg)
+		}
 	}
 }

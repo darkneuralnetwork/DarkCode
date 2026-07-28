@@ -12,9 +12,8 @@ title: DarkCode
 description: A local-first coding agent that understands your repository structurally.
 theme: jekyll-theme-primer
 
-# The response to the competitive report is working material, not documentation.
+# Working notes and raw assets are not pages.
 exclude:
-  - REPORT_RESPONSE.md
   - images/
 
 # Relative links between docs keep working on GitHub and on the site.

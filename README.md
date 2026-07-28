@@ -418,9 +418,15 @@ built and from which commit, not only what it hashes to.
 
 ## 📚 Documentation
 
-The docs are published at **https://darkneuralnetwork.github.io/darkcode/** —
-the same markdown files as below, rendered. There is no separate documentation
-source, so a page cannot go stale relative to the repository.
+| Page | What it covers |
+| :-- | :-- |
+| [Policy](docs/POLICY.md) | Restricting tools, approvals and model choice from one file |
+| [Threat model](docs/THREAT_MODEL.md) | What is defended against, what is not, and how to verify a release |
+| [Benchmarks](docs/BENCHMARK.md) | Running the suite and what a run costs |
+
+These are the same files a documentation site would serve — `docs/` carries a
+Jekyll config, so enabling GitHub Pages publishes them as-is with no build step
+and no second source of truth to drift.
 
 
 The [**DarkCode Wiki**](https://github.com/darkneuralnetwork/DarkCode/wiki) covers everything in depth — installation, first-run setup, every concept, the full CLI and configuration reference, the security model, local-LLM tuning, the HTTP API, and troubleshooting.

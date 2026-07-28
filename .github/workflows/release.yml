@@ -82,7 +82,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.v.outputs.version }}" \
-            --title "v${{ steps.v.outputs.version }}" \
-            --generate-notes \
-            dist/*
+          TAG="v${{ steps.v.outputs.version }}"
+          # A release may already exist when the tag was cut by hand. That is a
+          # normal way to ship, and it should not turn the run red — the point
+          # of this job is that the artifacts are built here, reproducibly and
+          # attested, so uploading them onto whatever release exists is the
+          # outcome either way.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists; uploading artifacts to it"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes dist/*
+          fi
