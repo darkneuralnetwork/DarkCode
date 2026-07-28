@@ -11,6 +11,25 @@ set -euo pipefail
 
 APP="darkcode"
 VERSION="${1:-1.2.2}"
+
+# SOURCE_DATE_EPOCH pins every timestamp that would otherwise be "now".
+#
+# The Go binaries are already reproducible — -trimpath and -buildvcs=false see
+# to that — but the artifacts around them were not: dpkg-deb stamps each file
+# with its mtime and the SBOM recorded the moment it was written. Two builds of
+# the same commit therefore produced identical binaries inside .deb files with
+# different checksums, which quietly made SHA256SUMS impossible to verify
+# independently.
+#
+# Defaulting to the commit date rather than the clock means the same commit
+# yields the same bytes on any machine, on any day.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+  SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct 2>/dev/null || echo 0)"
+fi
+export SOURCE_DATE_EPOCH
+BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+  || date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+  || echo unknown)"
 OUT="dist"
 LDFLAGS="-s -w -X main.Version=${VERSION}"
 MAINTAINER="Team Dark Neural Network <contact@darkneuralnetwork.com>"
@@ -41,6 +60,10 @@ Maintainer: ${MAINTAINER}
 Description: DarkCode AI Agent Platform
  A local-first, modular autonomous AI agent platform for software engineering.
 EOF
+  # Every file gets the same timestamp, so the archive is a function of its
+  # contents alone. Without this the .deb changes on every run even though the
+  # binary inside it does not.
+  find "${stage}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
   dpkg-deb --build --root-owner-group "${stage}" \
     "${OUT}/${APP}-v${VERSION}-linux-${darch}.deb" >/dev/null
   rm -rf "${stage}"
@@ -67,7 +90,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
   -trimpath -buildvcs=false -ldflags="${LDFLAGS}" -o "${OUT}/.sbom-probe" .
 {
   echo "# SBOM for ${APP} v${VERSION}"
-  echo "# Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) from the linked binary."
+  echo "# Generated ${BUILD_DATE} from the linked binary (source date, not build time)."
   echo "# Verify with: go version -m <binary>"
   echo
   go version -m "${OUT}/.sbom-probe"
