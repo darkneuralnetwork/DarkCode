@@ -206,7 +206,16 @@ type EpisodicEntry struct {
 	LessonsLearned []string  `json:"lessons_learned,omitempty"`
 	Vector         []float32 `json:"vector,omitempty"`
 	InjectedRecall string    `json:"injected_recall,omitempty"`
-	Timestamp      time.Time `json:"timestamp"`
+	// Replay is the answer-cache admission class, decided when the entry is
+	// written (memory.ClassifyReplay): stable | volatile | workspace | never.
+	// Deciding it at write time is the point — a reader comparing the new
+	// question against the old one can tell whether they are the same request,
+	// but not whether the stored answer is still true. Empty on entries
+	// written before this field existed; those are re-classified on read
+	// rather than trusted, because they were written by the code that had the
+	// bug this field exists to fix.
+	Replay    string    `json:"replay,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // ============================================================================

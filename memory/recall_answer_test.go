@@ -72,13 +72,34 @@ func TestBestRecallAnswer_ToolAnswersExpire(t *testing.T) {
 	}
 }
 
-func TestBestRecallAnswer_NoToolAnswersDoNotExpire(t *testing.T) {
+// TestBestRecallAnswer_WorldFactsExpireWithoutTools corrects an assumption
+// this file used to encode: that only TOOL-derived answers go stale, so a
+// no-tool answer could be replayed forever. Whether a fact came from a web
+// search or from the model's training data has nothing to do with whether it
+// is still true — "who is prime minister" ages exactly the same either way.
+// Staleness follows the SUBJECT, not the retrieval method (see replay.go).
+func TestBestRecallAnswer_WorldFactsExpireWithoutTools(t *testing.T) {
 	sys := newTestSystem(t)
 	seedPMEpisode(t, sys, 30*24*time.Hour, nil)
 
 	r := NewHybridRetriever(sys, nil)
-	if _, ok := r.BestRecallAnswer("who is pm of india", 7*24*time.Hour); !ok {
-		t.Fatal("toolMaxAge only bounds tool-derived answers, not pure no-tool ones")
+	if _, ok := r.BestRecallAnswer("who is pm of india", 7*24*time.Hour); ok {
+		t.Fatal("a month-old claim about who holds an office must not be replayed, tools or not")
+	}
+}
+
+// TestBestRecallAnswer_SettledExplanationsDoNotExpire is the other half: a
+// definitional answer that references neither the project nor the changeable
+// world stays servable indefinitely. This is the saving the cache exists for.
+func TestBestRecallAnswer_SettledExplanationsDoNotExpire(t *testing.T) {
+	sys := newTestSystem(t)
+	addEpisodic(t, sys, "what is a mutex in concurrent programming", "success",
+		"A mutex is a lock that lets one thread at a time enter a critical section.",
+		nil, 90*24*time.Hour)
+
+	r := NewHybridRetriever(sys, nil)
+	if _, ok := r.BestRecallAnswer("what is a mutex in concurrent programming", 7*24*time.Hour); !ok {
+		t.Fatal("a settled definitional answer must stay replayable regardless of age")
 	}
 }
 
@@ -122,7 +143,10 @@ func TestBestRecallAnswer_VectorPathAnswersWithoutKeywordOverlap(t *testing.T) {
 	sys := newTestSystem(t)
 	sys.SetEmbedder(&fakeEmbedder{})
 	// Written with the embedder active → the entry carries a vector.
-	addEpisodic(t, sys, "implement user authentication with JWT", "success",
+	// Phrased as a question, not "implement user authentication with JWT": a
+	// command is never replayable (replay.go), so seeding one here would test
+	// the admission gate rather than the vector path this case is about.
+	addEpisodic(t, sys, "how does user authentication with JWT work", "success",
 		"Auth flow explained: use JWT middleware.", nil, time.Hour)
 
 	r := NewHybridRetriever(sys, nil)

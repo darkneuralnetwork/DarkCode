@@ -341,6 +341,13 @@ func (s *System) EpisodicAdd(entry core.EpisodicEntry) error {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
+	// Stamp the answer-cache admission class here, at the single choke point
+	// every write passes through, so no execution path can add an entry that
+	// skipped classification. A caller may pre-set it; otherwise it is derived
+	// from the entry itself (replay.go).
+	if entry.Replay == "" {
+		entry.Replay = ClassifyReplay(entry)
+	}
 	s.episodic = append(s.episodic, entry)
 	s.episodicWriter.MarkDirty()
 	return nil

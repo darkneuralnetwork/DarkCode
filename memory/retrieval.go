@@ -185,11 +185,14 @@ func (h *HybridRetriever) ExactRecall(query string, maxAge time.Duration) (strin
 		if normalizeGoal(e.TaskGoal) != normQuery {
 			continue
 		}
-		if e.Outcome != "success" || e.Output == "" {
+		// Admission is decided when the entry is written (replay.go), not
+		// here: an identical goal string tells us the request repeats, not
+		// that the stored answer is still true. Replayable also subsumes the
+		// old blanket "never cache tool-using tasks" rule — a mutating tool
+		// makes the entry class never, while a read-only lookup becomes
+		// volatile and ages out instead of being excluded outright.
+		if !Replayable(e, now) {
 			continue
-		}
-		if len(e.ToolsUsed) > 0 {
-			continue // never cache tool-using tasks (side effects may differ)
 		}
 		if maxAge > 0 && now.Sub(e.Timestamp) > maxAge {
 			continue
@@ -248,7 +251,7 @@ func (h *HybridRetriever) ConfidentRecall(query string, maxAge time.Duration) (s
 
 	now := time.Now()
 	for _, e := range h.mem.EpisodicGet() { // most-recent-first
-		if e.Outcome != "success" || e.Output == "" || len(e.ToolsUsed) > 0 {
+		if !Replayable(e, now) {
 			continue
 		}
 		if maxAge > 0 && now.Sub(e.Timestamp) > maxAge {

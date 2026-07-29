@@ -93,10 +93,11 @@ func (h *HybridRetriever) BestRecallAnswer(query string, toolMaxAge time.Duratio
 
 	var best *RecallAnswer
 	for _, e := range h.mem.EpisodicGet() { // most-recent-first
-		if e.Outcome != "success" || e.Output == "" || len(e.Output) > recallAnswerMaxOutputLen {
-			continue
-		}
-		if !answerToolsEligible(e.ToolsUsed) {
+		// Replayable (replay.go) carries the outcome, mutating-tool and
+		// class-TTL checks that used to be spelled out here. It is the same
+		// gate rung 1 uses, so the two rungs can no longer disagree about
+		// what is safe to serve — they did, and the looser one won.
+		if !Replayable(e, now) || len(e.Output) > recallAnswerMaxOutputLen {
 			continue
 		}
 		if len(e.ToolsUsed) > 0 && toolMaxAge > 0 && now.Sub(e.Timestamp) > toolMaxAge {

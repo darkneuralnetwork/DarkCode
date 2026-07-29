@@ -74,11 +74,14 @@ func TestRecallClampsK(t *testing.T) {
 
 func TestExactRecallNormalizedMatch(t *testing.T) {
 	sys := newTestSystem(t)
-	addEpisodic(t, sys, "Fix the bug.", "success", "the answer", nil, time.Hour)
+	// A question, not "Fix the bug.": a command is never replayable
+	// (replay.go), so seeding one would test the admission gate instead of
+	// the normalization this case is about.
+	addEpisodic(t, sys, "What is a semaphore.", "success", "the answer", nil, time.Hour)
 	r := NewHybridRetriever(sys, nil)
 
 	// Trivial rephrasing (case, trailing punctuation, whitespace) must still hit.
-	out, ok := r.ExactRecall("  fix the bug  ", 0)
+	out, ok := r.ExactRecall("  what is a semaphore  ", 0)
 	if !ok || out != "the answer" {
 		t.Errorf("ExactRecall normalized match: got (%q, %v), want (\"the answer\", true)", out, ok)
 	}
@@ -119,14 +122,17 @@ func TestExactRecallRespectsMaxAge(t *testing.T) {
 
 func TestConfidentRecallNearDuplicateMatch(t *testing.T) {
 	sys := newTestSystem(t)
-	addEpisodic(t, sys, "fix the authentication login bug", "success", "fixed it", nil, time.Hour)
+	// Question-shaped, since a command is never replayable (replay.go) and
+	// would short-circuit the Jaccard path this case exists to cover.
+	addEpisodic(t, sys, "how does authentication login session work", "success", "explained it", nil, time.Hour)
 	r := NewHybridRetriever(sys, nil)
 
-	// Reworded/reordered near-duplicate (same 4 significant tokens: fix,
-	// authentication, login, bug) should still hit via the Jaccard fallback.
-	out, ok := r.ConfidentRecall("fix the login authentication bug", 0)
-	if !ok || out != "fixed it" {
-		t.Errorf("ConfidentRecall near-duplicate: got (%q, %v), want (\"fixed it\", true)", out, ok)
+	// Reworded/reordered near-duplicate (same significant tokens:
+	// authentication, login, session, work) should still hit via the
+	// Jaccard fallback.
+	out, ok := r.ConfidentRecall("how does login authentication session work", 0)
+	if !ok || out != "explained it" {
+		t.Errorf("ConfidentRecall near-duplicate: got (%q, %v), want (\"explained it\", true)", out, ok)
 	}
 }
 
@@ -145,15 +151,17 @@ func TestConfidentRecallRejectsTopicalOnlyMatch(t *testing.T) {
 
 func TestConfidentRecallExactShortQueryStillMatchesViaExactPath(t *testing.T) {
 	sys := newTestSystem(t)
-	addEpisodic(t, sys, "fix it", "success", "fixed", nil, time.Hour)
+	// Short AND question-shaped: "fix it" would be rejected as a command
+	// before the length rule this case is about ever came into play.
+	addEpisodic(t, sys, "what is raii", "success", "explained", nil, time.Hour)
 	r := NewHybridRetriever(sys, nil)
 
 	// An identical short query still matches — via ExactRecall (literal
 	// identity is always safe, regardless of length), which ConfidentRecall
 	// tries before falling back to the token-count-gated fuzzy path.
-	out, ok := r.ConfidentRecall("fix it", 0)
-	if !ok || out != "fixed" {
-		t.Errorf("ConfidentRecall(identical short query) = (%q, %v), want (\"fixed\", true) via ExactRecall", out, ok)
+	out, ok := r.ConfidentRecall("what is raii", 0)
+	if !ok || out != "explained" {
+		t.Errorf("ConfidentRecall(identical short query) = (%q, %v), want (\"explained\", true) via ExactRecall", out, ok)
 	}
 }
 
