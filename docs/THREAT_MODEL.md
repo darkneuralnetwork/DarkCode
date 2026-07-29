@@ -194,7 +194,7 @@ for a file; it says nothing about what built it. Provenance records the commit,
 the workflow and the runner, signed against a transparency log:
 
 ```sh
-gh attestation verify darkcode_1.3.1_amd64.deb --repo <owner>/darkcode
+gh attestation verify darkcode_1.3.2_amd64.deb --repo <owner>/darkcode
 ```
 
 **Can they be reproduced?** Builds are `CGO_ENABLED=0 -trimpath
@@ -204,7 +204,7 @@ the checksums differ, and nightly CI does the same — the claim is tested rathe
 than asserted.
 
 ```sh
-./build.sh 1.3.1 && sha256sum -c SHA256SUMS
+./build.sh 1.3.2 && sha256sum -c SHA256SUMS
 ```
 
 **What is inside?** `SBOM.txt` is read back out of the linked binary rather

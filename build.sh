@@ -10,7 +10,7 @@
 set -euo pipefail
 
 APP="darkcode"
-VERSION="${1:-1.3.1}"
+VERSION="${1:-1.3.2}"
 
 # SOURCE_DATE_EPOCH pins every timestamp that would otherwise be "now".
 #
