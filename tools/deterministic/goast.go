@@ -67,11 +67,7 @@ func parseDefinitions(fset *token.FileSet, f goFile) []definition {
 		case *ast.FuncDecl:
 			recv := ""
 			if d.Recv != nil && len(d.Recv.List) > 0 {
-				if star, ok := d.Recv.List[0].Type.(*ast.StarExpr); ok {
-					recv = "*" + star.X.(*ast.Ident).Name
-				} else if id, ok := d.Recv.List[0].Type.(*ast.Ident); ok {
-					recv = id.Name
-				}
+				recv = receiverName(d.Recv.List[0].Type)
 			}
 			defs = append(defs, definition{
 				Name: d.Name.Name, Kind: "function", File: f.path,
@@ -123,4 +119,43 @@ func parseImports(fset *token.FileSet, f goFile) []importEntry {
 		out = append(out, importEntry{Path: p, Alias: alias, File: f.path})
 	}
 	return out
+}
+
+// receiverName returns the base type name of a method receiver, keeping the
+// pointer marker so `*Foo` and `Foo` stay distinguishable.
+//
+// A receiver takes one of six shapes, and generics account for four of them:
+//
+//	Foo          *Foo          plain
+//	Foo[T]       *Foo[T]       one type parameter    (ast.IndexExpr)
+//	Foo[K, V]    *Foo[K, V]    several               (ast.IndexListExpr)
+//
+// Only the plain pair was handled. A generic pointer receiver arrives as an
+// IndexExpr or IndexListExpr wrapped in the StarExpr, where an unchecked
+// assertion to *ast.Ident panicked — and since indexing runs on a background
+// goroutine, that took the whole process down. Any repository with a pointer
+// method on a generic type crashed the agent moments after it started.
+//
+// The value forms did not panic but returned an empty receiver, quietly
+// detaching those methods from the type that owns them in the graph.
+func receiverName(expr ast.Expr) string {
+	star := ""
+	if s, ok := expr.(*ast.StarExpr); ok {
+		star, expr = "*", s.X
+	}
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return star + t.Name
+	case *ast.IndexExpr: // Foo[T]
+		if id, ok := t.X.(*ast.Ident); ok {
+			return star + id.Name
+		}
+	case *ast.IndexListExpr: // Foo[K, V]
+		if id, ok := t.X.(*ast.Ident); ok {
+			return star + id.Name
+		}
+	}
+	// An unrecognised receiver shape is not worth guessing at, and must never
+	// be worth crashing over.
+	return ""
 }

@@ -196,7 +196,10 @@ func (a *AppRunner) initTools(memDir string) {
 	// Reading runtime values beats guessing at them; needs delve on PATH and
 	// reports so plainly when it is missing.
 	tools.RegisterDebugTool(a.Registry, cwd)
-	go func() {
+	// Guarded because this parses whatever source the workspace happens to
+	// contain. An index that cannot read one file should lose that file, not the
+	// session — on a bare goroutine a parse panic ends the whole process.
+	observability.Go("kg-code-index", func() {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return
@@ -207,7 +210,7 @@ func (a *AppRunner) initTools(memDir string) {
 				"packages": stats.Packages, "edges": stats.Edges,
 			})
 		}
-	}()
+	})
 
 	for _, entry := range a.Registry.List() {
 		if entry.Source == "" {
