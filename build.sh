@@ -37,7 +37,12 @@ BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
   || date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
   || echo unknown)"
 OUT="dist"
-LDFLAGS="-s -w -X main.Version=${VERSION}"
+# The stamp targets core.Version, the variable the whole binary reads. It used
+# to name main.Version, which was never declared — and the linker accepts -X
+# against a missing symbol without complaint, writes nothing, and exits zero.
+# Every release therefore shipped reporting a hardcoded 1.0.0. The assertion
+# after the build is what makes that failure loud instead of silent.
+LDFLAGS="-s -w -X github.com/darkcode/core.Version=${VERSION}"
 MAINTAINER="Team Dark Neural Network <contact@darkneuralnetwork.com>"
 
 echo "==> Building ${APP} v${VERSION}"
@@ -87,6 +92,24 @@ build_deb amd64
 build_deb 386
 build_exe amd64
 build_exe 386
+
+# Assert the version stamp actually landed.
+#
+# `-X` against a symbol that does not exist is not an error: the linker writes
+# nothing and exits zero. That is how every release up to 1.3.2 shipped
+# reporting a hardcoded "1.0.0" while the build claimed to stamp it. Asking the
+# binary what it thinks it is turns that silence into a failed build.
+echo "==> Verifying the version stamp"
+STAMP_PROBE="${OUT}/.version-probe"
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="${LDFLAGS}" -o "${STAMP_PROBE}" .
+REPORTED="$("${STAMP_PROBE}" --version 2>/dev/null || true)"
+rm -f "${STAMP_PROBE}"
+if [ "${REPORTED}" != "${VERSION}" ]; then
+  echo "    FAILED: binary reports '${REPORTED}', expected '${VERSION}'" >&2
+  echo "    The -X stamp in LDFLAGS is not reaching the variable it names." >&2
+  exit 1
+fi
+echo "    binary reports ${REPORTED}"
 
 # Software bill of materials, read back out of a real binary rather than from
 # go.mod: `go version -m` reports exactly the modules and hashes linked into

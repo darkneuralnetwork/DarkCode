@@ -91,7 +91,7 @@ func (s *Server) mcpInitialize(w http.ResponseWriter, req MCPRequest) {
 		"protocolVersion": "2024-11-05",
 		"serverInfo": MCPServerInfo{
 			Name:    "darkcode",
-			Version: "1.0.0",
+			Version: core.VersionOrDev(),
 		},
 		"capabilities": MCPCapabilities{
 			Tools: &struct{}{},

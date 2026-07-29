@@ -36,6 +36,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
 )
 
@@ -249,7 +250,7 @@ func (c *StdioMCPClient) Initialize(ctx context.Context) (MCPServerInfo, error) 
 		"capabilities":    map[string]interface{}{},
 		"clientInfo": map[string]interface{}{
 			"name":    "darkcode",
-			"version": "1.0.0",
+			"version": core.VersionOrDev(),
 		},
 	})
 	if err != nil {
@@ -434,7 +435,7 @@ func (c *HTTPMCPClient) Initialize(ctx context.Context) (MCPServerInfo, error) {
 	raw, err := c.doRequest(ctx, "initialize", map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]interface{}{},
-		"clientInfo":      map[string]interface{}{"name": "darkcode", "version": "1.0.0"},
+		"clientInfo":      map[string]interface{}{"name": "darkcode", "version": core.VersionOrDev()},
 	})
 	if err != nil {
 		return MCPServerInfo{}, err

@@ -8,6 +8,7 @@ import (
 
 	"github.com/darkcode/cli"
 	"github.com/darkcode/config"
+	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/router"
@@ -61,7 +62,16 @@ func main() {
 	listProvidersFlag := flag.Bool("providers", false, "List the LLM provider catalogue and exit")
 	listModelsFlag := flag.Bool("models", false, "List registered models and exit")
 	flag.BoolVar(&debugFlag, "debug", false, "Enable /debug/pprof/* profiler endpoints on the GUI server (off by default)")
+	versionFlag := flag.Bool("version", false, "Print the version and exit")
 	flag.Parse()
+
+	// Asking a binary what it is should not require starting it. build.sh
+	// stamps this at link time and then asserts this very output, so a stamp
+	// that silently does nothing fails the build rather than shipping.
+	if *versionFlag {
+		fmt.Println(core.VersionOrDev())
+		return
+	}
 
 	// GUI mode: the web UI + API is always bound to localhost (127.0.0.1).
 	// There is no --serve / network-exposure mode; the only web entry point is

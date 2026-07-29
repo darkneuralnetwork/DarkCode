@@ -160,7 +160,7 @@ func (s *Server) htpServerInfo() HTPServerInfo {
 	s.cfgMu.RUnlock()
 	return HTPServerInfo{
 		Name:        "darkcode",
-		Version:     "1.0.0",
+		Version:     core.VersionOrDev(),
 		Protocol:    HTPVersion,
 		ToolCount:   len(s.registry.AllEntries()),
 		Sandboxed:   safetyLevel == "strict",
@@ -379,7 +379,7 @@ func writeHTPResult(w http.ResponseWriter, action string, result interface{}) {
 		Result:     result,
 		ServerInfo: HTPServerInfo{
 			Name:     "darkcode",
-			Version:  "1.0.0",
+			Version:  core.VersionOrDev(),
 			Protocol: HTPVersion,
 		},
 	})
@@ -408,7 +408,7 @@ func writeHTPError(w http.ResponseWriter, action, msg string) {
 		Error:      msg,
 		ServerInfo: HTPServerInfo{
 			Name:     "darkcode",
-			Version:  "1.0.0",
+			Version:  core.VersionOrDev(),
 			Protocol: HTPVersion,
 		},
 	})

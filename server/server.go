@@ -806,7 +806,7 @@ var skipDirs = map[string]bool{
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "ok",
-		"version": "1.0.0",
+		"version": core.VersionOrDev(),
 		"time":    time.Now().Format(time.RFC3339),
 	})
 }
