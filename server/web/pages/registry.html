@@ -60,4 +60,22 @@
     </form>
   </div>
 
+  <!--
+    Discovered plugins. A plugin drops a JSON manifest into the workspace's
+    plugins/ directory and registers capabilities from it; the loader has
+    always read them and /api/plugins has always listed them, but nothing
+    displayed the result, so a manifest that failed to appear looked exactly
+    like a manifest that loaded fine.
+  -->
+  <div class="glass-panel" style="padding: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h3 class="cfg-h3" style="margin: 0;">Plugins</h3>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span class="stat-value" id="plugins-stats" style="font-size: 11px; color: var(--text-dim);">—</span>
+        <button class="btn-glow" id="plugins-refresh" style="padding: 4px 10px; font-size: 11px;">Rescan</button>
+      </div>
+    </div>
+    <div id="plugins-list" class="models-list"></div>
+  </div>
+
 </div>

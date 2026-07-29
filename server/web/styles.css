@@ -2348,3 +2348,22 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .reqlog .rl-flags  { color: var(--text-mute); }
 /* The table must scroll inside its own panel rather than widening the page. */
 .reqlog-wrap { display: block; max-width: 100%; }
+
+/* ── Plugin capabilities ───────────────────────────────────────────────────
+   Each registered id as its own chip, so a manifest that declares nothing is
+   visibly different from one that declares three things. */
+.plugin-caps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.plugin-cap {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--accent-3);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.plugin-cap-none {
+  color: var(--text-mute);
+  font-style: italic;
+  background: none;
+}
