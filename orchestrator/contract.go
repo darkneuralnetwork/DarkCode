@@ -62,20 +62,24 @@ func (k *Kernel) verifyContract(ctx context.Context, g *plan.Graph) loop.Verdict
 	var v loop.Verdict
 	var evidence []string
 
-	ran := map[string]bool{}
+	ran := map[string]plan.Proof{}
+	reported := map[string]bool{}
 	for _, n := range g.Nodes {
 		n.Proof = nil
-		if !k.checkAcceptance(ctx, n, ran) {
-			for _, p := range n.Proof {
-				if p.Command != "" && !p.Passed {
-					evidence = append(evidence,
-						fmt.Sprintf("$ %s\n%s", p.Command, strings.TrimSpace(p.Output)))
-				}
-			}
-		}
+		k.checkAcceptance(ctx, n, ran)
 		for _, p := range n.Proof {
-			if p.Command != "" {
-				v.Checked++
+			if p.Command == "" || reported[p.Command] {
+				continue // prose is not evidence; a shared command is one check
+			}
+			reported[p.Command] = true
+			// Counted per distinct COMMAND, not per node. checkAcceptance
+			// attaches a memoised result to every node that depends on it, so
+			// counting occurrences would report ten checks for a ten-node plan
+			// that ran one test suite.
+			v.Checked++
+			if !p.Passed {
+				evidence = append(evidence,
+					fmt.Sprintf("$ %s\n%s", p.Command, strings.TrimSpace(p.Output)))
 			}
 		}
 	}
@@ -136,19 +140,68 @@ func (k *Kernel) planDepthCfg() string {
 }
 
 // markGraphFrom records the loop's outcome onto the plan graph so the
-// Blueprint tab shows what actually happened. The loop works the whole graph
-// as one unit rather than node-by-node, so a proven verdict completes every
-// node and a failure leaves them all pending — an honest, if coarse, status.
+// Blueprint tab shows what actually happened.
+//
+// Status is per node, decided by that node's own evidence. An earlier version
+// stamped every node identically because the loop works the graph as one unit,
+// which made the Blueprint tab useless in exactly the case it matters: a run
+// where three tasks passed and one failed showed four failures, so there was
+// nothing to look at to find out which one to go and fix.
+//
+// The loop does run the graph as a whole, so the attribution is not free — but
+// it does not have to be guessed. verifyContract already attaches Proof to the
+// node whose criteria produced it, and node.Artifacts is checkable on its own.
+// A node with failing proof failed; a node with passing proof completed; a node
+// with neither is only as good as the run around it, and says so.
 func markGraphFrom(g *plan.Graph, v loop.Verdict, completed bool) {
-	status := core.TaskPending
-	if v.Proven() || (completed && v.Checked == 0) {
-		status = core.TaskCompleted
-	} else if v.Checked > 0 && !v.Passed {
-		status = core.TaskFailed
+	// Fallback for nodes that carried nothing checkable of their own. The run
+	// is the only evidence they have, which is weaker than proof but still
+	// better than reporting the whole graph by its worst node.
+	unproven := core.TaskPending
+	switch {
+	case v.Proven() || (completed && v.Checked == 0):
+		unproven = core.TaskCompleted
+	case v.Checked > 0 && !v.Passed:
+		// Something in this graph failed, but not necessarily this node.
+		// Pending, not failed: blaming a node whose own checks never ran is
+		// how a red tick stops meaning anything, the same way a green one does.
+		unproven = core.TaskPending
 	}
+
 	for _, n := range g.Nodes {
-		n.Status = status
+		switch nodeProofStatus(n) {
+		case core.TaskFailed:
+			n.Status = core.TaskFailed
+		case core.TaskCompleted:
+			n.Status = core.TaskCompleted
+		default:
+			n.Status = unproven
+		}
 	}
+}
+
+// nodeProofStatus reads a node's own evidence: failed if any machine-checkable
+// criterion failed, completed if at least one passed, and pending when the node
+// had nothing runnable to say either way.
+//
+// Prose criteria are deliberately not evidence. checkAcceptance records them as
+// "not machine-checkable", and counting an unverifiable sentence as a pass is
+// the precise failure this whole path exists to remove.
+func nodeProofStatus(n *plan.Node) core.TaskStatus {
+	passed := false
+	for _, p := range n.Proof {
+		if p.Command == "" {
+			continue
+		}
+		if !p.Passed {
+			return core.TaskFailed
+		}
+		passed = true
+	}
+	if passed {
+		return core.TaskCompleted
+	}
+	return core.TaskPending
 }
 
 // acceptanceSummary renders the proof already attached to the graph by

@@ -82,7 +82,14 @@ func defaultAcceptance(dir string) string {
 // to the same default predicate ("build and test the project"), and running a
 // full test suite once per node would multiply the cost of verification by the
 // plan's size for no extra information.
-func (k *Kernel) checkAcceptance(ctx context.Context, node *plan.Node, ran map[string]bool) bool {
+//
+// The memo stores the RESULT, not just the fact that it ran, so a repeat can
+// attach the same evidence to this node instead of skipping it. Skipping left
+// every node after the first with no Proof at all, which was invisible while
+// the graph was reported as one status and became wrong the moment status went
+// per node: a task would show as unverified purely because a sibling happened
+// to be checked first.
+func (k *Kernel) checkAcceptance(ctx context.Context, node *plan.Node, ran map[string]plan.Proof) bool {
 	dir := tools.CurrentWorkspace(ctx)
 	if dir == "" {
 		dir, _ = os.Getwd()
@@ -107,10 +114,16 @@ func (k *Kernel) checkAcceptance(ctx context.Context, node *plan.Node, ran map[s
 			node.Proof = append(node.Proof, p)
 			continue
 		}
-		if ran[cmd] {
-			continue // already proven for this graph
+		if prev, done := ran[cmd]; done {
+			// Same command, already run for this graph: reuse the verdict
+			// rather than paying for it again, but still attach it here so
+			// this node's status reflects the check it depends on.
+			node.Proof = append(node.Proof, prev)
+			if !prev.Passed {
+				allPassed = false
+			}
+			continue
 		}
-		ran[cmd] = true
 
 		runCtx, cancel := context.WithTimeout(ctx, acceptanceTimeout)
 		res, err := k.registry.Execute(runCtx, "terminal", map[string]interface{}{
@@ -129,6 +142,7 @@ func (k *Kernel) checkAcceptance(ctx context.Context, node *plan.Node, ran map[s
 		if !p.Passed {
 			allPassed = false
 		}
+		ran[cmd] = p
 		node.Proof = append(node.Proof, p)
 		k.log("verify", fmt.Sprintf("acceptance [%s] %s", passFail(p.Passed), cmd))
 	}
