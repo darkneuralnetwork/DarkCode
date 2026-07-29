@@ -99,6 +99,29 @@
         node.artifacts.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>`);
     }
 
+    // Proof is the difference between a task that says it is done and one that
+    // has shown it. Acceptance above is intent — the conditions the executor
+    // will check; this is what happened when it checked them, with the command
+    // and its real output. It was already in the payload and never rendered,
+    // which left the panel showing only the claim.
+    if ((node.proof || []).length) {
+      parts.push(`<div class="bp-sec"><div class="bp-sec-h">Proof</div>${
+        node.proof.map((p) => {
+          // A criterion with no command was recorded as unverified rather than
+          // quietly passed. Showing it as neither is the honest rendering:
+          // absence of evidence must not look like evidence.
+          if (!p.command) {
+            return `<div class="bp-evt"><span class="bp-evt-kind">unverified</span>
+                <span class="bp-evt-time">${esc(p.criterion || '')}</span></div>`;
+          }
+          return `<div class="bp-evt ${p.passed ? '' : 'fail'}">
+              <span class="bp-evt-kind">${p.passed ? '✓ passed' : '✕ failed'}</span>
+              <span class="bp-evt-time mono">${esc(p.command)}</span>
+              ${p.output && !p.passed ? `<pre class="bp-evt-detail">${esc(String(p.output).slice(0, 1200))}</pre>` : ''}
+            </div>`;
+        }).join('')}</div>`);
+    }
+
     // What the journal recorded for this node.
     const mine = events.filter((e) => e.node === node.id || e.name === node.name);
     if (mine.length) {
@@ -223,9 +246,14 @@
     load();
     // The plan changes while a run is in flight; a stale board is the failure
     // mode this panel exists to avoid.
+    // Guarded on BOTH the tab being active and the document being visible.
+    // This checked only the tab, so a backgrounded browser left on Blueprint
+    // kept firing four requests every four seconds — /api/plan, /api/runs,
+    // /api/approvals and /api/checkpoints — indefinitely. Every other poller
+    // in this UI already checks document.hidden; this one was the exception.
     setInterval(() => {
       const panel = document.getElementById('tab-blueprint');
-      if (panel && panel.classList.contains('active')) load();
+      if (panel && panel.classList.contains('active') && !document.hidden) load();
     }, 4000);
     return true;
   }
