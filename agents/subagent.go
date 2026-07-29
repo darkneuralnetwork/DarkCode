@@ -103,6 +103,25 @@ func (f *AgentFactory) Spawn(ctx context.Context, cfg core.SubAgentConfig) (*Sub
 // Execute runs the agent's task to completion. It uses the model router
 // to select the appropriate model, then runs a conversation loop with
 // tool use until the agent produces a final answer.
+// workerRouter is the distribution-aware subset of the router. SubAgent holds
+// core.ModelRouter (an interface the orchestrator owns), and RouteWorker is a
+// concrete-router capability, so it is reached by assertion rather than by
+// widening that interface for every implementation — including the test fakes.
+type workerRouter interface {
+	RouteWorker(tier core.ModelTier, complexity int, taskDesc string, slot int) (core.LLMClient, string, error)
+}
+
+// routeForSlot picks this agent's model, spreading concurrent workers across
+// registered models when the router supports it.
+func (a *SubAgent) routeForSlot(complexity int) (core.LLMClient, string, error) {
+	if a.Config.WorkerSlot > 0 {
+		if wr, ok := a.router.(workerRouter); ok {
+			return wr.RouteWorker(a.Config.ModelTier, complexity, a.Goal, a.Config.WorkerSlot)
+		}
+	}
+	return a.router.Route(a.Config.ModelTier, complexity, a.Goal)
+}
+
 func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 	maxTurns := a.Config.MaxTurns
 	if maxTurns <= 0 {
@@ -110,7 +129,11 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 	}
 
 	complexity := router.AssessComplexity(a.Goal)
-	client, modelName, err := a.router.Route(a.Config.ModelTier, complexity, a.Goal)
+	// Workers in the same concurrent wave carry different slots so they land
+	// on different models where more than one is registered — the executor ran
+	// them concurrently but they all queued behind one provider. Slot 0 routes
+	// exactly as before, so a single-task wave is unchanged.
+	client, modelName, err := a.routeForSlot(complexity)
 	if err != nil {
 		return a.failResult(err), err
 	}

@@ -750,6 +750,17 @@ func roleSystemPrompt(role string) string {
 		return "You are an analyst. Answer the user's question by breaking it down analytically. Structure your answer with clear reasoning, pros/cons, and a logical breakdown of the problem."
 	case "verifier":
 		return "You are a verifier. Answer the user's question, then verify your own answer for correctness. Double-check facts, logic, and edge cases. Note any uncertainty."
+	case RoleSupporter:
+		// A supporter shares the load; it does not second-guess. Every other
+		// persona here answers the same question from a different angle, which
+		// buys quality at the cost of doing the whole job N times. This one is
+		// handed a piece of the work instead, so the prompt asks for the piece
+		// and nothing else — a supporter that "also reviews the approach" has
+		// quietly become another critic and stopped saving anything.
+		return "You are a supporting implementer working in parallel with other agents on one larger task. " +
+			"Complete ONLY the specific piece of work you were given, fully and correctly. " +
+			"Do not restate the overall plan, do not review or critique the other agents' work, " +
+			"and do not repeat work that a prerequisite task already delivered. Report what you produced and where."
 	default:
 		return "You are a specialist model. Answer the user's question thoroughly and correctly."
 	}

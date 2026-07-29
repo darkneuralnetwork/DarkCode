@@ -186,13 +186,20 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 		// dependencies' outputs as context — without this, edges only
 		// ordered execution and every agent worked blind.
 		var configs []core.SubAgentConfig
-		for _, node := range ready {
+		for i, node := range ready {
 			configs = append(configs, core.SubAgentConfig{
 				Role:      node.AgentRole,
 				Goal:      node.Goal,
 				ModelTier: node.ModelTier,
 				MaxTurns:  k.cfg.MaxTurns,
 				Context:   dependencyContext(d, node),
+				// Position in this wave. The router uses it to hand
+				// concurrent workers different models, so a wave of
+				// independent tasks stops queueing behind one provider —
+				// they ran in parallel here and were serialised at the
+				// endpoint. Slot 0 routes normally, so the wave's first
+				// task keeps the primary.
+				WorkerSlot: i,
 			})
 		}
 

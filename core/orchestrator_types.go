@@ -247,6 +247,12 @@ type SubAgentConfig struct {
 	Tools     []string  `json:"tools,omitempty"` // tool names this agent can use
 	Context   string    `json:"context,omitempty"`
 	ParentID  string    `json:"parent_id,omitempty"`
+	// WorkerSlot is this agent's index within a concurrent wave. Agents in the
+	// same wave get different slots so the router can hand them different
+	// models (router.RouteWorker); without it a wave of independent tasks ran
+	// concurrently in the executor but queued behind a single provider.
+	// Zero (the default) always means "route normally".
+	WorkerSlot int `json:"worker_slot,omitempty"`
 }
 
 // SubAgentResult is what a sub-agent returns.
