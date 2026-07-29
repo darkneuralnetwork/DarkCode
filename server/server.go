@@ -504,8 +504,13 @@ func injectNodeStatus(plan, workflow string) string {
 	})
 }
 
-// Start launches the HTTP server on the configured address.
-func (s *Server) Start(addr string) error {
+// Handler builds the fully routed, fully wrapped HTTP handler.
+//
+// Split out of Start so the routing table can be exercised without binding a
+// port. Start used to be the only place routes existed, which meant nothing
+// could assert what the router actually does with a path — and routing bugs
+// are precisely the kind that look fine until a caller hits the wrong one.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// API routes
@@ -519,10 +524,6 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/memory/episodic", s.handleEpisodicMemory)
 	mux.HandleFunc("/api/memory/semantic", s.handleSemanticMemory)
 	mux.HandleFunc("/api/memory/procedural", s.handleProceduralMemory)
-	// Aliases kept for compatibility; they answer from the same handler rather
-	// than from a copy of it, so the two paths cannot drift apart.
-	mux.HandleFunc("/api/skills", s.handleProceduralMemory)
-	mux.HandleFunc("/api/episodes", s.handleEpisodicMemory)
 	mux.HandleFunc("/api/events", s.handleSSE) // SSE streaming
 	mux.HandleFunc("/api/events/history", s.handleEventHistory)
 	mux.HandleFunc("/api/health", s.handleHealth)
@@ -627,6 +628,20 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/tools/sources", s.handleToolSources)
 	mux.HandleFunc("/api/tools/sources/", s.handleToolSourceItem)
 
+	// An unrouted /api/ path is a client error and must say so.
+	//
+	// Without this it fell through to the SPA handler below and came back as
+	// 200 text/html — a caller asking for a misspelled or removed endpoint got
+	// the app shell and a status that claims success, then failed somewhere
+	// downstream in JSON.parse with nothing pointing at the real cause. The
+	// SPA fallback exists for client-side routes; /api/ is not one.
+	//
+	// ServeMux prefers the longest matching pattern, so every registered
+	// /api/... route above still wins over this.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "no such endpoint: "+r.URL.Path)
+	})
+
 	// Web UI — embedded single-page frontend served at "/".
 	// Registered last; ServeMux gives precedence to the more specific
 	// /api/* patterns above, so the UI only catches non-API paths.
@@ -636,11 +651,14 @@ func (s *Server) Start(addr string) error {
 	// these headers are cheap defense-in-depth: nosniff stops MIME-sniff XSS,
 	// DENY stops clickjacking, and the referrer policy limits leaking the
 	// loopback URL (and any query tokens) in cross-origin referrer headers.
-	handler := s.securityHeaders(s.csrfMiddleware(s.corsMiddleware(s.rateLimitMiddleware(mux))))
+	return s.securityHeaders(s.csrfMiddleware(s.corsMiddleware(s.rateLimitMiddleware(mux))))
+}
 
+// Start launches the HTTP server on the configured address.
+func (s *Server) Start(addr string) error {
 	s.httpServer = &http.Server{
 		Addr:         addr,
-		Handler:      handler,
+		Handler:      s.Handler(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0, // no timeout for SSE
 		IdleTimeout:  120 * time.Second,

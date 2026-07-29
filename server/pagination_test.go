@@ -34,7 +34,7 @@ func TestPaginate(t *testing.T) {
 }
 
 func TestParsePageClampsNegatives(t *testing.T) {
-	r := httptest.NewRequest("GET", "/api/episodes?limit=-5&offset=-2", nil)
+	r := httptest.NewRequest("GET", "/api/memory/episodic?limit=-5&offset=-2", nil)
 	p := parsePage(r)
 	if p.limit != 0 || p.offset != 0 {
 		t.Fatalf("negative params should clamp to 0, got %+v", p)
