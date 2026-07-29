@@ -68,22 +68,4 @@ func (s *Server) handleProceduralMemory(w http.ResponseWriter, r *http.Request) 
 	writePage(w, "skills", s.memSystem.ProceduralAll(), parsePage(r))
 }
 
-// handleSkills is an alias for procedural memory.
-func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	if s.memSystem == nil {
-		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
-		return
-	}
-	writePage(w, "skills", s.memSystem.ProceduralAll(), parsePage(r))
-}
-
-// handleEpisodes is an alias for episodic memory.
-func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
-	if s.memSystem == nil {
-		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
-		return
-	}
-	writePage(w, "episodes", s.memSystem.EpisodicGet(), parsePage(r))
-}
-
 // handleConfig returns the current configuration (minus secrets) or updates it.

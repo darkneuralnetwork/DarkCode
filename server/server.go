@@ -519,8 +519,10 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/api/memory/episodic", s.handleEpisodicMemory)
 	mux.HandleFunc("/api/memory/semantic", s.handleSemanticMemory)
 	mux.HandleFunc("/api/memory/procedural", s.handleProceduralMemory)
-	mux.HandleFunc("/api/skills", s.handleSkills)
-	mux.HandleFunc("/api/episodes", s.handleEpisodes)
+	// Aliases kept for compatibility; they answer from the same handler rather
+	// than from a copy of it, so the two paths cannot drift apart.
+	mux.HandleFunc("/api/skills", s.handleProceduralMemory)
+	mux.HandleFunc("/api/episodes", s.handleEpisodicMemory)
 	mux.HandleFunc("/api/events", s.handleSSE) // SSE streaming
 	mux.HandleFunc("/api/events/history", s.handleEventHistory)
 	mux.HandleFunc("/api/health", s.handleHealth)
