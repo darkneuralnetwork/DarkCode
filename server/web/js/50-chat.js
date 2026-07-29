@@ -233,8 +233,14 @@ function finalizeAssistantMessage(msgEl, output, isError, isHtml) {
           textEl.innerHTML = isHtml ? output : esc(output || "");
       } else {
           textEl.innerHTML = isHtml ? output : renderMarkdown(output || "(empty response)");
-          if (window.mermaid) {
-            try { mermaid.init(undefined, textEl.querySelectorAll('.mermaid')); } catch (e) {}
+          // Mermaid is fetched on demand — see ensureMermaid in index.html — so
+          // the 2.7 MB is only paid when a reply actually contains a diagram,
+          // which is the rare case rather than the default one.
+          const diagrams = textEl.querySelectorAll('.mermaid');
+          if (diagrams.length && window.ensureMermaid) {
+            window.ensureMermaid()
+              .then((m) => { try { m.init(undefined, diagrams); } catch (e) {} })
+              .catch(() => {});
           }
       }
   }

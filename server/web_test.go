@@ -123,3 +123,116 @@ func TestWebHandlerServesVendoredAssetsOffline(t *testing.T) {
 		}
 	}
 }
+
+// The frontend is embedded in the binary, so it may never be served stale — a
+// rebuilt binary has to win over anything the browser is holding. That used to
+// be enforced with no-store, which also meant every reload re-downloaded the
+// whole 3.5 MB frontend. These tests pin the cheaper arrangement that keeps the
+// same guarantee: revalidate always, transfer only what changed.
+func TestStaticAssetsRevalidateButDoNotRetransfer(t *testing.T) {
+	h := webHandler()
+
+	req := httptest.NewRequest("GET", "/styles.css", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("no ETag, so the browser has no way to revalidate cheaply")
+	}
+	// no-store would forbid reuse outright and make the ETag pointless.
+	if cc := w.Header().Get("Cache-Control"); strings.Contains(cc, "no-store") {
+		t.Errorf("Cache-Control = %q; no-store re-downloads the asset every load", cc)
+	}
+
+	// Presenting the tag back must yield an empty 304, not the file again.
+	req2 := httptest.NewRequest("GET", "/styles.css", nil)
+	req2.Header.Set("If-None-Match", etag)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusNotModified {
+		t.Errorf("revalidation status = %d, want 304", w2.Code)
+	}
+	if w2.Body.Len() != 0 {
+		t.Errorf("304 carried %d bytes; the point is to carry none", w2.Body.Len())
+	}
+}
+
+// A stale asset must remain impossible: the tag is derived from the bytes, so
+// different content cannot share a tag.
+func TestETagIsContentDerived(t *testing.T) {
+	h := webHandler()
+	get := func(p string) string {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
+		return w.Header().Get("ETag")
+	}
+	if a, b := get("/styles.css"), get("/index.html"); a == b {
+		t.Errorf("two different files share the ETag %q", a)
+	}
+}
+
+func TestTextAssetsAreCompressed(t *testing.T) {
+	h := webHandler()
+	req := httptest.NewRequest("GET", "/styles.css", nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if enc := w.Header().Get("Content-Encoding"); enc != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip", enc)
+	}
+	if !strings.Contains(w.Header().Get("Vary"), "Accept-Encoding") {
+		t.Error("a response that varies by encoding must say so")
+	}
+	gz := w.Body.Len()
+
+	// A client that cannot decompress still has to get usable bytes.
+	plain := httptest.NewRecorder()
+	h.ServeHTTP(plain, httptest.NewRequest("GET", "/styles.css", nil))
+	if plain.Header().Get("Content-Encoding") != "" {
+		t.Error("gzip was sent to a client that never asked for it")
+	}
+	if plain.Body.Len() <= gz {
+		t.Errorf("compression saved nothing: %d gz vs %d raw", gz, plain.Body.Len())
+	}
+	if !strings.Contains(plain.Body.String(), "{") {
+		t.Error("the uncompressed body is not CSS")
+	}
+}
+
+// Fonts and images are already compressed; a second pass burns CPU for nothing.
+func TestAlreadyCompressedAssetsAreNotGzipped(t *testing.T) {
+	h := webHandler()
+	req := httptest.NewRequest("GET", "/logo.png", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Header().Get("Content-Encoding") == "gzip" {
+		t.Error("a PNG was gzipped, which costs CPU and saves nothing")
+	}
+}
+
+// Mermaid is 2.7 MB, larger than the rest of the frontend combined, and is only
+// needed for replies that contain a diagram. It must not be on the startup path.
+func TestMermaidIsNotLoadedEagerly(t *testing.T) {
+	h := webHandler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+
+	if regexp.MustCompile(`<script[^>]*src="/vendor/mermaid\.min\.js"`).MatchString(body) {
+		t.Error("mermaid is still a render-blocking script tag on every page load")
+	}
+	if !strings.Contains(body, "ensureMermaid") {
+		t.Error("no on-demand loader, so diagrams would never render at all")
+	}
+	// It must still be served locally: the GUI has to work air-gapped.
+	vw := httptest.NewRecorder()
+	h.ServeHTTP(vw, httptest.NewRequest("GET", "/vendor/mermaid.min.js", nil))
+	if vw.Code != http.StatusOK || vw.Body.Len() == 0 {
+		t.Error("mermaid is no longer served from /vendor, breaking offline use")
+	}
+}

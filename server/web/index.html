@@ -12,12 +12,42 @@
        and embedded in the binary so the GUI works fully offline / air-gapped —
        no external CDN or Google Fonts dependency at runtime. -->
   <link href="/fonts/fonts.css" rel="stylesheet">
+  <!--
+    Chart.js stays eager. It is 200 KB (67 KB gzipped) and the render paths bail
+    out silently when Chart is undefined, so deferring it risks a monitoring tab
+    that quietly draws nothing — a bad trade for the bytes involved.
+  -->
   <script src="/vendor/chart.umd.min.js"></script>
-  <script src="/vendor/mermaid.min.js"></script>
+  <!--
+    Mermaid stays off the startup path. It is 2.7 MB — larger than the whole
+    rest of the frontend put together — and it is only needed when a reply
+    happens to contain a ```mermaid block, which most sessions never produce.
+    Loaded here it was a render-blocking download on every page load, paid for
+    by everyone and used by almost nobody.
+
+    ensureMermaid() fetches it on first use and returns the same promise
+    thereafter, so several diagrams in one reply still load it once. It is
+    still served from /vendor, so the GUI remains fully offline.
+  -->
   <script>
-    if (window.mermaid) {
-      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
-    }
+    window.ensureMermaid = (function () {
+      let pending = null;
+      return function () {
+        if (window.mermaid) return Promise.resolve(window.mermaid);
+        if (pending) return pending;
+        pending = new Promise(function (resolve, reject) {
+          const s = document.createElement('script');
+          s.src = '/vendor/mermaid.min.js';
+          s.onload = function () {
+            try { window.mermaid.initialize({ startOnLoad: false, theme: 'dark' }); } catch (e) {}
+            resolve(window.mermaid);
+          };
+          s.onerror = function () { pending = null; reject(new Error('mermaid failed to load')); };
+          document.head.appendChild(s);
+        });
+        return pending;
+      };
+    })();
   </script>
   <link rel="icon" href="./favicon.ico">
 </head>
