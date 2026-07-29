@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/plan"
 	"github.com/darkcode/tools"
@@ -143,38 +142,8 @@ func passFail(ok bool) string {
 	return "fail"
 }
 
-// verifyAcceptance runs the acceptance checks for every completed node and
-// returns a summary of the evidence, or "" when nothing was checkable.
-func (k *Kernel) verifyAcceptance(ctx context.Context, g *plan.Graph) string {
-	var lines []string
-	checked, failed := 0, 0
-	ran := map[string]bool{}
-	for _, n := range g.Nodes {
-		if n.Status != core.TaskCompleted {
-			continue
-		}
-		k.checkAcceptance(ctx, n, ran)
-		for _, p := range n.Proof {
-			if p.Command == "" {
-				continue // prose criteria are not evidence
-			}
-			checked++
-			mark := "✓"
-			if !p.Passed {
-				mark = "✗"
-				failed++
-			}
-			lines = append(lines, fmt.Sprintf("- %s `%s` _(%s)_", mark, p.Command, n.ID))
-		}
-	}
-	if checked == 0 {
-		return ""
-	}
-	head := fmt.Sprintf("\n\n**Acceptance checks** — %d run", checked)
-	if failed > 0 {
-		head += fmt.Sprintf(", %d failing", failed)
-	} else {
-		head += ", all passing"
-	}
-	return head + ":\n" + strings.Join(lines, "\n")
-}
+// Checking a whole graph lives in contract.go (verifyContract), which both the
+// loop's stop condition and the DAG's repair pass share. There is deliberately
+// no second graph-level checker here: an earlier verifyAcceptance did the same
+// walk but only to print a report, and keeping both would have left two answers
+// to "did this task pass" that could disagree.

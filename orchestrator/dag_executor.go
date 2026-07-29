@@ -81,11 +81,15 @@ func (k *Kernel) executePlannedGraph(ctx context.Context, g *plan.Graph, recallB
 	// silently logged.
 	merged = k.verifyOutput(ctx, goal, merged, verifyComplexityMin)
 
-	// Run each completed task's acceptance criteria and attach the evidence to
-	// the graph, so "done" is a checkable claim rather than a sub-agent's word.
-	if proof := k.verifyAcceptance(ctx, g); proof != "" {
-		merged += proof
-	}
+	// Run each completed task's acceptance criteria, and REPAIR what fails.
+	//
+	// This used to run the checks and print the result, which made the DAG path
+	// the mirror image of the loop path's old problem: it knew exactly what
+	// "done" meant and could prove the work wasn't done, but had no way to act
+	// on that — it reported a failing test suite and returned anyway. The loop
+	// could iterate but had no target; the DAG had a target but could not
+	// iterate. Handing a failed check to the loop closes both halves.
+	merged = k.repairFailedAcceptance(ctx, g, merged)
 
 	// Store episodic memory, record learning feedback + audit + knowledge
 	// graph; skill extraction folds in via minSkillSuccess=2.

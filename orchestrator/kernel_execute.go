@@ -9,6 +9,8 @@ import (
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
+	"github.com/darkcode/loop"
+	"github.com/darkcode/plan"
 	"github.com/darkcode/router"
 )
 
@@ -310,12 +312,59 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		if len(stm) > 0 {
 			history = stm[:len(stm)-1]
 		}
-		loopRes, err := k.agenticLoop.Run(ctx, k.injectRecall(userGoal, recallBlock), history)
+
+		// Plan FIRST, then loop against the plan's acceptance criteria.
+		//
+		// This used to return before ever reaching the planner below, which is
+		// why the two halves of the system never met: the plan graph carried
+		// acceptance criteria, expected artifacts and Proof slots, and loop
+		// mode — the one mode that can actually iterate toward a target — was
+		// the only mode that never saw them. Its stop condition was the model's
+		// opinion of its own work. Now the plan supplies the definition of done
+		// and running it is what ends the loop.
+		//
+		// Planning is skipped for goals too small to decompose; those keep the
+		// self-evaluation fallback, which is the right check when there is
+		// genuinely nothing machine-verifiable to run.
+		var contract *loop.Contract
+		var planGraph *plan.Graph
+		if k.shouldPlanForLoop(userGoal, complexity, hasProjectGuidance) {
+			depth := decidePlanDepth(userGoal, complexity, hasProjectGuidance, k.planDepthCfg())
+			if g, perr := k.deepPlan(ctx, k.injectRecall(userGoal, recallBlock), depth); perr == nil {
+				g.Goal = userGoal
+				planGraph = g
+				contract = k.contractFor(g)
+				k.log("loop", fmt.Sprintf("Loop bound to a %d-task plan with %d acceptance criteria",
+					len(g.Nodes), len(contract.Criteria)))
+				if k.emitter != nil {
+					k.emitter.EmitDAGUpdate(g.ToDAG().Summary())
+				}
+			} else {
+				// A planner failure must not cost the user their task. Fall
+				// through to an unplanned loop — weaker stop condition, same
+				// work.
+				k.log("loop", "Planning failed: "+perr.Error()+" — looping without acceptance criteria")
+			}
+		}
+
+		loopRes, err := k.agenticLoop.RunWithContract(ctx, k.injectRecall(userGoal, recallBlock), history, contract)
 		if err != nil {
 			k.storeEpisodic(userGoal, "", nil, false, recallBlock, nil)
 			return "", err
 		}
 		output := loopRes.Output
+
+		// Attach the evidence. A run that says it succeeded and shows the
+		// commands it passed is a different claim from one that only says so.
+		if planGraph != nil {
+			markGraphFrom(planGraph, loopRes.Verdict, loopRes.Completed)
+			k.mu.Lock()
+			k.lastRunPlan = planGraph
+			k.mu.Unlock()
+			if summary := acceptanceSummary(planGraph); summary != "" {
+				output += summary
+			}
+		}
 
 		// Post-loop consensus synthesis, gated on PostLoopConsensus (default
 		// off): non-primary models review the loop's answer, primary
@@ -331,8 +380,24 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 
 		// Record to STM + episodic/learning/audit/KG so the rest of the system
 		// sees the task just like a DAG execution.
+		//
+		// The outcome and the tool list both come from the loop, and neither
+		// used to: this recorded success=true with a nil result set, so a run
+		// that gave up was stored as a short, successful, TOOL-FREE answer and
+		// the cache happily replayed that abort text for the next request.
+		// Both halves mattered — the honest flag, and the tools, without which
+		// the cache's "never replay tool-using tasks" guard saw nothing to
+		// guard against.
 		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
-		k.recordOutcome(userGoal, output, nil, true, "agentic-loop", 0, recallBlock)
+		loopResult := &core.SubAgentResult{
+			Role:      core.RoleWorker,
+			Goal:      userGoal,
+			Output:    output,
+			Success:   loopRes.Completed,
+			ToolCalls: loopRes.ToolCalls,
+		}
+		k.recordOutcome(userGoal, output, []*core.SubAgentResult{loopResult},
+			loopRes.Completed, "agentic-loop", 0, recallBlock)
 		if k.emitter != nil {
 			k.emitter.EmitFinalOutput(output)
 		}
