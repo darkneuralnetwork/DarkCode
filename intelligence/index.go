@@ -1,6 +1,7 @@
 package intelligence
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,61 @@ func (p *ProjectIndex) ScanWorkspace() error {
 		p.workspace.Language = "mixed"
 	}
 	return nil
+}
+
+// Reindex re-parses a single file into the graphs. It is the incremental half
+// ScanWorkspace's comment always promised and nothing ever called: the watcher
+// exists to avoid re-walking the tree on every change, but without a per-file
+// path the only way to apply a change was a full rescan, so the watcher was
+// built, wired to nothing, and left running nowhere.
+//
+// A deleted file is ignored rather than treated as an error: the symbols it
+// contributed go stale until the next full scan, which is a smaller wrong
+// answer than refusing to track any change at all.
+func (p *ProjectIndex) Reindex(path string) {
+	lang := LanguageOf(path)
+	if lang == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if lang == "go" {
+		res, perr := NewASTParser().Parse(data, path)
+		if perr != nil {
+			return
+		}
+		p.ingest(path, res)
+		return
+	}
+	p.ingest(path, ParseText(data, path))
+}
+
+// StartWatching keeps the index fresh in the background: the watcher polls for
+// mtime changes and each changed file is re-parsed in place. Cancel via ctx or
+// StopWatching.
+//
+// Callers must hold the index for as long as they want it watched. A
+// request-scoped index must not call this — the goroutine would outlive the
+// request and keep re-parsing an index nobody can read.
+func (p *ProjectIndex) StartWatching(ctx context.Context) {
+	if p.watcher == nil {
+		return
+	}
+	p.watcher.OnChange = func(changed []string) {
+		for _, f := range changed {
+			p.Reindex(f)
+		}
+	}
+	p.watcher.Start(ctx)
+}
+
+// StopWatching halts background indexing.
+func (p *ProjectIndex) StopWatching() {
+	if p.watcher != nil {
+		p.watcher.Stop()
+	}
 }
 
 // ingest merges one file's parse result into every graph.
