@@ -2300,3 +2300,51 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .mc-sub { font-size: 11px; color: var(--text-mute); padding: 0 12px 8px; line-height: 1.5; }
 .mc-sub code { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
 .mem-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+/* ── Request log ───────────────────────────────────────────────────────────
+   The per-call table behind the telemetry totals. Numbers are tabular and
+   right-aligned so magnitudes line up and an outlier is visible by shape
+   rather than by reading every row. */
+.reqlog {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.reqlog thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(10, 10, 14, 0.96);
+  color: var(--text-mute);
+  font-weight: 500;
+  text-align: left;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.reqlog th.num, .reqlog td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.reqlog tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.reqlog tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
+.reqlog .rl-time  { color: var(--text-mute); }
+.reqlog .rl-model { color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+/* A cache hit is money not spent, so it reads as a positive, and a zero
+   recedes rather than competing with the numbers that matter. */
+.reqlog .rl-cached { color: var(--accent-3); }
+.reqlog .rl-zero   { color: var(--text-mute); opacity: 0.5; }
+.reqlog .rl-warn   { color: #e0a34a; }
+.reqlog .rl-bad    { color: #e05a5a; }
+.reqlog tr.rl-failed td { background: rgba(224, 90, 90, 0.06); }
+.reqlog .rl-flags  { color: var(--text-mute); }
+/* The table must scroll inside its own panel rather than widening the page. */
+.reqlog-wrap { display: block; max-width: 100%; }

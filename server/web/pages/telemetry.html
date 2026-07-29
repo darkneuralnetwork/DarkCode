@@ -170,6 +170,24 @@
       <div class="audit-list custom-scrollbar" id="audit-list" style="height: 200px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; background: rgba(0,0,0,0.2);"></div>
     </div>
 
+    <!--
+      Per-request log. The KPI row above totals these; this is the individual
+      calls behind the totals, which the backend has always recorded and no
+      view has ever shown. Cache hits get their own column because a prompt
+      cache is only worth having if you can see it working.
+    -->
+    <div class="glass-panel" id="tel-requests-panel" style="padding: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🧾 Request Log</h3>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span class="stat-value" id="req-log-stats" style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">—</span>
+          <button class="btn-glow" id="req-log-refresh" style="padding: 4px 10px; font-size: 11px;">Refresh</button>
+          <button class="fe-btn max-btn" data-target="tel-requests-panel">⛶</button>
+        </div>
+      </div>
+      <div class="reqlog-wrap custom-scrollbar" id="req-log" style="max-height: 260px; overflow: auto; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; background: rgba(0,0,0,0.2);"></div>
+    </div>
+
   </div>
 
 </div>
