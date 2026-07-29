@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,18 @@ type fakeLLMClient struct {
 	// lets a test inspect exactly what messages were sent (e.g. to verify
 	// prior conversation history was actually included).
 	onRequest func(req *core.CompletionRequest)
+	// failFn, if set, decides per-request whether the call fails. A single
+	// error field wouldn't do: the interesting case is a client where the
+	// THINK call works and only the auxiliary self-eval call fails, which is
+	// exactly what an exhausted per-minute or per-day quota looks like from
+	// inside a single run.
+	failFn func(req *core.CompletionRequest) error
+}
+
+// isSelfEvalRequest identifies the one-line completion check by its distinctive
+// shape, so failFn can target it without depending on call ordering.
+func isSelfEvalRequest(req *core.CompletionRequest) bool {
+	return req != nil && req.MaxTokens != nil && *req.MaxTokens == 60
 }
 
 func (f *fakeLLMClient) nextContent() string {
@@ -62,6 +75,12 @@ func (f *fakeLLMClient) ChatCompletionStream(ctx context.Context, req *core.Comp
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if f.failFn != nil {
+		if err := f.failFn(req); err != nil {
+			atomic.AddInt32(&f.calls, 1)
+			return nil, err
+		}
 	}
 	content := f.nextContent()
 	if cb != nil && cb.OnContent != nil {
@@ -194,12 +213,19 @@ func TestReActLoopSelfEvalForcesAnotherIteration(t *testing.T) {
 	}
 }
 
-// TestReActLoopSelfEvalSkippedOnLastIteration ensures the self-eval check
-// itself never extends the loop past maxLoops — it's gated by
-// `iteration < l.maxLoops` specifically so it can't burn an extra call (or
-// force one more turn) right at the ceiling.
-func TestReActLoopSelfEvalSkippedOnLastIteration(t *testing.T) {
-	client := &fakeLLMClient{responses: []string{"done in one shot"}}
+// TestReActLoopSelfEvalRunsEvenAtTheIterationCeiling replaces a case that
+// asserted the opposite. Self-eval used to be gated by
+// `iteration < l.maxLoops` to save one call at the ceiling, which meant the
+// final turn was the one turn that never had to justify stopping — with the
+// shipped maxLoops of 3, that guard fired constantly and the loop's only
+// semantic stop condition was skipped exactly when it mattered most.
+//
+// The check is cheap (one line, 60 tokens) and it is the difference between
+// "the model stopped calling tools" and "the goal is met", so it now runs on
+// every stop attempt. Corrections have their own budget, so it still cannot
+// extend the work ceiling.
+func TestReActLoopSelfEvalRunsEvenAtTheIterationCeiling(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"done in one shot", "GOAL_STATUS: DONE"}}
 	l := New(newTestRouter(client), tools.NewRegistry(), nil, 1)
 
 	result, err := l.Run(context.Background(), "quick task", nil)
@@ -209,8 +235,40 @@ func TestReActLoopSelfEvalSkippedOnLastIteration(t *testing.T) {
 	if result.Output != "done in one shot" {
 		t.Errorf("Output = %q, want the single response unchanged", result.Output)
 	}
-	if got := client.calls; got != 1 {
-		t.Errorf("callCount = %d, want 1 (self-eval must be skipped at the iteration ceiling)", got)
+	if !result.Completed {
+		t.Error("Completed = false, want true — the self-eval confirmed the goal was met")
+	}
+	if got := client.calls; got != 2 {
+		t.Errorf("callCount = %d, want 2 (think, self-eval)", got)
+	}
+}
+
+// TestReActLoopUnrunnableSelfEvalDoesNotReportSuccess is the regression test
+// for the earliest stop of all. evaluateGoalCompletion used to report "done"
+// on any transport error, so on a metered free tier whose daily quota is
+// measured in tens, an exhausted quota made every self-eval 429 — and every
+// 429 read as "the goal is met". A multi-step task ended after its first
+// answer and reported success.
+func TestReActLoopUnrunnableSelfEvalDoesNotReportSuccess(t *testing.T) {
+	// THINK succeeds; only the auxiliary self-eval call is rate-limited —
+	// what an exhausted daily quota looks like mid-run.
+	client := &fakeLLMClient{
+		responses: []string{"a partial answer"},
+		failFn: func(req *core.CompletionRequest) error {
+			if isSelfEvalRequest(req) {
+				return errors.New("429 rate limit exceeded")
+			}
+			return nil
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 1)
+
+	result, err := l.Run(context.Background(), "a long multi-step task", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Completed {
+		t.Error("Completed = true, but the completion check never ran — an unverifiable answer must not be recorded as a success")
 	}
 }
 

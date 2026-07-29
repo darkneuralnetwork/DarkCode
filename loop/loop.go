@@ -61,6 +61,20 @@ const MaxObservationLen = 4000
 // suggests ~20; we keep a slightly higher default but still bounded.
 const DefaultMaxLoops = 20
 
+// maxCorrections bounds rounds spent re-checking an answer the agent already
+// considered final — a failed verification, or a self-evaluation that found
+// the goal unmet. It is deliberately separate from maxLoops: these rounds are
+// the loop arguing with itself, not doing work, and charging them to the same
+// budget meant a task could exhaust its entire allowance without completing a
+// second real step.
+const maxCorrections = 8
+
+// maxEvalFailures bounds how many times a self-evaluation that could not RUN
+// (transport error, exhausted quota) may hold the loop open. Failing closed is
+// right — an unrunnable check is not evidence the work is done — but a model
+// that is simply unreachable would otherwise spin here forever.
+const maxEvalFailures = 2
+
 // loopHistoryBudgetBytes bounds how much prior conversation (from the
 // caller's STM) is folded into a Run() call, keeping the most recent
 // messages when the budget is exceeded. This is what gives the loop real
@@ -109,6 +123,38 @@ func (l *ReActLoop) SetMaxLoops(n int) {
 type Result struct {
 	Output    string
 	ToolTrace string
+
+	// Completed reports whether the loop reached a genuine final answer, as
+	// opposed to giving up (repeated tool failure) or running out of
+	// iterations. The caller MUST record the task's outcome from this rather
+	// than assuming success.
+	//
+	// It exists because assuming success was a real, user-visible bug: the
+	// kernel recorded every loop run with success=true, so "the agent got
+	// stuck repeatedly calling write_file and stopped" was written to
+	// episodic memory as a short, successful, tool-free answer — the most
+	// replayable shape there is. The answer cache then served that abort text
+	// back for later requests, and the agent appeared to respond to a new
+	// instruction with a previous error.
+	Completed bool
+
+	// ToolCalls is every tool the loop actually invoked. The caller needs it
+	// to record what the task used; passing nil made a heavily tool-using run
+	// look tool-free to the cache's "never replay tool-using tasks" guard.
+	ToolCalls []core.ToolCall
+
+	// Verdict is the final contract check, when a contract was supplied and
+	// enforceable. Verdict.Proven() distinguishes "the acceptance criteria were
+	// run and held" from "nothing contradicted the claim" — the caller records
+	// the first as a success and should not record the second as one.
+	Verdict Verdict
+}
+
+// RunWithContract is Run plus a caller-supplied definition of done. When the
+// contract is enforceable the loop stops on evidence rather than on the model's
+// opinion of its own work; see contract.go.
+func (l *ReActLoop) RunWithContract(ctx context.Context, goal string, history []core.Message, contract *Contract) (*Result, error) {
+	return l.run(ctx, goal, history, contract)
 }
 
 // Run executes the Sense-Think-Act loop for the given goal and returns the
@@ -120,6 +166,10 @@ type Result struct {
 // most recent messages, so a long conversation can't blow out the context
 // window on every single loop turn.
 func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message) (*Result, error) {
+	return l.run(ctx, goal, history, nil)
+}
+
+func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message, contract *Contract) (*Result, error) {
 	ctx, span := observability.StartSpan(ctx, "agentic-loop")
 	defer span.End()
 
@@ -136,7 +186,7 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 
 	// Assemble the initial conversation: a ReAct system prompt + prior
 	// history (if any, continuity) + the goal.
-	messages := []core.Message{{Role: core.RoleSystem, Content: l.systemPrompt()}}
+	messages := []core.Message{{Role: core.RoleSystem, Content: l.systemPrompt() + contract.brief()}}
 	messages = append(messages, truncateHistory(history, loopHistoryBudgetBytes)...)
 	messages = append(messages, core.Message{Role: core.RoleUser, Content: goal})
 
@@ -149,7 +199,15 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 	// on every failed-verification `continue` below and rebuilding it (with
 	// its 7-stage language detection) on every stop-condition check was
 	// wasted work.
-	verifier := agents.NewVerificationPipeline(l.router, l.emitter, "")
+	//
+	// The workspace comes from the request context. It used to be "", which
+	// made the language detector inspect the PROCESS's working directory
+	// instead of the user's project: on any machine where DarkCode was started
+	// from a Go checkout, every stop-condition check shelled out gofmt, go
+	// build, go test and go vet against the wrong tree. That was slow, and any
+	// unrelated breakage there failed verification and spent one of the loop's
+	// few iterations "self-correcting" work it had never done.
+	verifier := agents.NewVerificationPipeline(l.router, l.emitter, core.WorkspaceFrom(ctx))
 
 	var allToolCalls []core.ToolCall
 	var trace strings.Builder
@@ -163,15 +221,41 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 	refitDone := false
 	start := time.Now()
 
+	// Two separate budgets, because they pay for different things and used to
+	// share one counter.
+	//
+	// iteration counts turns that ACTED — a THINK that produced tool calls.
+	// corrections counts rounds spent re-checking an answer the agent already
+	// considered final: a failed verification, or a self-evaluation that said
+	// the goal wasn't met. Previously both ran through the same `iteration++`,
+	// so with the shipped default of 3 a single verification failure and one
+	// self-eval nudge consumed the entire budget before the agent had done any
+	// second piece of work. The task then ended at "max iterations" having
+	// worked once.
+	//
+	// evalFailures is a third, much smaller budget: it bounds how many times a
+	// self-eval that could not RUN (transport error, exhausted quota) may hold
+	// the loop open. Without it, failing closed on an unreachable model would
+	// spin.
+	iteration, corrections, evalFailures := 0, 0, 0
+
+	// verdict holds the most recent contract check, so the final Result can
+	// report what was actually proven rather than only whether the loop chose
+	// to stop.
+	var verdict Verdict
+
 	// ── The loop ──────────────────────────────────────────────────────────
-	for iteration := 1; iteration <= l.maxLoops; iteration++ {
+	for {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if iteration >= l.maxLoops {
+			break
 		}
 
 		if l.emitter != nil {
 			l.emitter.EmitTaskUpdate("agentic-loop", "thinking",
-				fmt.Sprintf("iteration %d/%d — reasoning", iteration, l.maxLoops))
+				fmt.Sprintf("iteration %d/%d — reasoning", iteration+1, l.maxLoops))
 		}
 
 		// ── 1. THINK (Orient/Decide) ──────────────────────────────────────
@@ -220,8 +304,7 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 					window = compression.DefaultContextWindow
 				}
 				messages = compression.FitToWindow(messages, window*3/4, 0)
-				iteration--
-				continue
+				continue // a refit is not a work turn; iteration is unchanged
 			}
 			return nil, fmt.Errorf("agentic loop iteration %d: %w", iteration, err)
 		}
@@ -242,7 +325,8 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 
 			// Verification Gate
 			vResult, _ := verifier.Verify(ctx, goal, final, nil)
-			if !vResult.Passed && len(vResult.Issues) > 0 {
+			if !vResult.Passed && len(vResult.Issues) > 0 && corrections < maxCorrections {
+				corrections++
 				// Self-correct by appending issues to context
 				issuePrompt := fmt.Sprintf("Verification failed with issues:\n%s\nPlease correct your output.", strings.Join(vResult.Issues, "\n"))
 				// Mid-conversation steers are user turns; see nudgeRole below.
@@ -251,13 +335,85 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 					Content: issuePrompt,
 				})
 				if l.emitter != nil {
-					l.emitter.EmitTaskUpdate("agentic-loop", "verifying", "Verification failed, forcing self-correction")
+					l.emitter.EmitTaskUpdate("agentic-loop", "verifying",
+						fmt.Sprintf("Verification failed (%d/%d) — forcing self-correction", corrections, maxCorrections))
 				}
 				continue // loop back and fix it
 			}
 
-			if iteration < l.maxLoops {
-				if done, reason := l.evaluateGoalCompletion(ctx, client, modelName, goal, final); !done {
+			// completionVerified records whether a check actually RAN and
+			// agreed the goal was met. It is what the caller records as the
+			// task's outcome, so an answer that could never be verified —
+			// because the budget ran out, or the checker was unreachable — is
+			// returned to the user but NOT written to memory as a success.
+			completionVerified := false
+
+			// ── ACCEPTANCE GATE ──────────────────────────────────────────
+			// When the caller supplied an enforceable contract, completion is
+			// decided by running the criteria, not by asking the model whether
+			// it is happy with its own work. A failing check comes back as the
+			// command's actual output, which is a far better correction signal
+			// than any phrasing of "try again" — the compiler already said
+			// precisely what is wrong.
+			if contract.enforceable() {
+				verdict = contract.Verify(ctx)
+				if !verdict.Passed && verdict.Checked > 0 && corrections < maxCorrections {
+					corrections++
+					messages = append(messages, core.Message{
+						Role: nudgeRole,
+						Content: "The acceptance checks for this task FAILED. This is the real output:\n\n" +
+							strutil.Truncate(verdict.Evidence, MaxObservationLen) +
+							"\n\nFix the cause and continue. Do not give a final answer until these pass.",
+					})
+					if l.emitter != nil {
+						l.emitter.EmitTaskUpdate("agentic-loop", "acceptance",
+							fmt.Sprintf("Acceptance checks failed (%d/%d) — correcting", corrections, maxCorrections))
+					}
+					continue
+				}
+				if verdict.Proven() {
+					// Evidence, not opinion. Skip self-evaluation entirely —
+					// asking a model to second-guess a passing test suite adds
+					// a call and can only make the answer worse.
+					completionVerified = true
+					if l.emitter != nil {
+						l.emitter.EmitTaskUpdate("agentic-loop", "acceptance",
+							fmt.Sprintf("Acceptance checks passed (%d checked)", verdict.Checked))
+					}
+				}
+			}
+
+			// Self-evaluation. This is the fallback for goals with nothing
+			// machine-checkable about them, and it is the only thing standing
+			// between "the model stopped calling tools" and "the goal is
+			// actually met". It runs on every stop attempt rather than being
+			// skipped on the final iteration as it used to be — the old guard
+			// meant the last turn always declared itself done.
+			if !completionVerified && corrections < maxCorrections {
+				done, reason, ran := l.evaluateGoalCompletion(ctx, client, modelName, goal, final)
+				switch {
+				case !ran && evalFailures < maxEvalFailures:
+					// The check could not run. Failing OPEN here is what made
+					// the loop stop after one turn on an exhausted free-tier
+					// quota: every self-eval 429'd, every 429 was read as
+					// "done", and the task ended having barely started. Treat
+					// an unrunnable check as "not yet verified" and keep
+					// working, but only a couple of times — a permanently
+					// unreachable model must not spin the loop.
+					evalFailures++
+					corrections++
+					messages = append(messages, core.Message{
+						Role: nudgeRole,
+						Content: "The completion check could not run (" + reason + "). " +
+							"Re-read the goal and confirm every part of it is done; if anything is outstanding, continue working.",
+					})
+					if l.emitter != nil {
+						l.emitter.EmitTaskUpdate("agentic-loop", "self-eval",
+							fmt.Sprintf("Completion check unavailable (%d/%d): %s", evalFailures, maxEvalFailures, reason))
+					}
+					continue
+				case ran && !done:
+					corrections++
 					messages = append(messages, core.Message{
 						Role: nudgeRole,
 						Content: "Self-evaluation: the goal is not yet fully met — " + reason +
@@ -268,18 +424,32 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 							"Self-evaluation found the goal incomplete: "+reason)
 					}
 					continue // loop back and keep working
+				case ran && done:
+					completionVerified = true
 				}
+				// The remaining case — the check could not run and its budget
+				// is spent — deliberately leaves completionVerified false.
+				// The user still gets the answer; memory does not get to
+				// treat it as a confirmed success.
 			}
 
 			if l.emitter != nil {
-				l.emitter.EmitTaskUpdate("agentic-loop", "complete",
-					fmt.Sprintf("ReAct loop finished after %d iteration(s) in %s", iteration, time.Since(start).Round(time.Millisecond)))
+				status := "complete"
+				detail := fmt.Sprintf("ReAct loop finished after %d iteration(s) in %s",
+					iteration, time.Since(start).Round(time.Millisecond))
+				if !completionVerified {
+					status = "unverified"
+					detail += " — completion could not be verified"
+				}
+				l.emitter.EmitTaskUpdate("agentic-loop", status, detail)
 			}
-			_ = allToolCalls // collected for the caller via events
-			return &Result{Output: final, ToolTrace: trace.String()}, nil
+			return &Result{Output: final, ToolTrace: trace.String(),
+				Completed: completionVerified, ToolCalls: allToolCalls, Verdict: verdict}, nil
 		}
 
 		// ── 3. ACT — execute the requested tools ─────────────────────────
+		// This turn is doing work, so it is what the iteration budget is for.
+		iteration++
 		allToolCalls = append(allToolCalls, msg.ToolCalls...)
 		resultsi := l.registry.DispatchAll(ctx, msg.ToolCalls)
 		results, ok := resultsi.([]tools.DispatchResult)
@@ -335,7 +505,13 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 						l.emitter.EmitTaskUpdate("agentic-loop", "aborted",
 							fmt.Sprintf("iteration %d: %s failed %d× — aborting loop to avoid waste", iteration, r.Name, stuckFails[key]))
 					}
-					return &Result{Output: "The agent got stuck repeatedly calling " + r.Name + " and stopped to avoid wasting iterations.\n\n" + bestPartial(messages) + "\n\n_(agentic loop aborted: repeated tool failure)_", ToolTrace: trace.String()}, nil
+					return &Result{
+						Output:    "The agent got stuck repeatedly calling " + r.Name + " and stopped to avoid wasting iterations.\n\n" + bestPartial(messages) + "\n\n_(agentic loop aborted: repeated tool failure)_",
+						ToolTrace: trace.String(),
+						Completed: false,
+						ToolCalls: allToolCalls,
+						Verdict:   verdict,
+					}, nil
 				}
 			} else {
 				// A success resets the stuck counter for that call signature.
@@ -356,7 +532,13 @@ func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message
 			fmt.Sprintf("ReAct loop hit max iterations (%d) — returning last partial answer", l.maxLoops))
 	}
 	if partial := bestPartial(messages); partial != "" {
-		return &Result{Output: partial + "\n\n_(agentic loop reached the max iteration limit)_", ToolTrace: trace.String()}, nil
+		return &Result{
+			Output:    partial + "\n\n_(agentic loop reached the max iteration limit)_",
+			ToolTrace: trace.String(),
+			Completed: false,
+			ToolCalls: allToolCalls,
+			Verdict:   verdict,
+		}, nil
 	}
 	return nil, fmt.Errorf("agentic loop reached max iterations (%d) without a final answer", l.maxLoops)
 }
@@ -379,20 +561,28 @@ const (
 // condition), never per-iteration, so it doesn't double the cost of every
 // loop turn.
 //
-// Fails OPEN (reports done) on any error, empty response, or unparseable
-// content: a flaky self-eval call must never be able to force a longer
-// loop — the existing max-iterations ceiling is the only hard backstop and
-// this must never undermine it.
-func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, client core.LLMClient, model, goal, final string) (done bool, reason string) {
-	// Prefer a cheap LOCAL tier for this one-line yes/no check — it's the
-	// definition of an auxiliary call. Fall back to the passed-in (coding)
-	// client when no local model is loaded, keeping the existing behavior on
-	// cloud-only setups. Self-eval already fails open, so a local miss is safe.
-	if l.router != nil {
-		if lc, lm, err := l.router.Route(core.ModelTierTinyLocal, 0, "self_eval"); err == nil && lc != nil {
-			client, model = lc, lm
-		}
-	}
+// It reports ran=false when the check could not be performed at all
+// (transport error, empty response). The caller decides what to do about
+// that; this function deliberately does NOT decide on its behalf.
+//
+// It used to answer a plain (done, reason) and report "done" on any error,
+// empty response or unparseable content. That looked conservative and was the
+// single biggest reason the loop stopped early: on a metered free tier whose
+// daily quota is measured in tens, every self-eval call 429'd, every 429 read
+// as "the goal is met", and a multi-step task ended after its first answer.
+// "The check failed" and "the work is finished" are not the same fact and are
+// no longer conflated.
+//
+// Unparseable CONTENT still means done: a model that answered but ignored the
+// format is not evidence the goal is unmet, and guessing at free-form prose is
+// how this gets worse.
+func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, client core.LLMClient, model, goal, final string) (done bool, reason string, ran bool) {
+	// This check is a format-following task, not a reasoning task: the answer
+	// is one of two fixed strings. A tiny local model routinely returns prose
+	// instead, which parses as neither marker and therefore as "done" — so
+	// routing here to save a few cents quietly re-created the fail-open
+	// behaviour this function was rewritten to remove. Use the model that is
+	// already doing the work.
 	temp := 0.0
 	maxTok := 60
 	req := &core.CompletionRequest{
@@ -407,8 +597,11 @@ func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, client core.LLMC
 		MaxTokens:   &maxTok,
 	}
 	resp, err := client.ChatCompletion(ctx, req)
-	if err != nil || len(resp.Choices) == 0 {
-		return true, ""
+	if err != nil {
+		return false, err.Error(), false
+	}
+	if len(resp.Choices) == 0 {
+		return false, "the completion check returned an empty response", false
 	}
 	line := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if strings.HasPrefix(line, selfEvalContinuePrefix) {
@@ -417,12 +610,13 @@ func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, client core.LLMC
 		if reason == "" {
 			reason = "the model did not give a specific reason"
 		}
-		return false, reason
+		return false, reason, true
 	}
 	// The DONE marker, or any response that doesn't match the CONTINUE
-	// prefix (e.g. the model ignored the format) — fail-open rather than
-	// guess at parsing free-form prose.
-	return true, ""
+	// prefix (e.g. the model ignored the format). The check RAN, so this is
+	// evidence, not a failure — and guessing at free-form prose is worse than
+	// taking the answer at face value.
+	return true, "", true
 }
 
 // truncateHistory keeps the most recent messages from history whose combined

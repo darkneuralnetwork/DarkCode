@@ -220,7 +220,11 @@ func (k *Kernel) executeDirect(ctx context.Context, goal string, recallBlock str
 
 	// Direct tasks that actually used tools can still yield a simple skill —
 	// minSkillSuccess=1 folds that in, see recordOutcome's doc comment.
-	k.recordOutcome(goal, output, []*core.SubAgentResult{result}, true, "direct", 1, recallBlock)
+	//
+	// The outcome is the agent's own, not a hardcoded true: recording a failed
+	// run as successful is what let error text into the answer cache and get
+	// replayed as though it were an answer.
+	k.recordOutcome(goal, output, []*core.SubAgentResult{result}, result.Success, "direct", 1, recallBlock)
 	return output, nil
 }
 
@@ -321,7 +325,18 @@ func (k *Kernel) executeChatReadOnly(ctx context.Context, goal string, recallBlo
 	}
 	output := annotateUncited(loopRes.Output, recallBlock)
 	k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
-	k.recordOutcome(goal, output, nil, true, "chat", 0, recallBlock)
+	// Chat is read-only, but a read-only loop can still abort or exhaust its
+	// iterations, and that partial output must not enter memory as a
+	// successful answer — see loop.Result.Completed.
+	chatResult := &core.SubAgentResult{
+		Role:      core.RoleWorker,
+		Goal:      goal,
+		Output:    output,
+		Success:   loopRes.Completed,
+		ToolCalls: loopRes.ToolCalls,
+	}
+	k.recordOutcome(goal, output, []*core.SubAgentResult{chatResult},
+		loopRes.Completed, "chat", 0, recallBlock)
 	if k.emitter != nil {
 		k.emitter.EmitFinalOutput(output)
 	}

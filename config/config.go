@@ -93,10 +93,17 @@ type Config struct {
 	// fast path. Default false (raw STM append) to preserve behavior.
 	UseCtxEngine bool `json:"use_ctx_engine,omitempty"`
 
-	// HealthDaemon runs the background structural watch. Off by default: it
-	// is useful but it is not free, and a user should opt into background
-	// work on their own machine rather than discover it.
-	HealthDaemon bool `json:"health_daemon,omitempty"`
+	// HealthDaemon runs the background structural watch — import cycles
+	// appearing, coupling climbing, a hotspot losing its last test. On by
+	// default: it makes no model calls at all, holds itself to
+	// HealthCPUPercent of a single core, and the whole point of the signal is
+	// that it is the *change* that matters, which nobody sees by running a
+	// report manually often enough.
+	//
+	// No omitempty: this is a bool that defaults to true, so omitting a
+	// user's explicit `false` on save would silently turn the daemon back on
+	// the next time the config was read.
+	HealthDaemon bool `json:"health_daemon"`
 
 	// HealthCPUPercent bounds the daemon to this share of a single core.
 	HealthCPUPercent int `json:"health_cpu_percent,omitempty"`
@@ -130,7 +137,17 @@ type Config struct {
 	// instead of the single-pass DAG decomposition. Optional — toggled from
 	// the Settings tab; the header shows the current on/off state.
 	AgenticLoop bool `json:"agentic_loop,omitempty"`
-	MaxLoops    int  `json:"max_loops,omitempty"`
+	// MaxLoops bounds turns that ACTED — a reasoning turn that called tools.
+	// Rounds the loop spends re-checking an answer it already considered final
+	// (a failed verification, a self-evaluation that found the goal unmet) are
+	// charged to a separate budget, loop.maxCorrections.
+	//
+	// The default was 3, and shared one counter with those corrections, so a
+	// single verification failure plus one self-evaluation nudge spent the
+	// whole allowance: a multi-step build reported "max iterations reached"
+	// having completed one step. It also shadowed loop.DefaultMaxLoops, which
+	// only applies when this is <= 0 and so never took effect.
+	MaxLoops int `json:"max_loops,omitempty"`
 
 	// --- Memory ---
 	MemoryDir string `json:"memory_dir,omitempty"`
@@ -301,9 +318,10 @@ func DefaultConfig() *Config {
 		ExecutionProfile:      "auto",
 		PlanApproval:          "auto",
 		PlanDepth:             "auto",
+		HealthDaemon:          true,
 		HealthCPUPercent:      5,
 		AgenticLoop:           false,
-		MaxLoops:              3,
+		MaxLoops:              25,
 		MemoryDir:             ".darkcode/memory",
 		ProjectsDir:           ".darkcode/projects",
 		EnableLocalLLM:        false,

@@ -98,6 +98,19 @@ type ContextKey string
 const WorkspaceKey ContextKey = "workspace"
 const ProjectKey ContextKey = "project"
 
+// WorkspaceFrom returns the active workspace path carried by ctx, or "" when
+// none is set. It exists as an accessor rather than an inline type assertion
+// because forgetting to read it is silent: a caller that passes "" where a
+// workspace was meant gets code that still runs, just against the process's
+// working directory instead of the user's project.
+func WorkspaceFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	ws, _ := ctx.Value(WorkspaceKey).(string)
+	return ws
+}
+
 // ReadOnlyToolsKey marks a Chat (read-only) request: only read-only tools are
 // offered to the model and mutating tools are refused. Shared by the tool
 // registry (enforcement) and the ReAct loop (schema selection).
