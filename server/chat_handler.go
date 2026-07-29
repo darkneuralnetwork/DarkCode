@@ -232,8 +232,12 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 		s.emitter.EmitChatQuery(req.Query)
 	}
 
-	// Run the orchestrator kernel
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Run the orchestrator kernel under a deadline that measures SILENCE
+	// rather than total elapsed time — see progress_deadline.go. The flat
+	// five-minute cap this replaces covered Execute plus both completeness
+	// auto-continue passes, so a build that was steadily making progress got
+	// cancelled mid-step once the turn crossed five minutes.
+	ctx, cancel := s.progressContext(context.Background(), chatIdleTimeout, chatHardTimeout)
 	defer cancel()
 
 	s.activeChatCancelMu.Lock()

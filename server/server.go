@@ -20,6 +20,7 @@ import (
 
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
+	"github.com/darkcode/intelligence"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
@@ -49,6 +50,17 @@ type Server struct {
 
 	activeChatCancel   context.CancelFunc
 	activeChatCancelMu sync.Mutex
+
+	// progressCh receives a coalesced signal for every emitted UI event while
+	// a chat turn is in flight, feeding that turn's idle deadline. Nil when no
+	// turn is running. See progress_deadline.go.
+	progressCh chan struct{}
+	progressMu sync.Mutex
+
+	// indexes holds one long-lived code index per workspace, each kept fresh
+	// by its own file watcher. Built lazily on first use; see projectIndex.
+	indexes map[string]*intelligence.ProjectIndex
+	indexMu sync.Mutex
 
 	// apiRateLimiter throttles /api/* requests per remote address.
 	apiRateLimiter *rateLimiter
@@ -97,6 +109,9 @@ func NewServer(cfg *config.Config, registry *tools.Registry, memSystem *memory.S
 		// longer so a retry after a slow response still de-duplicates.
 		idempotency: newIdempotencyStore(10 * time.Minute),
 	}
+	// Register the progress heartbeat once, for the life of the process —
+	// per-request registration is unsafe here, see watchProgress.
+	s.watchProgress()
 	return s
 }
 
@@ -670,6 +685,9 @@ func (s *Server) Start(addr string) error {
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	// Stop the workspace watchers first: they poll on their own goroutines and
+	// would otherwise keep re-parsing files after the server is gone.
+	s.stopIndexes()
 	if s.httpServer == nil {
 		return nil
 	}

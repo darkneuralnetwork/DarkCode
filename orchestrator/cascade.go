@@ -35,7 +35,15 @@ const recallAnswerToolMaxAge = 7 * 24 * time.Hour
 const (
 	// cascadeRetryWindow is how soon a similar follow-up counts as a re-ask
 	// of the previous locally-answered question.
-	cascadeRetryWindow = 2 * time.Minute
+	//
+	// This was two minutes, which assumed a re-ask is a reflex. It isn't:
+	// reading a replayed paragraph, deciding it's stale and asking again
+	// takes longer than that, and past the window the cascade would serve the
+	// same local answer forever with no way for the user to reject it short
+	// of rewording the question. An hour covers "read it, wasn't satisfied,
+	// asked again" while still letting a genuinely repeated question next
+	// week take the cheap path.
+	cascadeRetryWindow = time.Hour
 	// cascadeRetrySimilarity is the GoalSimilarity needed to call a follow-up
 	// a re-ask rather than a new question.
 	cascadeRetrySimilarity = 0.6
@@ -210,6 +218,19 @@ func (k *Kernel) detectReAsk(goal string, now time.Time) string {
 		if !e.Answered {
 			continue
 		}
+		// e.Retried stays part of this condition. Dropping it — so that every
+		// repeat force-escalates rather than alternating — looks like the
+		// obvious fix and is worse: GoalSimilarity's bar is 0.6, so one
+		// rejected answer then forces an LLM call for every *related* question
+		// asked within the window, not just the identical one. On a metered
+		// free tier that trades a stale answer for an exhausted quota.
+		//
+		// The alternation it leaves behind is tolerable now for a reason that
+		// was not true before: the entry the next repeat gets served is the
+		// fresh LLM answer this escalation just produced, not the rejected
+		// one, and error text can no longer enter the cache at all
+		// (memory/replay.go). What actually made this feel broken was the
+		// two-minute window above, and that is what changed.
 		if now.Sub(e.Time) > cascadeRetryWindow || e.Retried ||
 			memory.GoalSimilarity(goal, e.Query) < cascadeRetrySimilarity {
 			break // most recent local answer isn't a match — not a re-ask
@@ -315,6 +336,24 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 		}, "", nil)
 	}
 
+	// Rung -1 — smalltalk. A greeting needs a reply, not retrieval: no
+	// similarity scoring, no episodic scan, no model call. This runs ahead of
+	// every rung and ignores entryRung because "hi" is not a query about
+	// anything, so there is nothing for the classifier to route.
+	//
+	// It is here because the cache could never serve this case: rung 1 needs
+	// 4 content tokens and rung 3 needs 2, so "hi" and "thanks" fell past
+	// every rung and reached the model every single time. The cheapest
+	// request in the system was the one paying full price, which is the
+	// opposite of what the cascade is for.
+	if reply, ok := memory.SmalltalkReply(goal); ok {
+		return finish(router.RungDeterministic, "smalltalk", core.Confidence{
+			Score:      1.0,
+			Reason:     "the message is a greeting or acknowledgement, answered without retrieval or a model call",
+			Provenance: []string{"smalltalk"},
+		}, reply, nil)
+	}
+
 	// Rung 0 — deterministic tools (structural questions, exact answers).
 	if entryRung <= router.RungDeterministic {
 		if ans, conf, ok := k.tryDeterministicRung(ctx, goal); ok && conf.Score >= k.rungThreshold(router.RungDeterministic) {
@@ -345,6 +384,25 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 	if entryRung <= router.RungGraph && k.memory != nil {
 		if ga, ok := memory.AnswerFromGraph(k.memory.KG(), goal); ok && ga.Confidence.Score >= k.rungThreshold(router.RungGraph) {
 			return finish(router.RungGraph, "graph", ga.Confidence, ga.Text, ga.SourceNodeIDs)
+		}
+	}
+
+	// Rung 2.5 — compose an answer from what is currently known, instead of
+	// replaying what was once said (memory/compose.go).
+	//
+	// AnswerFromGraph above only fires for six hard-coded question shapes, so
+	// everything else fell straight through to the replay rungs — which is how
+	// a system with a knowledge graph, a vector index and an episodic record
+	// ended up answering from a frozen blob of text. This reads all three at
+	// question time and assembles a cited answer from whatever is there now.
+	//
+	// It sits AHEAD of rung 3 deliberately. A composed answer re-derives itself
+	// from live facts and cannot be stale; a replayed one is only as fresh as
+	// the moment it was stored. When both can answer, the one that cannot rot
+	// should win.
+	if entryRung <= router.RungRecall && k.retriever != nil && k.memory != nil {
+		if ca, ok := k.retriever.ComposeAnswer(k.memory.KG(), goal); ok && ca.Confidence.Score >= k.rungThreshold(router.RungGraph) {
+			return finish(router.RungGraph, "composed", ca.Confidence, ca.Text, ca.SourceNodeIDs)
 		}
 	}
 
