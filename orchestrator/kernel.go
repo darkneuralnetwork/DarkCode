@@ -80,6 +80,10 @@ type Kernel struct {
 	// enough to be worth a planner call. Without this the two verbs selected
 	// identical behaviour and /graph was a synonym.
 	requestPlan *bool
+	// reviewerOn gates the post-acceptance reviewer. Off by default: an extra
+	// model call on every successful run is a real cost for advice nobody
+	// asked for, and it can never change the outcome. See reviewer.go.
+	reviewerOn bool
 
 	// requestToolsDisabled is a per-request override of tool access. nil ⇒
 	// tools enabled (the default). The web chat sets this from

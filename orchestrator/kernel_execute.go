@@ -379,6 +379,9 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 			if summary := acceptanceSummary(planGraph); summary != "" {
 				output += summary
 			}
+			// Review runs only on work the checks already proved, never
+			// instead of them, and cannot fail the run.
+			output += k.reviewProvenWork(ctx, userGoal, output, planGraph)
 		}
 
 		// Post-loop consensus: non-primary models review the loop's answer and

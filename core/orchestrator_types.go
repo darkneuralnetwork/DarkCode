@@ -236,6 +236,11 @@ const (
 	RoleQA          AgentRole = "qa"          // testing, quality assurance, edge-case analysis
 	RoleSecurity    AgentRole = "security"    // risk analysis, vulnerability scanning
 	RoleOps         AgentRole = "ops"         // deployment, monitoring, health checks
+	// RoleReviewer reads finished, already-proven work and says how it could be
+	// better. Deliberately not "advisor": capability.Advisor already exists and
+	// means hardware-tier advisor, and two Advisors in one binary is a
+	// permanent source of confusion.
+	RoleReviewer AgentRole = "reviewer" // post-acceptance improvement notes
 )
 
 // SubAgentConfig configures a spawned sub-agent.
