@@ -323,6 +323,36 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 			toolNameCounts[tc.Function.Name]++
 		}
 
+		// Enforce the per-tool cap rather than merely stopping to offer the
+		// tool. Withholding a schema is a hint the model is free to ignore —
+		// and models do, either by echoing a tool name from earlier in the
+		// conversation or by emitting a call when none were offered at all.
+		// Left un-enforced the cap did nothing in exactly the case it exists
+		// for: an agent that keeps searching with slightly reworded arguments,
+		// which the exact-repeat guard above cannot see.
+		var spent []core.ToolCall
+		var allowed []core.ToolCall
+		for _, tc := range msg.ToolCalls {
+			if toolNameCounts[tc.Function.Name] > perToolHardCap {
+				spent = append(spent, tc)
+				continue
+			}
+			allowed = append(allowed, tc)
+		}
+		for _, tc := range spent {
+			a.messages = append(a.messages, core.Message{
+				Role:       core.RoleTool,
+				ToolCallID: tc.ID,
+				Name:       tc.Function.Name,
+				Content: "Error: the budget for " + tc.Function.Name + " is spent (" +
+					fmt.Sprint(perToolHardCap) + " calls). Answer from what you already have.",
+			})
+		}
+		if len(allowed) == 0 {
+			continue // everything this turn was over budget; let the model reply
+		}
+		msg.ToolCalls = allowed
+
 		// Execute tools concurrently
 		allToolCalls = append(allToolCalls, msg.ToolCalls...)
 		// Enforce the role's scope at dispatch, not just at offer time. Not
