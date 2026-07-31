@@ -530,7 +530,7 @@ function renderPlanBoard(markdown, container, kind) {
   const fences = [];
   const guarded = markdown.replace(/```[\s\S]*?```/g, (m) => {
     fences.push(m);
-    return " FENCE" + (fences.length - 1) + " ";
+    return "\x00FENCE" + (fences.length - 1) + "\x00";
   });
 
   // The PLAN panel is a document (goal, approach, changes, architecture
@@ -555,7 +555,7 @@ function renderPlanBoard(markdown, container, kind) {
   for (const raw of lines) {
     const line = raw.trimEnd();
     // Fenced block placeholder → render the whole fence (mermaid/code).
-    const fenceMatch = line.match(/^ FENCE(\d+) $/);
+    const fenceMatch = line.match(/^\x00FENCE(\d+)\x00$/);
     if (fenceMatch) {
       html += '<div class="bp-fence">' + renderMarkdown(fences[+fenceMatch[1]]) + '</div>';
       continue;
