@@ -129,6 +129,15 @@ func webHandler() http.Handler {
 		}
 		a, ok := assets[clean]
 		if !ok {
+			// /debug/* is a diagnostic surface, not client-side navigation.
+			// Serving the app shell there answers "is the profiler enabled?"
+			// with a 200 and a page of HTML, so a probe concludes it is on
+			// when pprof is in fact gated off behind --debug. An honest 404
+			// is the whole point: absence has to be visible.
+			if strings.HasPrefix(r.URL.Path, "/debug/") {
+				http.NotFound(w, r)
+				return
+			}
 			// SPA fallback: an unknown path is client-side navigation, not a
 			// missing file, so the app shell answers it.
 			a, ok = assets["index.html"]

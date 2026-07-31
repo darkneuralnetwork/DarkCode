@@ -85,6 +85,10 @@
   function startExecTimer() {
     if (execTimer) clearInterval(execTimer);
     execTimer = setInterval(() => {
+      // Ten DOM writes a second for a label nobody can see is pure waste in a
+      // background tab; the elapsed time is recomputed from execStartTime on
+      // the next tick anyway, so skipping is free.
+      if (document.hidden) return;
       const elapsed = (Date.now() - execStartTime) / 1000;
       const durEl = document.getElementById("exec-duration");
       if (durEl) durEl.textContent = elapsed < 60 ? elapsed.toFixed(1) + "s" : (elapsed / 60).toFixed(1) + "m";
