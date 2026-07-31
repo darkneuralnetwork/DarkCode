@@ -211,7 +211,9 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 			temp := 0.7
 			var schemas []llm.ToolSchema
 			if offerTools {
-				schemas = a.registry.LLMSchemas().([]llm.ToolSchema)
+				// Scoped by role: a research or critic agent is never even
+				// shown a tool that changes anything. See toolscope.go.
+				schemas = schemasFor(a.registry, a.Config)
 			}
 			// Hard context-fit guarantee before dispatch (Part 3 contract):
 			// worker history grows with each tool turn, so fit to the
@@ -323,7 +325,19 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 
 		// Execute tools concurrently
 		allToolCalls = append(allToolCalls, msg.ToolCalls...)
-		toolResultsi := a.registry.DispatchAll(ctx, msg.ToolCalls)
+		// Enforce the role's scope at dispatch, not just at offer time. Not
+		// showing a tool is ergonomics; refusing to run it is the boundary. A
+		// model that invents `terminal` out of nothing — or is talked into it
+		// by a page it was asked to summarise — is turned away here by the
+		// registry's existing read-only check.
+		dispatchCtx := ctx
+		if ScopeFor(a.Role) == ScopeReadOnly {
+			dispatchCtx = context.WithValue(ctx, core.ReadOnlyToolsKey, true)
+			dispatchCtx = context.WithValue(dispatchCtx, core.ReadOnlyReasonKey,
+				"the "+string(a.Role)+" role observes and reports; it has no write authority. "+
+					"Complete the task with read-only tools, or report what a writing agent would need to do.")
+		}
+		toolResultsi := a.registry.DispatchAll(dispatchCtx, msg.ToolCalls)
 		toolResults, ok := toolResultsi.([]tools.DispatchResult)
 		if !ok {
 			return a.failResult(fmt.Errorf("agent %s: unexpected tool result type", a.ID)), fmt.Errorf("agent %s: unexpected tool result type", a.ID)

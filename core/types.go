@@ -124,3 +124,20 @@ func IsReadOnlyTools(ctx context.Context) bool {
 	v, _ := ctx.Value(ReadOnlyToolsKey).(bool)
 	return v
 }
+
+// ReadOnlyReasonKey explains WHY a request is read-only, so the refusal a tool
+// returns is actionable. There are two unrelated reasons — the user picked
+// Chat mode, or a sub-agent's role has no write authority — and telling a
+// scoped research agent to "switch to Build mode" sends it looking for a
+// control it does not have.
+const ReadOnlyReasonKey ContextKey = "readonly_reason"
+
+// ReadOnlyReason returns the explanation for ctx's read-only policy, or "" when
+// none was supplied.
+func ReadOnlyReason(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	s, _ := ctx.Value(ReadOnlyReasonKey).(string)
+	return s
+}

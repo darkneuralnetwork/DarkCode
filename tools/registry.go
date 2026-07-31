@@ -314,12 +314,22 @@ func (r *Registry) snapshot(tool string) {
 	}
 }
 
-// readOnlyDeny returns a blocked result when a read-only (Chat) request targets
-// a mutating tool, else nil. Defense-in-depth behind not offering write tools.
+// readOnlyDeny returns a blocked result when a read-only request targets a
+// mutating tool, else nil. Defense-in-depth behind not offering write tools.
+//
+// The reason travels with the context because there are two unrelated ones and
+// the advice differs: a user in Chat mode can switch to Build, while a research
+// sub-agent cannot switch anything and would waste turns looking for the
+// control. Telling it the truth — that its role has no write authority — is
+// what makes it stop trying.
 func readOnlyDeny(ctx context.Context, name string, entry *ToolEntry) *ToolResult {
 	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
+		reason := core.ReadOnlyReason(ctx)
+		if reason == "" {
+			reason = "this is a read-only (Chat) request — switch to Build mode to modify files"
+		}
 		return &ToolResult{Name: name, Success: false,
-			Error: "blocked: " + name + " is a write/execute tool and this is a read-only (Chat) request — switch to Build mode to modify files"}
+			Error: "blocked: " + name + " is a write/execute tool and " + reason}
 	}
 	return nil
 }
