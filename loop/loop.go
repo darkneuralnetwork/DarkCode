@@ -57,9 +57,13 @@ const nudgeRole = core.RoleUser
 // observation is truncated before being appended.
 const MaxObservationLen = 4000
 
-// DefaultMaxLoops is the safety ceiling when none is configured. The doc
-// suggests ~20; we keep a slightly higher default but still bounded.
-const DefaultMaxLoops = 20
+// DefaultMaxLoops is the ceiling on turns that ACTED. It is a backstop, not a
+// preference — completion is decided by acceptance checks, and this only
+// catches the case those cannot: an agent spinning productively-looking
+// forever. It used to be a config field defaulting to 3, which was low enough
+// that a single verification failure and one self-evaluation nudge spent the
+// whole allowance before any second piece of work happened.
+const DefaultMaxLoops = 25
 
 // maxCorrections bounds rounds spent re-checking an answer the agent already
 // considered final — a failed verification, or a self-evaluation that found

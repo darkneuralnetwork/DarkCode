@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/darkcode/security"
@@ -148,22 +149,14 @@ type Config struct {
 	//   <name> a model from Models whose endpoint serves /embeddings.
 	EmbeddingModel string `json:"embedding_model,omitempty"`
 
-	// --- Agentic Loop (looping technology) ---
-	// When true the kernel runs an explicit Sense-Think-Act (ReAct) loop
-	// instead of the single-pass DAG decomposition. Optional — toggled from
-	// the Settings tab; the header shows the current on/off state.
-	AgenticLoop bool `json:"agentic_loop,omitempty"`
-	// MaxLoops bounds turns that ACTED — a reasoning turn that called tools.
-	// Rounds the loop spends re-checking an answer it already considered final
-	// (a failed verification, a self-evaluation that found the goal unmet) are
-	// charged to a separate budget, loop.maxCorrections.
-	//
-	// The default was 3, and shared one counter with those corrections, so a
-	// single verification failure plus one self-evaluation nudge spent the
-	// whole allowance: a multi-step build reported "max iterations reached"
-	// having completed one step. It also shadowed loop.DefaultMaxLoops, which
-	// only applies when this is <= 0 and so never took effect.
-	MaxLoops int `json:"max_loops,omitempty"`
+	// --- Execution strategy ---
+	// Deliberately absent: agentic_loop, max_loops and post_loop_consensus.
+	// Strategy is a property of a request, not of an installation — whether a
+	// task should iterate depends on the task, which the config file cannot
+	// know. They are now the /loop, /graph and /consensus verbs, chosen at the
+	// moment they are needed. See docs/strategy-as-verbs.md, and
+	// deprecatedKeys below for what happens to an older config that still
+	// carries them.
 
 	// --- Memory ---
 	MemoryDir string `json:"memory_dir,omitempty"`
@@ -223,9 +216,6 @@ type Config struct {
 	// SkipAuxForReadOnly skips the plan/workflow amend for read-only / question
 	// turns (nothing to change), saving 2 cloud calls on the common case.
 	SkipAuxForReadOnly bool `json:"skip_aux_for_read_only"`
-	// PostLoopConsensus re-runs consensus over an already-complete loop answer.
-	// Off by default: it is N+1 extra cloud calls to polish a finished answer.
-	PostLoopConsensus bool `json:"post_loop_consensus,omitempty"`
 
 	// --- Cost governor ---
 	// Spend caps (USD) enforced against accumulated LLM cost. 0 = unlimited.
@@ -337,8 +327,6 @@ func DefaultConfig() *Config {
 		HealthDaemon:          true,
 		AutoIngest:            true,
 		HealthCPUPercent:      5,
-		AgenticLoop:           false,
-		MaxLoops:              25,
 		MemoryDir:             ".darkcode/memory",
 		ProjectsDir:           ".darkcode/projects",
 		EnableLocalLLM:        false,
@@ -351,7 +339,6 @@ func DefaultConfig() *Config {
 		// effect when a healthy local model exists (else pure cloud, unchanged).
 		UseLocalForAux:     true,
 		SkipAuxForReadOnly: true,
-		PostLoopConsensus:  false,
 		// Fresh installs get a balanced 16384 window: comfortable for RAG + a
 		// project brief without the 32768 auto-default's higher RAM. Existing
 		// configs (empty profile) keep the auto behavior.
@@ -480,6 +467,7 @@ func Load() (*Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	warnDeprecatedKeys(data)
 
 	// Environment variables override config file
 	applyEnv(cfg)
@@ -717,4 +705,39 @@ func staleHomeHint(dir string) string {
 		return "points into another user's home (" + configUser + "); clear it to use " + myUser + "'s default"
 	}
 	return ""
+}
+
+// deprecatedKeys are settings that no longer exist, and what replaced them.
+//
+// Go's json.Unmarshal ignores unknown fields, so removing a field would
+// otherwise mean a user's setting silently stops having any effect — no error,
+// no warning, just different behaviour they cannot account for. That is the
+// worst way to retire a setting, so retiring one says so out loud.
+var deprecatedKeys = map[string]string{
+	"agentic_loop":        "type /loop before a task to iterate on it, or /always loop to keep doing so",
+	"max_loops":           "completion is decided by acceptance checks now, and the iteration ceiling is an internal backstop",
+	"post_loop_consensus": "type /consensus before a question to answer it with every registered model",
+}
+
+// warnDeprecatedKeys reports settings in a loaded config file that no longer do
+// anything. Best-effort: a config that fails this second parse has already been
+// accepted by the first, and a warning is not worth failing a startup over.
+func warnDeprecatedKeys(data []byte) {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return
+	}
+	// Sorted so the output is stable across runs; map order would otherwise
+	// shuffle the notes and make them look like different messages.
+	keys := make([]string, 0, len(deprecatedKeys))
+	for k := range deprecatedKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, present := raw[key]; present {
+			fmt.Fprintf(os.Stderr,
+				"note: %q in your config no longer does anything — %s\n", key, deprecatedKeys[key])
+		}
+	}
 }

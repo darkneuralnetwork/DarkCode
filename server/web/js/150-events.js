@@ -462,7 +462,7 @@ function attachEventListeners() {
         // ReloadModels; the frontend just wasn't refreshing the badges until
         // page reload. Best-effort: never blocks the toast.
         fetch(API + "/api/status").then(r => r.ok ? r.json() : null).then(d => {
-          if (d) { updateBadges(d); updateLoopIndicator(d.agentic_loop); }
+          if (d) { updateBadges(d); }
         }).catch(() => {});
         if (btn) btn.textContent = "Saved!";
         if (btn) setTimeout(() => { btn.textContent = "Update Settings"; }, 2000);
@@ -652,57 +652,10 @@ function attachEventListeners() {
     }
   });
 
-  // Agentic Loop toggle — flip persists immediately to the backend (so the
-  // loop can be enabled/disabled in one action and survives a reload), and
-  // the label + header indicator update live. The Apply button below remains
-  // for updating max-loops.
-  $("#cfg-agentic-loop")?.addEventListener("change", async (e) => {
-    const on = e.target.checked;
-    const lbl = $("#cfg-agentic-loop-label");
-    if (lbl) lbl.textContent = on ? "Enabled" : "Disabled";
-    const loops = parseInt($("#cfg-max-loops")?.value, 10) || 20;
-    try {
-      const res = await fetch(API + "/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_settings", agentic_loop: on, max_loops: loops })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      updateLoopIndicator(on);
-      updateLoopModeOption(on);
-      toast("success", on ? `Agentic Loop enabled (max ${loops} iterations)` : "Agentic Loop disabled");
-    } catch (err) {
-      // Revert the checkbox to the last-known server state.
-      toast("error", "Loop toggle failed: " + err.message);
-      loadConfig();
-    }
-  });
+  // The Agentic Loop toggle and its Apply button lived here. Both are gone —
+  // the loop is selected per request with /loop or the Loop chat mode, so
+  // there is nothing global left to switch.
 
-  // Agentic Loop Apply button — persist enable + max-loops to the backend
-  // and refresh the header indicator.
-  $("#cfg-loop-btn")?.addEventListener("click", async () => {
-    const btn = $("#cfg-loop-btn");
-    const on = $("#cfg-agentic-loop").checked;
-    const loops = parseInt($("#cfg-max-loops").value, 10) || 20;
-    const prev = btn.textContent;
-    btn.textContent = "Applying...";
-    try {
-      const res = await fetch(API + "/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_settings", agentic_loop: on, max_loops: loops })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      updateLoopIndicator(on);
-      updateLoopModeOption(on);
-      toast("success", on ? `Agentic Loop enabled (max ${loops} iterations)` : "Agentic Loop disabled");
-      btn.textContent = "Saved!";
-      setTimeout(() => { btn.textContent = prev; }, 2000);
-    } catch (err) {
-      toast("error", "Error: " + err.message);
-      btn.textContent = prev;
-    }
-  });
 
   $("#cfg-enable-local-llm")?.addEventListener("change", async (e) => {
     const lbl = $("#cfg-enable-local-llm-label");

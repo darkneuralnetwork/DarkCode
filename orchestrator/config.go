@@ -14,17 +14,15 @@ type Config struct {
 	UseCtxEngine     bool
 	ContextLength    int
 
-	// AgenticLoop enables the optional ReAct (Sense-Think-Act) execution loop
-	// from the looping_tech design. When true, Execute delegates to the loop
-	// package instead of the DAG decomposition.
-	AgenticLoop bool
-	MaxLoops    int
+	// No AgenticLoop or MaxLoops here. Whether a request iterates is decided
+	// per request by the /loop verb or the Loop chat mode, and the iteration
+	// ceiling is loop.DefaultMaxLoops — a backstop against productive-looking
+	// spinning, which is not a preference anyone should have to hold an
+	// opinion about.
 
 	// UseLocalForAux routes auxiliary calls to the local model when healthy +
-	// fitting; PostLoopConsensus gates the redundant post-loop re-synthesis.
-	// (SkipAuxForReadOnly is applied server-side where the amend lives.)
-	UseLocalForAux    bool
-	PostLoopConsensus bool
+	// fitting. (SkipAuxForReadOnly is applied server-side where the amend lives.)
+	UseLocalForAux bool
 
 	// PlanApproval controls the interactive plan gate: "always" pauses every
 	// planned (non-trivial) task for user approval, "auto" pauses only

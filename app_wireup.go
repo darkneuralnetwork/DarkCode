@@ -591,14 +591,11 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	orchCfg.SafetyLevel = parseSafetyLevel(a.Cfg.SafetyLevel)
 	orchCfg.CompressContext = a.Cfg.CompressContext
 	orchCfg.UseCtxEngine = a.Cfg.UseCtxEngine
-	orchCfg.AgenticLoop = a.Cfg.AgenticLoop
-	orchCfg.MaxLoops = a.Cfg.MaxLoops
 	orchCfg.ExecutionProfile = a.Cfg.ExecutionProfile
 	orchCfg.PlanApproval = a.Cfg.PlanApproval
 	orchCfg.PlanDepth = a.Cfg.PlanDepth
 	orchCfg.ContextLength = a.Cfg.ContextLength
 	orchCfg.UseLocalForAux = a.Cfg.UseLocalForAux
-	orchCfg.PostLoopConsensus = a.Cfg.PostLoopConsensus
 
 	a.Kernel = orchestrator.New(orchCfg, a.Router, a.Registry, a.MemSystem, a.Compressor, a.Emitter)
 	a.Recorder = tools.NewChangeRecorder()

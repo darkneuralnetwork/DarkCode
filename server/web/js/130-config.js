@@ -340,15 +340,11 @@ async function loadConfig() {
 
     // Agentic Loop (looping technology) — populate toggle + max loops +
     // header indicator.
-    const loopOn = !!d.agentic_loop;
-    const loopChk = $("#cfg-agentic-loop");
-    if (loopChk) loopChk.checked = loopOn;
-    const loopLbl = $("#cfg-agentic-loop-label");
-    if (loopLbl) loopLbl.textContent = loopOn ? "Enabled" : "Disabled";
-    const maxLoops = $("#cfg-max-loops");
-    if (maxLoops) maxLoops.value = d.max_loops || 20;
-    updateLoopIndicator(loopOn);
-    updateLoopModeOption(loopOn);
+    // The agentic-loop switch and Max Loops field are gone: strategy is
+    // chosen per request with /loop, not stored as a setting. Loop mode is
+    // always offered in the mode picker now, because there is no longer a
+    // master toggle that could leave it inert.
+    updateLoopModeOption(true);
     renderExecutionProfile(d.execution_profile);
     renderPlanControls(d.plan_approval, d.plan_depth);
 

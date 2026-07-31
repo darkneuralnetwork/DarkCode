@@ -328,7 +328,22 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// genuinely nothing machine-verifiable to run.
 		var contract *loop.Contract
 		var planGraph *plan.Graph
-		if k.shouldPlanForLoop(userGoal, complexity, hasProjectGuidance) {
+
+		// A criterion the user stated outranks anything the planner would
+		// infer. They know when the task is finished; the planner is guessing
+		// at it, and a planner call costs a model request to produce a worse
+		// answer than the one already in the prompt.
+		if criterion, task, ok := loop.ParseUntil(userGoal); ok {
+			userGoal = task
+			contract = k.untilContract(ctx, criterion)
+			k.log("loop", "Running until the user's criterion holds: "+criterion)
+			if k.emitter != nil {
+				k.emitter.EmitTaskUpdate("agentic-loop", "contract",
+					"stop condition: "+criterion)
+			}
+		}
+
+		if contract == nil && k.shouldPlanForLoop(userGoal, complexity, hasProjectGuidance) {
 			depth := decidePlanDepth(userGoal, complexity, hasProjectGuidance, k.planDepthCfg())
 			if g, perr := k.deepPlan(ctx, k.injectRecall(userGoal, recallBlock), depth); perr == nil {
 				g.Goal = userGoal
@@ -366,10 +381,11 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 			}
 		}
 
-		// Post-loop consensus synthesis, gated on PostLoopConsensus (default
-		// off): non-primary models review the loop's answer, primary
-		// synthesizes. Extra cloud calls purely for polish, so it's opt-in.
-		if k.cfg.PostLoopConsensus && k.router.GetMode() == core.RouteConsensus && k.router.ModelCount() > 1 {
+		// Post-loop consensus: non-primary models review the loop's answer and
+		// the primary synthesises. Extra calls purely for polish, so it runs
+		// only when the request explicitly asked for consensus — the /consensus
+		// verb, or consensus routing — rather than from a standing setting.
+		if k.router.GetMode() == core.RouteConsensus && k.router.ModelCount() > 1 {
 			k.log("consensus", "Running post-agentic consensus synthesis")
 			if refined, cerr := k.runConsensusOnOutput(ctx, userGoal, output, loopRes.ToolTrace); cerr == nil {
 				output = refined

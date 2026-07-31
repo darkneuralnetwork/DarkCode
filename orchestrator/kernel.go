@@ -73,6 +73,13 @@ type Kernel struct {
 	// explicitly picks Loop mode; the CLI/single-query path leaves it nil so
 	// the master toggle still drives loop usage there. Guarded by mu.
 	requestLoop *bool
+	// requestPlan forces (or forbids) the planning phase for one request.
+	// It is what separates /graph from /loop: both iterate, but /graph always
+	// decomposes into a task graph first so there are per-task acceptance
+	// criteria to prove, while /loop plans only when the goal is complex
+	// enough to be worth a planner call. Without this the two verbs selected
+	// identical behaviour and /graph was a synonym.
+	requestPlan *bool
 
 	// requestToolsDisabled is a per-request override of tool access. nil ⇒
 	// tools enabled (the default). The web chat sets this from
@@ -251,8 +258,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		verifier:    verifier,
 		agentBus:    bus,
 		gate:        gate,
-		agenticLoop: loop.New(rtr, reg, emitter, cfg.MaxLoops),
-		agenticOn:   cfg.AgenticLoop,
+		agenticLoop: loop.New(rtr, reg, emitter, 0), // 0 → loop.DefaultMaxLoops
 		classifier:  router.NewTaskClassifier(),
 	}
 	for i := range k.cascadeThresholds {
@@ -407,21 +413,11 @@ func (k *Kernel) SetApprovalCallback(cb func(action string) bool) {
 	})
 }
 
-// SetAgenticLoop hot-toggles the optional ReAct execution loop at runtime
-// (called from the Settings tab via the server). maxLoops <= 0 leaves the
-// current ceiling unchanged.
-func (k *Kernel) SetAgenticLoop(enabled bool, maxLoops int) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	k.agenticOn = enabled
-	k.cfg.AgenticLoop = enabled
-	if maxLoops > 0 {
-		k.cfg.MaxLoops = maxLoops
-		if k.agenticLoop != nil {
-			k.agenticLoop.SetMaxLoops(maxLoops)
-		}
-	}
-}
+// SetAgenticLoop is retained so an older client that still posts the setting
+// gets a definite answer rather than a 500, but it no longer stores anything:
+// whether a request iterates is decided per request by the /loop verb or the
+// Loop chat mode. The iteration ceiling is loop.DefaultMaxLoops.
+func (k *Kernel) SetAgenticLoop(bool, int) {}
 
 // ApplyRequestOverrides applies per-request routing/safety/loop/tool overrides
 // to the live router, gate, and kernel flags, returning a restore func to defer.
@@ -774,3 +770,32 @@ func (k *Kernel) Status() string {
 // Runs lists the recorded execution journals, most recent first, so a replay
 // view can offer something to open.
 func (k *Kernel) Runs() []RunSummary { return ListRuns(k.runsDir) }
+
+// ApplyPlanOverride forces the planning phase on ("always") or off ("never")
+// for one request, returning a restore func to defer. "" leaves the adaptive
+// decision alone.
+func (k *Kernel) ApplyPlanOverride(mode string) func() {
+	if mode != "always" && mode != "never" {
+		return func() {}
+	}
+	k.mu.Lock()
+	prev := k.requestPlan
+	v := mode == "always"
+	k.requestPlan = &v
+	k.mu.Unlock()
+	return func() {
+		k.mu.Lock()
+		k.requestPlan = prev
+		k.mu.Unlock()
+	}
+}
+
+// planForced reports the per-request planning override, if any.
+func (k *Kernel) planForced() (force bool, set bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.requestPlan == nil {
+		return false, false
+	}
+	return *k.requestPlan, true
+}

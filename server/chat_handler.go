@@ -74,10 +74,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// loop OFF so a globally-enabled loop never silently takes over those
 	// modes — the loop is opt-in per request.
 	// Smart Auto-Detection Mode (Advanced Intent Classification)
-	s.cfgMu.RLock()
-	masterLoop := s.cfg.AgenticLoop
-	s.cfgMu.RUnlock()
-
 	if req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "" {
 		// Cost guard: for a query that is obviously a general question, skip the
 		// LLM intent-classifier call (and the project auto-creation it can
@@ -182,8 +178,10 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 	}
 
 	// Re-evaluate overrides after Smart Mode classification
+	// The requested mode alone decides this. It used to also require a
+	// persistent master toggle, so choosing Loop could silently do nothing.
 	loopOverride := "off"
-	if req.ChatMode == "loop" && masterLoop {
+	if req.ChatMode == "loop" {
 		loopOverride = "on"
 	}
 	toolsOverride := "on"

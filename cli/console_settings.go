@@ -130,11 +130,11 @@ func (c *Console) setChatMode(mode string) {
 		fmt.Printf("%s invalid chat mode %q. Use: chat, build, loop\n", paint(cRed, "✗"), mode)
 		return
 	}
-	note := ""
-	if c.chatMode == "loop" && !c.cfg.AgenticLoop {
-		note = paint(cYellow, "  (enable the Agentic Loop in /config for Loop mode to take effect)")
-	}
-	fmt.Printf("%s chat mode → %s%s\n", paint(cGreen, "✓"), paint(cCyan, c.chatMode), note)
+	// No note about enabling anything first. Picking Loop used to print
+	// "(enable the Agentic Loop in /config for Loop mode to take effect)" —
+	// a command surface apologising for a configuration surface. The mode is
+	// now sufficient on its own.
+	fmt.Printf("%s chat mode → %s\n", paint(cGreen, "✓"), paint(cCyan, c.chatMode))
 }
 
 // setBrain sets the per-session routing brain (Phase 1 parity with the GUI).

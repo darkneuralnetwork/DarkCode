@@ -28,6 +28,13 @@ var commandRegistry = []cmdInfo{
 	{"/config", "Session", "Show the current configuration"},
 	{"/quit", "Session", "Exit darkcode"},
 
+	// Strategy verbs — typed WITH a task, applying to that one message.
+	{"/ask", "Strategy", "/ask <question> — answer without changing anything"},
+	{"/loop", "Strategy", "/loop <task> — iterate until the checks pass"},
+	{"/graph", "Strategy", "/graph <task> — plan it, run the graph, prove each task"},
+	{"/consensus", "Strategy", "/consensus <question> — every model answers, then synthesise"},
+	{"/always", "Strategy", "Keep using one strategy until you say otherwise"},
+
 	// Chat & modes
 	{"/chatmode", "Chat & Modes", "Chat / Build / Build+Loop (tools & auto-task policy)"},
 	{"/brain", "Chat & Modes", "Routing brain: auto (local-first) / local (offline) / cloud"},

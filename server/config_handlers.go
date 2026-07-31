@@ -53,8 +53,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	sandboxMode := s.cfg.ResolvedSandboxMode()
 	maxTurns := s.cfg.MaxTurns
 	compressContext := s.cfg.CompressContext
-	agenticLoop := s.cfg.AgenticLoop
-	maxLoops := s.cfg.MaxLoops
 	compressorModel := s.cfg.CompressorModel
 	uiMode := s.cfg.UIMode
 	contextLength := s.cfg.ContextLength
@@ -74,8 +72,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"sandbox":           sandboxMode,
 		"max_turns":         maxTurns,
 		"compress_context":  compressContext,
-		"agentic_loop":      agenticLoop,
-		"max_loops":         maxLoops,
 		"compressor_model":  compressorModel,
 		"ui_mode":           uiMode,
 		"context_length":    contextLength,
@@ -344,17 +340,11 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// Agentic loop hot-toggle. Pointer so we can distinguish "not sent"
-		// from "explicitly false".
-		if req.AgenticLoop != nil {
-			s.cfg.AgenticLoop = *req.AgenticLoop
-		}
-		if req.MaxLoops > 0 {
-			s.cfg.MaxLoops = req.MaxLoops
-		}
-		if s.kernel != nil {
-			s.kernel.SetAgenticLoop(s.cfg.AgenticLoop, s.cfg.MaxLoops)
-		}
+		// The agentic loop is no longer a setting. It is the /loop verb, or
+		// the Loop chat mode, chosen per request — a persistent toggle asked
+		// the user to predict once, globally, something that varies every
+		// message. Requests carrying the old fields are accepted and ignored
+		// so an older UI build does not error; see config.deprecatedKeys.
 		// Execution profile (parallelism switcher) hot-toggle. Applied to the
 		// executor + router on the next Execute.
 		if req.ExecutionProfile != nil {

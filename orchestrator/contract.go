@@ -113,6 +113,36 @@ func (k *Kernel) verifyContract(ctx context.Context, g *plan.Graph) loop.Verdict
 	return v
 }
 
+// untilContract turns a user-stated criterion into an enforceable contract,
+// running shell criteria through the tool registry so the sandbox, the
+// permission gate and the circuit breaker all still apply — a stop condition
+// must not become a way to run a command that a tool call could not.
+func (k *Kernel) untilContract(ctx context.Context, criterion string) *loop.Contract {
+	ws := tools.CurrentWorkspace(ctx)
+	if ws == "" {
+		ws, _ = os.Getwd()
+	}
+	run := func(cmd string) (bool, string) {
+		if k.registry == nil {
+			return false, "no tool registry available to check the criterion"
+		}
+		runCtx, cancel := context.WithTimeout(ctx, acceptanceTimeout)
+		defer cancel()
+		res, err := k.registry.Execute(runCtx, "terminal", map[string]interface{}{
+			"command": cmd, "workdir": ws,
+		})
+		switch {
+		case err != nil:
+			return false, err.Error()
+		case res == nil:
+			return false, "the check produced no result"
+		default:
+			return res.Success, strings.TrimSpace(res.Output + " " + res.Error)
+		}
+	}
+	return loop.ContractFromUntil(criterion, ws, run)
+}
+
 // loopPlanMinComplexity is the complexity below which loop mode skips
 // planning. Decomposing "rename this variable" into a task graph costs a
 // planner call and produces one node whose acceptance criterion is the default
@@ -124,6 +154,12 @@ const loopPlanMinComplexity = 4
 // intent, and ignoring them is how "follow the blueprint" stops meaning
 // anything.
 func (k *Kernel) shouldPlanForLoop(goal string, complexity int, hasProjectGuidance bool) bool {
+	// An explicit /graph or /loop decides this outright — the user has said
+	// which shape of work they want, and second-guessing them from a
+	// complexity heuristic is how the verb stops meaning anything.
+	if force, set := k.planForced(); set {
+		return force
+	}
 	if hasProjectGuidance {
 		return true
 	}

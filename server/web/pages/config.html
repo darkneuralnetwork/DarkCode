@@ -168,29 +168,13 @@
         <div id="cfg-plan-hint" style="font-size: 11px; color: var(--text-dim); margin-top: 10px; line-height: 1.5;">—</div>
       </div>
 
-      <!-- ═══ Agentic Loop ═══ -->
-      <div class="glass-panel" style="padding: 24px;">
-        <h3 class="cfg-h3" style="margin-top: 0;">🔁 Agentic Loop</h3>
-        <p class="cfg-desc" style="margin-bottom: 16px;">
-          Enable the optional Sense-Think-Act (ReAct) execution loop for autonomous multi-step execution.
-        </p>
-        <div class="cfg-loop-row" style="display: flex; align-items: center; gap: 16px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-          <label class="cfg-switch" style="margin-bottom: 0;">
-            <input type="checkbox" id="cfg-agentic-loop">
-            <span class="cfg-switch-track"><span class="cfg-switch-thumb"></span></span>
-          </label>
-          <span class="cfg-switch-label" id="cfg-agentic-loop-label" style="min-width: 60px;">Disabled</span>
-          
-          <div style="flex: 1;"></div>
-          
-          <div class="cfg-field cfg-max-loops-field" style="margin-bottom: 0; display: flex; align-items: center; gap: 8px;">
-            <label style="color: var(--text-mute); font-size: 11px; text-transform: uppercase; margin-bottom: 0;">Max Loops</label>
-            <input type="number" id="cfg-max-loops" class="glass-input" value="20" min="1" max="100" style="width: 60px; padding: 4px 8px;">
-          </div>
-          <button type="button" class="btn-glow primary" id="cfg-loop-btn" style="padding: 6px 12px;">Apply</button>
-        </div>
-      </div>
-      
+      <!-- The Agentic Loop panel lived here: an on/off switch plus a Max
+           Loops number. Both are gone. Whether a request iterates depends on
+           the request, which a global setting cannot know, so it is now the
+           /loop verb typed with the task — or the Loop chat mode for a whole
+           session. The iteration ceiling is a backstop the tool holds itself
+           to rather than a preference. See docs/strategy-as-verbs.md. -->
+
       <!-- ═══ Local LLM ═══ -->
       <div class="glass-panel" style="padding: 24px;">
         <h3 class="cfg-h3" style="margin-top: 0;">🖥️ Local LLM</h3>

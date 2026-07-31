@@ -63,6 +63,11 @@ type Console struct {
 	// run tasks). It selects the tool/loop policy per query via
 	// ApplyRequestOverrides, keeping CLI ↔ GUI parity.
 	chatMode string
+	// pendingVerb is the strategy a one-shot verb selected for the NEXT
+	// message only. Nil most of the time; cleared the moment it is used, so a
+	// verb can never silently persist into a later request the way a sticky
+	// mode does.
+	pendingVerb *strategy
 	// brain mirrors the GUI's Brain selector: "auto" (local-first, escalate),
 	// "local" (offline — pin to the local model), or "cloud". Passed to
 	// ApplyRequestOverrides per query.
@@ -350,6 +355,21 @@ func (c *Console) dispatchInput(ctx context.Context, input string) (done bool, s
 	c.history = append(c.history, input)
 	c.histIdx = len(c.history)
 
+	// A strategy verb carries a task on the same line: "/loop add retries".
+	// It is checked before the command table because it is not a command — it
+	// selects how THIS message runs and then runs it, which is the whole point
+	// of a verb over a setting. A bare "/loop" falls through to the command
+	// table, which prints help rather than silently arming a mode.
+	if !strings.Contains(input, "\n") {
+		if st, task, ok := splitVerb(input); ok {
+			v := st
+			c.pendingVerb = &v
+			query, atts := attach.ParseRefs(task)
+			c.runQuery(ctx, query, atts)
+			return false, false
+		}
+	}
+
 	// A slash command is only recognized when the whole message is a single
 	// line beginning with '/'. A multi-line paste is always message content,
 	// never a command.
@@ -532,11 +552,12 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 		}
 	}()
 
-	// Apply the chat-mode + brain policy (CLI ↔ GUI parity). Chat → tools off
-	// (pure Q&A); Build → tools on; Loop → tools on + agentic loop. Brain sets
-	// the local/cloud routing preference for this query.
+	// Strategy for THIS message: a one-shot verb if the line carried one,
+	// otherwise the sticky chat mode. Nothing consults a persistent flag any
+	// more — picking Loop and then being told to go and enable it in /config
+	// was two places expressing one intent.
 	loopOverride := "off"
-	if c.chatMode == "loop" && c.cfg.AgenticLoop {
+	if c.chatMode == "loop" {
 		loopOverride = "on"
 	}
 	toolsOverride := "on"
@@ -544,8 +565,17 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 		// Chat mode: read-only tools only (read/search/web), never writes.
 		toolsOverride = "readonly"
 	}
-	restoreOverrides := c.kernel.ApplyRequestOverrides("", "", loopOverride, toolsOverride, c.brain)
+	modeOverride, planOverride := "", ""
+	if c.pendingVerb != nil {
+		v := c.pendingVerb
+		c.pendingVerb = nil // one shot: consumed by this message and no other
+		loopOverride, toolsOverride = v.loop, v.tools
+		modeOverride, planOverride = v.mode, v.plan
+	}
+	restoreOverrides := c.kernel.ApplyRequestOverrides(modeOverride, "", loopOverride, toolsOverride, c.brain)
 	defer restoreOverrides()
+	restorePlan := c.kernel.ApplyPlanOverride(planOverride)
+	defer restorePlan()
 
 	result, err := c.kernel.Execute(reqCtx, resolvedQuery)
 	close(done)
