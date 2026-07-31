@@ -243,6 +243,12 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	// spin.
 	iteration, corrections, evalFailures := 0, 0, 0
 
+	// unlocked holds tools the model asked for that the relevance filter had
+	// not offered. Re-offering them for the rest of the run is what makes the
+	// filter a cost saving rather than a capability cut: guessing wrong costs
+	// one turn, and the model does not have to keep rediscovering the tool.
+	unlocked := map[string]bool{}
+
 	// verdict holds the most recent contract check, so the final Result can
 	// report what was actually proven rather than only whether the loop chose
 	// to stop.
@@ -272,6 +278,12 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		} else {
 			schemas = l.registry.LLMSchemas().([]llm.ToolSchema)
 		}
+		// Send only the tools this goal could plausibly use. The whole registry
+		// is ~2,047 tokens on EVERY iteration, so a long run spends more
+		// describing tools than doing work. Anything the model asks for anyway
+		// is unlocked for the rest of the run (see below), which keeps a wrong
+		// guess to one turn rather than a failed task.
+		schemas = tools.RelevantSchemas(goal, schemas, unlocked)
 		// Hard context-fit guarantee: messages grow with each iteration's tool
 		// output, so fit to the RECEIVING client's effective window right
 		// before dispatch (Part 3 contract). Prevents the "context window
@@ -454,6 +466,9 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		// ── 3. ACT — execute the requested tools ─────────────────────────
 		// This turn is doing work, so it is what the iteration budget is for.
 		iteration++
+		for _, tc := range msg.ToolCalls {
+			unlocked[tc.Function.Name] = true
+		}
 		allToolCalls = append(allToolCalls, msg.ToolCalls...)
 		resultsi := l.registry.DispatchAll(ctx, msg.ToolCalls)
 		results, ok := resultsi.([]tools.DispatchResult)
