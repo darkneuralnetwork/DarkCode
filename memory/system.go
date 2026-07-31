@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/observability"
 )
 
 // ============================================================================
@@ -67,6 +68,13 @@ type System struct {
 	Architecture       *ArchitectureMemory
 	architecturePath   string
 	architectureWriter *DebouncedWriter
+
+	// embedWG tracks vector backfills still in flight. Embedding moved off the
+	// write path so a task's completion is not delayed by a network call, which
+	// means a vector can still be arriving when the process is asked to stop —
+	// and a backfill lost at that point is a vector that never comes back,
+	// because nothing re-embeds an existing entry. Shutdown waits on this.
+	embedWG sync.WaitGroup
 }
 
 // NewSystem creates a unified memory system rooted at the given directory.
@@ -148,8 +156,16 @@ func NewSystem(dataDir string) (*System, error) {
 	return s, nil
 }
 
+// WaitForEmbeddings blocks until every in-flight vector backfill has finished.
+// Must not be called while holding s.mu — the backfills take it themselves.
+func (s *System) WaitForEmbeddings() { s.embedWG.Wait() }
+
 // Shutdown flushes all pending memory writes to disk.
 func (s *System) Shutdown() {
+	// Let in-flight vectors land before the writers flush, so a backfill that
+	// was seconds from completing is persisted rather than dropped. Nothing
+	// re-embeds an existing entry, so one lost here is lost permanently.
+	s.WaitForEmbeddings()
 	if s.episodicWriter != nil {
 		s.episodicWriter.Shutdown()
 	}
@@ -326,12 +342,18 @@ func (s *System) STMCompress(briefing []core.Message, keepRecent int) {
 // ============================================================================
 
 // EpisodicAdd records a completed task execution.
+//
+// The vector is filled in afterwards, not before the write. This used to embed
+// inline, which put a network call with a five-second timeout between the user
+// and the end of their request — every completed task paid it, and a wedged
+// embedder turned every single turn into a five-second stall for a field that
+// only improves ranking.
+//
+// An entry with no vector is not broken, it is the same entry every install
+// without an embedder already has: recall falls back to keyword overlap until
+// the vector lands. Degrading a ranking signal is a much smaller cost than
+// delaying the answer.
 func (s *System) EpisodicAdd(entry core.EpisodicEntry) error {
-	// Generate embedding for semantic search
-	if vec, err := s.GetEmbedding(entry.TaskGoal + " " + entry.Summary); err == nil {
-		entry.Vector = vec
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -350,7 +372,37 @@ func (s *System) EpisodicAdd(entry core.EpisodicEntry) error {
 	}
 	s.episodic = append(s.episodic, entry)
 	s.episodicWriter.MarkDirty()
+	s.embedEpisodicLater(entry.ID, entry.TaskGoal+" "+entry.Summary)
 	return nil
+}
+
+// embedEpisodicLater computes an entry's vector off the write path and fills it
+// in when it arrives. Must be called with s.mu held.
+//
+// No-op without an embedder, so an install that never configured one spawns
+// nothing at all. Panic-guarded: this runs on its own goroutine, where an
+// unrecovered panic ends the process rather than the task.
+func (s *System) embedEpisodicLater(id, text string) {
+	if s.embedder == nil || id == "" {
+		return
+	}
+	s.embedWG.Add(1)
+	observability.Go("episodic-embed", func() {
+		defer s.embedWG.Done()
+		vec, err := s.GetEmbedding(text)
+		if err != nil || len(vec) == 0 {
+			return // keyword recall still works; this was only a ranking signal
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i := range s.episodic {
+			if s.episodic[i].ID == id {
+				s.episodic[i].Vector = vec
+				s.episodicWriter.MarkDirty()
+				return
+			}
+		}
+	})
 }
 
 // EpisodicGet returns all episodic entries, most recent first.

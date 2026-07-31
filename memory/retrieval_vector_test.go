@@ -55,6 +55,10 @@ func TestRecallVectorSemanticMatch(t *testing.T) {
 	// Written with the embedder active → entries carry vectors.
 	addEpisodic(t, sys, "implement user authentication with JWT", "success", "done", nil, time.Hour)
 	addEpisodic(t, sys, "deploy the app to production cluster", "success", "done", nil, time.Hour)
+	// Vectors are filled in off the write path, so a write is not a promise
+	// that the vector is there yet — recall degrades to keyword until it lands.
+	// The test wants the vector path specifically, so it waits for it.
+	sys.WaitForEmbeddings()
 
 	r := NewHybridRetriever(sys, nil)
 	// No keyword overlap with the auth entry ("sign-in", "token" don't appear

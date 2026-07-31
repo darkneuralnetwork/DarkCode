@@ -148,6 +148,9 @@ func TestBestRecallAnswer_VectorPathAnswersWithoutKeywordOverlap(t *testing.T) {
 	// the admission gate rather than the vector path this case is about.
 	addEpisodic(t, sys, "how does user authentication with JWT work", "success",
 		"Auth flow explained: use JWT middleware.", nil, time.Hour)
+	// Vectors land off the write path; this case is specifically about the
+	// vector signal, so wait for it rather than racing the backfill.
+	sys.WaitForEmbeddings()
 
 	r := NewHybridRetriever(sys, nil)
 	// Zero keyword coverage with the entry text ("sign-in", "security",
