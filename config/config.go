@@ -108,6 +108,22 @@ type Config struct {
 	// HealthCPUPercent bounds the daemon to this share of a single core.
 	HealthCPUPercent int `json:"health_cpu_percent,omitempty"`
 
+	// AutoIngest indexes the active workspace into semantic memory so
+	// retrieval has something to retrieve over. Without it the knowledge graph
+	// filled itself from AST sync while the vector index beside it stayed
+	// empty, and recall got blamed for missing what it was never shown.
+	//
+	// The cost is one embedding call per stored chunk, which is free on a
+	// local embedder and billable on a hosted one — so it is incremental: a
+	// content hash per file means only files that actually changed are
+	// re-embedded, and the steady state costs a hash and nothing else.
+	//
+	// On by default when an embedder exists; with no embedder configured the
+	// chunks are still stored and searchable by keyword, which is cheaper
+	// still. No omitempty: this defaults to true, so omitting a user's
+	// explicit false on save would silently switch it back on.
+	AutoIngest bool `json:"auto_ingest"`
+
 	// ExecutionProfile controls DAG + consensus parallelism: "parallel",
 	// "sequential" (safe on strict free-tier RPM limits), or "auto" (default:
 	// sequential when only free-tier cloud models are registered).
@@ -319,6 +335,7 @@ func DefaultConfig() *Config {
 		PlanApproval:          "auto",
 		PlanDepth:             "auto",
 		HealthDaemon:          true,
+		AutoIngest:            true,
 		HealthCPUPercent:      5,
 		AgenticLoop:           false,
 		MaxLoops:              25,

@@ -20,6 +20,7 @@ import (
 
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
+	"github.com/darkcode/ingest"
 	"github.com/darkcode/intelligence"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
@@ -59,8 +60,12 @@ type Server struct {
 
 	// indexes holds one long-lived code index per workspace, each kept fresh
 	// by its own file watcher. Built lazily on first use; see projectIndex.
-	indexes map[string]*intelligence.ProjectIndex
-	indexMu sync.Mutex
+	// ingesters holds the retrieval-side counterpart, chained onto the same
+	// watcher — both go stale on the same event, so they share it rather than
+	// each polling the tree. Guarded by indexMu.
+	indexes   map[string]*intelligence.ProjectIndex
+	ingesters map[string]*ingest.Auto
+	indexMu   sync.Mutex
 
 	// apiRateLimiter throttles /api/* requests per remote address.
 	apiRateLimiter *rateLimiter

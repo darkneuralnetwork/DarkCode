@@ -40,6 +40,7 @@ func (s *Server) projectIndex(workspace string) *intelligence.ProjectIndex {
 	// Background refresh is tied to the server's lifetime, not the request's;
 	// stopIndexes tears them down on shutdown.
 	idx.StartWatching(context.Background())
+	s.startAutoIngest(workspace, idx)
 
 	if s.indexes == nil {
 		s.indexes = map[string]*intelligence.ProjectIndex{}
