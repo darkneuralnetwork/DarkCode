@@ -168,20 +168,30 @@ func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
 		return messages
 	}
 
-	// Identify the protected anchors: a leading system message and the last
-	// message (the current user turn / most recent context).
+	// Identify the protected anchors: a leading system message and the trailing
+	// exchange (the current turn plus, when it is a tool response, the
+	// assistant message that asked for it).
+	//
+	// Protecting the last message ALONE was wrong, and produced a real failure.
+	// A tool response is not self-contained: shedding the assistant that issued
+	// its call leaves the response an orphan, repairToolPairs correctly deletes
+	// it, and what survives is the system prompt by itself. Gemini folds system
+	// messages into systemInstruction, so the request goes out with an empty
+	// contents array and comes back "GenerateContentRequest.contents: contents
+	// is not specified" — a 400 on a worker that was making normal progress,
+	// triggered by nothing more than one oversized tool result.
 	sysIdx := -1
 	if len(messages) > 0 && messages[0].Role == core.RoleSystem {
 		sysIdx = 0
 	}
-	lastIdx := len(messages) - 1
+	protected := trailingExchange(messages)
 
 	kept := make([]bool, len(messages))
 	for i := range kept {
 		kept[i] = true
 	}
 	for i := 0; i < len(messages); i++ {
-		if i == sysIdx || i == lastIdx {
+		if i == sysIdx || protected[i] {
 			continue
 		}
 		if estimateKept(messages, kept) <= budget {
@@ -206,6 +216,82 @@ func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
 			break // nothing left worth truncating; accept the floor
 		}
 		out[bi].Content = truncateMiddle(out[bi].ContentString(), bTok/2)
+	}
+	return ensureConversational(out, messages)
+}
+
+// trailingExchange marks the messages that make up the final turn: the last
+// message, and — when that is a tool response — the assistant that issued its
+// call plus every sibling response to that same assistant.
+//
+// The siblings matter because a single assistant turn can request several tools
+// at once. Keeping the assistant and only one of its responses leaves the rest
+// unanswered, which Gemini rejects just as firmly as an orphaned response.
+func trailingExchange(messages []core.Message) []bool {
+	protected := make([]bool, len(messages))
+	if len(messages) == 0 {
+		return protected
+	}
+	last := len(messages) - 1
+	protected[last] = true
+
+	if messages[last].Role != core.RoleTool || messages[last].ToolCallID == "" {
+		return protected
+	}
+	// Find the assistant that asked for this response.
+	askerIdx := -1
+	for i := last - 1; i >= 0; i-- {
+		for _, tc := range messages[i].ToolCalls {
+			if tc.ID == messages[last].ToolCallID {
+				askerIdx = i
+				break
+			}
+		}
+		if askerIdx >= 0 {
+			break
+		}
+	}
+	if askerIdx < 0 {
+		return protected
+	}
+	protected[askerIdx] = true
+
+	// Every response answering that same assistant.
+	ids := map[string]bool{}
+	for _, tc := range messages[askerIdx].ToolCalls {
+		ids[tc.ID] = true
+	}
+	for i := askerIdx + 1; i < len(messages); i++ {
+		if messages[i].Role == core.RoleTool && ids[messages[i].ToolCallID] {
+			protected[i] = true
+		}
+	}
+	return protected
+}
+
+// ensureConversational is the post-condition: a fitted request must carry at
+// least one non-system message.
+//
+// Anchor protection above prevents the known way of losing them all, but this
+// is the guarantee rather than the mechanism — a request with nothing but a
+// system prompt is invalid on Gemini and meaningless everywhere else, so it is
+// worth checking rather than assuming. Falling back to a heavily truncated
+// last user turn keeps the request valid; returning an empty conversation never
+// can be.
+func ensureConversational(out, original []core.Message) []core.Message {
+	for _, m := range out {
+		if m.Role != core.RoleSystem {
+			return out
+		}
+	}
+	// Prefer the most recent user turn: it is the only message guaranteed to
+	// stand alone, unlike an assistant tool call or a tool response.
+	for i := len(original) - 1; i >= 0; i-- {
+		if original[i].Role == core.RoleUser {
+			m := original[i]
+			m.Content = truncateMiddle(m.ContentString(), 512)
+			return append(out, m)
+		}
 	}
 	return out
 }
