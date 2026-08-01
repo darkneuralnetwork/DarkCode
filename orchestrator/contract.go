@@ -262,7 +262,28 @@ func acceptanceSummary(g *plan.Graph) string {
 		}
 	}
 	if checked == 0 {
-		return ""
+		// Nothing was mechanically verified, and saying nothing about that is
+		// how prose passes as work. A sub-agent that describes an
+		// implementation instead of writing it produces a confident answer,
+		// a completed node and an empty proof set — the run then reads as
+		// success because the only thing that would have contradicted it was
+		// silent.
+		//
+		// Distinguish the two reasons, because the fix differs. No criteria at
+		// all means the planner never said what done looks like. Criteria that
+		// exist but ran nothing means they were prose a machine cannot check.
+		declared := 0
+		for _, n := range g.Nodes {
+			declared += len(n.Acceptance) + len(n.Artifacts)
+		}
+		if declared == 0 {
+			return "\n\n⚠ **Nothing was verified** — this plan declared no acceptance " +
+				"criteria or expected files, so the claim above rests on the model's " +
+				"word rather than on anything that was checked."
+		}
+		return "\n\n⚠ **Nothing was verified** — this plan's acceptance criteria were " +
+			"prose rather than commands or file paths, so none could be run. The claim " +
+			"above rests on the model's word."
 	}
 	head := fmt.Sprintf("\n\n**Acceptance checks** — %d run", checked)
 	if failed > 0 {
