@@ -38,9 +38,17 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 			groups = append(groups, f.Group)
 		}
 	}
+	s.cfgMu.RLock()
+	values := config.Values(s.cfg)
+	s.cfgMu.RUnlock()
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"fields": fields,
 		"groups": groups,
+		// Values ride along so an interface renders the surface in one call.
+		// Secrets are redacted by config.Values, next to the field, rather
+		// than by each caller remembering to.
+		"values": values,
 		// Interfaces render primary by default and put the rest behind a
 		// disclosure, so they need the count without walking the list.
 		"primary_count": len(config.FieldsInTier(config.TierPrimary)),

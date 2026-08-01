@@ -2385,3 +2385,43 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   min-width: 92px;
 }
 .verb-help { color: var(--text-mute); }
+
+/* ---- generated settings surface (135-cfgsurface.js) ---- */
+.cfg-surface-tier { margin-bottom: 18px; }
+.cfg-surface-tier-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.cfg-surface-note { font-weight: 400; color: var(--text-mute); font-size: 11px; margin-left: 6px; }
+.cfg-surface-group {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  margin: 10px 0 4px;
+}
+.cfg-surface-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 1.4fr) minmax(80px, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.cfg-surface-row:nth-child(odd) { background: rgba(255, 255, 255, 0.02); }
+.cfg-surface-label { color: var(--text); }
+.cfg-surface-name {
+  color: var(--text-mute);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.cfg-surface-value { color: var(--accent-3); font-family: var(--font-mono, ui-monospace, monospace); }
+@media (max-width: 640px) {
+  .cfg-surface-row { grid-template-columns: 1fr; gap: 2px; }
+}

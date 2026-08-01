@@ -278,4 +278,21 @@
     </div>
   </div>
 
+  <!-- Full settings surface, rendered from /api/config/schema rather than
+       written out here. Everything above is the handful of settings with a
+       bespoke control; this is the rest, which was previously reachable from
+       no interface at all — air_gap, the cost limits, the deny rules and the
+       blast-radius threshold existed only in the file. -->
+  <div class="glass-panel" style="margin-top: 16px;">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <h3 style="margin:0;">All settings</h3>
+      <span id="cfg-surface-count" style="font-size:11px; color:var(--text-mute);"></span>
+    </div>
+    <p style="font-size:11px; color:var(--text-mute); margin:6px 0 12px;">
+      Generated from the config type, so this cannot fall behind what the program
+      actually reads. Values not shown above are edited in the config file.
+    </p>
+    <div id="cfg-surface"></div>
+  </div>
+
 </div>

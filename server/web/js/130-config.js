@@ -474,6 +474,10 @@ async function loadConfig() {
   } catch (err) {
     console.error("Failed to load config:", err);
   }
+
+  // The generated surface sits below the bespoke controls; it is the only
+  // place the settings with no dedicated control are visible at all.
+  renderConfigSurface();
 }
 
 // renderForceLocalBadge toggles the "LOCAL ONLY" badge and the Force Local
