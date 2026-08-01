@@ -3,6 +3,7 @@
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
     <h2 class="gradient-text" style="margin: 0; font-size: 24px;">Configurations</h2>
     <div style="display: flex; gap: 12px; align-items: center;">
+      <span class="evt-live" id="cfg-live">● SYNCED</span>
       <button class="btn-glow" id="config-refresh">Reload Config</button>
     </div>
   </div>
@@ -109,19 +110,6 @@
               <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Max Turns</label>
               <input type="number" id="cfg-max-turns" class="glass-input" value="50">
             </div>
-          </div>
-
-          <!-- Background work. One of the six settings a user is actually asked,
-               and until now it had no control here at all — the generated panel
-               below could show it but not change it. -->
-          <div class="cfg-field" style="margin-bottom: 0;">
-            <label style="margin-bottom: 6px; display: block; color: var(--text-mute); font-size: 11px; text-transform: uppercase;">Background Work (idle-capacity indexing)</label>
-            <select id="cfg-background-work" class="custom-select">
-              <option value="off">Off — nothing runs on its own</option>
-              <option value="light">Light — keep the workspace index current</option>
-              <option value="full">Full — indexing plus the repo-health daemon</option>
-            </select>
-            <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">Replaces the separate auto-ingest and health-daemon switches.</div>
           </div>
 
           <div class="cfg-field" style="margin-bottom: 0;">

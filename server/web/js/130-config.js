@@ -301,7 +301,6 @@ async function loadConfig() {
     if (d.routing_mode) $("#cfg-routing").value = d.routing_mode;
     if (d.safety_level) $("#cfg-safety").value = d.safety_level;
     if (d.sandbox) $("#cfg-sandbox").value = d.sandbox;
-    if (d.background_work) $("#cfg-background-work").value = d.background_work;
     if (d.max_turns) $("#cfg-max-turns").value = d.max_turns;
 
     // No agentic-loop switch, Max Loops field, or mode picker to populate:
@@ -314,14 +313,9 @@ async function loadConfig() {
     const localOffloadChk = $("#cfg-enable-local-offload");
     const localLbl = $("#cfg-enable-local-llm-label");
     const offloadLbl = $("#cfg-enable-local-offload-label");
-    // Derived from local_mode, which is the field that decides. Reading the
-    // legacy flag showed a stale value whenever the two disagreed.
-    const localOn = d.local_mode !== undefined
-      ? (d.local_mode !== "off" && d.local_mode !== "")
-      : !!d.enable_local_llm;
-    if (localChk) {
-      localChk.checked = localOn;
-      localLbl.textContent = localOn ? "Auto-load ON" : "Auto-load OFF";
+    if (localChk && d.enable_local_llm !== undefined) {
+      localChk.checked = d.enable_local_llm;
+      localLbl.textContent = d.enable_local_llm ? "Auto-load ON" : "Auto-load OFF";
       localLbl.style.color = d.enable_local_llm ? "var(--text-bright)" : "var(--text-mute)";
     }
     if (localOffloadChk && d.enable_local_offloading !== undefined) {
