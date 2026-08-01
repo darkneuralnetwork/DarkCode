@@ -7,6 +7,9 @@ import (
 )
 
 func TestConfigPathPrefersHomeOnFreshInstall(t *testing.T) {
+	// These cover the resolution chain itself, so the explicit override the
+	// package TestMain sets has to be out of the way.
+	t.Setenv("DARKCODE_CONFIG", "")
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 	got := ConfigPath()
@@ -17,6 +20,9 @@ func TestConfigPathPrefersHomeOnFreshInstall(t *testing.T) {
 }
 
 func TestConfigPathMigratesFromCWD(t *testing.T) {
+	// These cover the resolution chain itself, so the explicit override the
+	// package TestMain sets has to be out of the way.
+	t.Setenv("DARKCODE_CONFIG", "")
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 	tmpCwd := t.TempDir()
@@ -37,6 +43,9 @@ func TestConfigPathMigratesFromCWD(t *testing.T) {
 }
 
 func TestConfigPathPrefersHomeWhenBothExist(t *testing.T) {
+	// These cover the resolution chain itself, so the explicit override the
+	// package TestMain sets has to be out of the way.
+	t.Setenv("DARKCODE_CONFIG", "")
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 	tmpCwd := t.TempDir()
@@ -61,5 +70,23 @@ func TestConfigPathPrefersHomeWhenBothExist(t *testing.T) {
 	got := ConfigPath()
 	if got != homePath {
 		t.Fatalf("ConfigPath() = %q, want home %q (system-wide wins once it exists)", got, homePath)
+	}
+}
+
+// TestConfigPathOverrideWins pins the escape hatch the test suites depend on.
+// Without it every test that saves a config edits the developer's own.
+func TestConfigPathOverrideWins(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "elsewhere.json")
+	t.Setenv("DARKCODE_CONFIG", want)
+
+	if got := ConfigPath(); got != want {
+		t.Errorf("ConfigPath() = %q, want the override %q", got, want)
+	}
+
+	// Whitespace-only is not a path; it must fall through to the normal chain
+	// rather than resolving to "".
+	t.Setenv("DARKCODE_CONFIG", "   ")
+	if got := ConfigPath(); got == "" || got == "   " {
+		t.Errorf("a blank override produced %q", got)
 	}
 }
