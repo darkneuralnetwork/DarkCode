@@ -42,15 +42,25 @@ type window struct {
 // is used: being early to compress costs a call, being late costs the request.
 var windows = []window{
 	// --- Anthropic ---
-	// The 1M window on Sonnet 4+ is beta and header-gated, so the number here
-	// is the one available without opting in.
+	// The 4.6-and-later Opus/Sonnet families and the 5 family carry a 1M
+	// window as standard; Haiku and the 3.x family are 200K. An earlier draft
+	// of this table put everything at 200K, which under-reported the current
+	// models by 5× — the same shape of error this file was written to remove.
+	{"claude-haiku-4-5", 200000},
 	{"claude-haiku-4", 200000},
-	{"claude-sonnet-4", 200000},
-	{"claude-opus-4", 200000},
-	{"claude-sonnet-5", 200000},
 	{"claude-haiku-5", 200000},
-	{"claude-opus-5", 200000},
-	{"claude-fable-5", 200000},
+	{"claude-fable-5", 1000000},
+	{"claude-mythos-5", 1000000},
+	{"claude-sonnet-5", 1000000},
+	{"claude-opus-5", 1000000},
+	{"claude-opus-4-8", 1000000},
+	{"claude-opus-4-7", 1000000},
+	{"claude-opus-4-6", 1000000},
+	{"claude-opus-4-5", 200000},
+	{"claude-opus-4", 200000},
+	{"claude-sonnet-4-6", 1000000},
+	{"claude-sonnet-4-5", 200000},
+	{"claude-sonnet-4", 200000},
 	{"claude-3-7", 200000},
 	{"claude-3-5", 200000},
 	{"claude-3", 200000},

@@ -78,6 +78,18 @@ var providers = []Provider{
 		DocsURL:    "https://docs.anthropic.com",
 		KeyURL:     "https://console.anthropic.com/settings/keys",
 		Models: []ProviderModel{
+			// Current families. Without these, cost tracking looked up nothing
+			// for every model anyone actually runs, recorded 0, and the spend
+			// cap never fired — a limit that silently does not apply is worse
+			// than no limit.
+			{ID: "claude-fable-5", Name: "Claude Fable 5", ContextWindow: 1000000, InputPrice: 10.00, OutputPrice: 50.00, Tier: "reasoning", Description: "Most capable; long-horizon agentic work"},
+			{ID: "claude-opus-4-8", Name: "Claude Opus 4.8", ContextWindow: 1000000, InputPrice: 5.00, OutputPrice: 25.00, Tier: "reasoning", Description: "Autonomous long-horizon coding"},
+			{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", ContextWindow: 1000000, InputPrice: 5.00, OutputPrice: 25.00, Tier: "reasoning", Description: "Previous-generation Opus"},
+			{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", ContextWindow: 1000000, InputPrice: 5.00, OutputPrice: 25.00, Tier: "reasoning", Description: "Older Opus"},
+			{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", ContextWindow: 1000000, InputPrice: 3.00, OutputPrice: 15.00, Tier: "coding", Description: "Near-Opus quality at Sonnet cost"},
+			{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", ContextWindow: 1000000, InputPrice: 3.00, OutputPrice: 15.00, Tier: "coding", Description: "Previous-generation Sonnet"},
+			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", ContextWindow: 200000, InputPrice: 1.00, OutputPrice: 5.00, Tier: "fast", Description: "Fastest and most cost-effective"},
+
 			{ID: "claude-3-5-sonnet-20241022", Name: "Claude 3.5 Sonnet", ContextWindow: 200000, InputPrice: 3.00, OutputPrice: 15.00, Tier: "reasoning", Description: "Top coding & reasoning"},
 			{ID: "claude-3-5-haiku-20241022", Name: "Claude 3.5 Haiku", ContextWindow: 200000, InputPrice: 0.80, OutputPrice: 4.00, Tier: "fast", Description: "Fast & affordable"},
 			{ID: "claude-3-opus-20240229", Name: "Claude 3 Opus", ContextWindow: 200000, InputPrice: 15.00, OutputPrice: 75.00, Tier: "reasoning", Description: "Deep reasoning"},
