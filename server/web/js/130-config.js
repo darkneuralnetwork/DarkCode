@@ -298,7 +298,6 @@ async function loadConfig() {
     const res = await fetch(API + "/api/config");
     const d = await res.json();
 
-    if (d.routing_mode) $("#cfg-routing").value = d.routing_mode;
     if (d.safety_level) $("#cfg-safety").value = d.safety_level;
     if (d.sandbox) $("#cfg-sandbox").value = d.sandbox;
     if (d.max_turns) $("#cfg-max-turns").value = d.max_turns;

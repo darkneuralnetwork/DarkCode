@@ -428,13 +428,12 @@ function attachEventListeners() {
       const btn = e.target.querySelector("button[type='submit']");
       if (btn) btn.textContent = "Saving...";
       try {
-        const routing = $("#cfg-routing").value;
         const safety = $("#cfg-safety").value;
         const turns = parseInt($("#cfg-max-turns").value, 10);
         const res = await fetch(API + "/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "update_settings", routing_mode: routing, safety_level: safety, sandbox: $("#cfg-sandbox")?.value || "auto", max_turns: turns })
+          body: JSON.stringify({ action: "update_settings", safety_level: safety, sandbox: $("#cfg-sandbox")?.value || "auto", max_turns: turns })
         });
         if (!res.ok) throw new Error(await res.text());
         toast("success", "✓ Global settings updated");
@@ -606,7 +605,6 @@ function attachEventListeners() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "update_settings",
-          routing_mode: $("#cfg-routing").value,
           safety_level: $("#cfg-safety").value,
           sandbox: $("#cfg-sandbox")?.value || "auto",
           max_turns: parseInt($("#cfg-max-turns").value, 10)
