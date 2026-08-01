@@ -426,11 +426,20 @@ SELF-IMPROVEMENT: After successful tasks, reusable patterns are extracted as ski
 
 When you encounter errors, report them honestly and try alternatives.`
 
-// ConfigPath returns the config file path: the system-wide
-// "~/.darkcode/config.json" by default, so one install serves every directory.
+// ConfigPath returns the config file path. DARKCODE_CONFIG overrides it
+// outright; otherwise it is the system-wide "~/.darkcode/config.json", so one install serves every directory.
 // A legacy per-directory "./.config" is honored as a migration fallback only
 // when the system-wide config doesn't exist yet.
 func ConfigPath() string {
+	// An explicit path wins over everything. This exists so a test can point
+	// the whole config layer at a temp directory: without it, anything that
+	// calls Save writes to the developer's real ~/.darkcode/config.json, which
+	// is why the code around Save had no tests at all. It is also the honest
+	// answer for anyone running more than one configuration.
+	if p := strings.TrimSpace(os.Getenv("DARKCODE_CONFIG")); p != "" {
+		return p
+	}
+
 	home, homeErr := os.UserHomeDir()
 	if homeErr == nil {
 		homePath := filepath.Join(home, ".darkcode", "config.json")
