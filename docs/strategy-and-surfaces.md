@@ -1,6 +1,6 @@
 # Strategy and surfaces: what changed
 
-Seven commits on `agent-execution-contract`, 40 files, +2,755/−570, 43 new tests.
+Nine commits on `agent-execution-contract`, 48 files, +3,427/−587, 52 new tests.
 
 They are one piece of work. The thread running through all of them: **the tool
 was asking the user, or asking a model, for decisions it could take itself from
@@ -203,6 +203,46 @@ without a descriptor — verified by adding one and watching it fail.
 
 ---
 
+## 7. One question where three fields were asking it
+
+`e261a9d` · new `config/canonical.go`
+
+`enable_local_llm` and `local_mode` both said whether to run a local model. The
+proof that this is redundant rather than merely verbose is that
+`ResolvedLocalMode()` exists — a function whose entire job is deciding what to
+do when the two disagree. Likewise `health_daemon`, `health_cpu_percent` and
+`auto_ingest` were three switches for one preference.
+
+The fix is deliberately asymmetric. Every legacy field is still **read**, so an
+existing config keeps exactly the behaviour it had. Only the canonical field is
+**written**, so a config that gets saved stops carrying the contradiction
+forward. The redundancy drains out of real files over time instead of needing a
+migration.
+
+`background_work` (off / light / full) is the new primary setting, reachable
+from both surfaces — it had a control in neither before.
+
+**Two things I got wrong first.**
+
+The saved form is produced from a *copy*. My first version zeroed the legacy
+fields on the live config, which would have flipped `auto_ingest` to false in
+the running process the moment any unrelated setting was saved — a behaviour
+change from an operation meant to be a no-op.
+
+And `Values` now reports what is *in effect*, not what is stored. The raw struct
+misled in both directions: `background_work` marshalled away under `omitempty`
+when it was being inferred, so a primary setting rendered as unset while
+actually resolving to `full`; and the superseded legacy fields kept their old
+values, so the derived rows contradicted the canonical one directly above them.
+I only caught the second by reading the rendered panel and noticing it disagreed
+with itself.
+
+**Proof it is safe:** a legacy config file round-trips through save-and-reload
+with every resolver returning the same answer, checked both by
+`TestCanonicalRoundTripPreservesBehaviour` and by hand against a real file.
+
+---
+
 ## Verification
 
 Every commit passed `gofmt` → `go vet` → `go test ./...`, with `-race` on the
@@ -217,7 +257,9 @@ untouched):
   itself.
 - Chat/Build and Loop absent from the DOM; the request body no longer carries
   `chat_mode`; New Chat and the Config tab still work.
-- All 49 settings render, including the five previously reachable from nothing.
+- All 50 settings render, including the five previously reachable from nothing.
+- `background_work` set to each level over the API; invalid levels rejected with
+  400 and no change; the derived rows follow instead of contradicting.
 - No horizontal body overflow at 1280 / 768 / 375.
 - No console errors at any point.
 
@@ -237,11 +279,19 @@ and it is not something to attempt blind at the end of a long session.
 **Tab consolidation, shared poller, CLI-onto-HTTP** (phases 4–6). The doc itself
 puts these after 1–3.
 
-**The config-field collapse** (`configuration-surface.md` steps 1–4) — deriving
-context sizes from the model, folding the efficiency booleans to always-on,
-introducing `background_work`. The tier metadata now makes these mechanical, and
-each one shrinks the advanced list. The structural fix that stops the divergence
-recurring is in; the field-count reduction is the follow-up.
+**The efficiency booleans** (`configuration-surface.md` step 3). The doc says
+`compress_context`, `use_ctx_engine`, `use_local_for_aux` and
+`skip_aux_for_read_only` should all become always-on with "no behavioural
+downside". Three of those are fine. `use_ctx_engine` is not: its own comment
+says *"Default false (raw STM append) to preserve behavior"*, so flipping it on
+is a real behaviour change, not a cleanup. I left all four alone rather than
+flip three and leave the interesting one — that decision wants a live comparison
+I cannot run without spending quota.
+
+**Deriving context sizes from the model** (step 2). `context_length` and
+`embedded_context_size` are properties of the model rather than preferences, but
+the derivation needs a per-model window table that does not exist yet. Marked
+derived in the descriptors; still read from config.
 
 **The `document.hidden` poller work** turned out to be already done — all five
 server pollers guard visibility. `240-replay`'s timer is user-driven local
