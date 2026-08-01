@@ -652,6 +652,11 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 		a.Kernel.SetCostGovernor(metrics.NewCostGovernor(metrics.Default, budget))
 	}
 
+	// Debate is a property of consensus fan-out; the kernel gate for it is
+	// runtime state, so the configured value has to be pushed in at startup or
+	// the setting would be one nothing reads.
+	a.Kernel.SetDebate(a.Cfg.Debate)
+
 	gate := a.Kernel.Gate()
 	gate.SetDenyRules(a.Cfg.DenyRules)
 	gate.SetAllowedTools(a.Policy.Tools.AllowOnly)

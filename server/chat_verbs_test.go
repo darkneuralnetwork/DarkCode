@@ -23,11 +23,12 @@ func TestStripStrategyVerb(t *testing.T) {
 	}{
 		{"/loop fix the parser", "fix the parser", "loop"},
 		{"  /graph  add retries  ", "add retries", "graph"},
-		{"/DEBATE which cache is right", "which cache is right", "debate"},
-		{"fix the parser", "fix the parser", ""},           // no verb
-		{"/loop", "/loop", ""},                             // bare verb: help, not a strategy
-		{"/unknown do a thing", "/unknown do a thing", ""}, // not a strategy verb
-		{"/ask about /loop", "about /loop", "ask"},         // only the leading verb counts
+		{"/ASK which cache is right", "which cache is right", "ask"}, // case-insensitive
+		{"/consensus is this safe", "/consensus is this safe", ""},   // retired: routing mode owns fan-out
+		{"fix the parser", "fix the parser", ""},                     // no verb
+		{"/loop", "/loop", ""},                                       // bare verb: help, not a strategy
+		{"/unknown do a thing", "/unknown do a thing", ""},           // not a strategy verb
+		{"/ask about /loop", "about /loop", "ask"},                   // only the leading verb counts
 	}
 	for _, tc := range cases {
 		gotQuery, st, found := stripStrategyVerb(tc.in)

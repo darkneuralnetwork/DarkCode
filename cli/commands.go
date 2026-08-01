@@ -33,8 +33,6 @@ var commandRegistry = []cmdInfo{
 	{"/ask", "Strategy", "/ask <question> — answer without changing anything"},
 	{"/loop", "Strategy", "/loop <task> — iterate until the checks pass"},
 	{"/graph", "Strategy", "/graph <task> — plan it, run the graph, prove each task"},
-	{"/consensus", "Strategy", "/consensus <question> — every model answers, then synthesise"},
-	{"/debate", "Strategy", "/debate <question> — the models argue it out once, then settle it"},
 	{"/always", "Strategy", "Keep using one strategy until you say otherwise, or /always off"},
 
 	// Chat & modes

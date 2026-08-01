@@ -474,6 +474,45 @@ playback, not a server poll, so it is left alone.
 
 ---
 
+## 10. Taking two verbs back out
+
+`/consensus` and `/debate` shipped with the other three and were removed again
+after the surfaces were rebuilt around them. Worth recording, because the
+mistake is subtler than the eleven in §9 and it was mine.
+
+The rule the verbs are built on is that strategy belongs at the point of use:
+whether *this* request should iterate depends on the request, so it cannot be
+configuration. That rule is right, and I applied it one step too far. Consensus
+does not change how the work is done — it changes **how many models do it**, and
+that is a property of the installation: which models are registered, whether the
+tier is metered, whether the user wants every answer cross-checked. It does not
+vary message to message the way "is this multi-step" does.
+
+The concrete failure the user hit: with fan-out expressible in both places, the
+sticky one wins silently. Set consensus in the configuration tab, type an
+ordinary message, and every query fans out — while the chat surface advertises
+`/consensus` as though it were the control. A verb that quietly loses to a
+setting is worse than no verb, because it teaches the wrong model of what
+governs a run. The verbs exist to kill exactly that ambiguity, so a verb that
+recreates it is self-defeating.
+
+So `routing_mode` came back to the configuration tab (`ca66349` reverts its
+removal), and the two verbs came out of the table. What is left in `verb.Names()`
+is only what genuinely varies per message: `/ask`, `/loop`, `/graph`.
+
+Removing `/debate` left debate itself unreachable — it had never had a config
+field, only a runtime `SetDebate` the verb called. So it became one: a `debate`
+bool, wired at startup in `app_wireup.go`, exposed as a checkbox beneath routing
+mode, and meaningful only in consensus mode. Along with it went
+`ApplyDebateOverride` and `Strategy.Debate`, which nothing could reach any more —
+a per-request override with no caller is a branch that reads as a feature.
+
+The invariant is now pinned rather than remembered. `TestNoVerbChangesRoutingMode`
+walks the table and fails on any verb that sets `Mode`, so the next person
+tempted to add `/consensus` back finds out at test time and reads why.
+
+---
+
 ## One thing worth watching
 
 `AssessComplexity` is a keyword-weight scan with a baseline of 3, and

@@ -434,7 +434,7 @@ function attachEventListeners() {
         const res = await fetch(API + "/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "update_settings", routing_mode: routing, safety_level: safety, sandbox: $("#cfg-sandbox")?.value || "auto", max_turns: turns })
+          body: JSON.stringify({ action: "update_settings", routing_mode: routing, debate: $("#cfg-debate")?.checked ?? false, safety_level: safety, sandbox: $("#cfg-sandbox")?.value || "auto", max_turns: turns })
         });
         if (!res.ok) throw new Error(await res.text());
         toast("success", "✓ Global settings updated");
@@ -607,6 +607,7 @@ function attachEventListeners() {
         body: JSON.stringify({
           action: "update_settings",
           routing_mode: $("#cfg-routing").value,
+          debate: $("#cfg-debate")?.checked ?? false,
           safety_level: $("#cfg-safety").value,
           sandbox: $("#cfg-sandbox")?.value || "auto",
           max_turns: parseInt($("#cfg-max-turns").value, 10)
@@ -634,8 +635,10 @@ function attachEventListeners() {
   });
 
   // The Agentic Loop toggle and its Apply button lived here. Both are gone —
-  // the loop is selected per request with /loop or the Loop chat mode, so
-  // there is nothing global left to switch.
+  // the loop is selected per request with /loop, or reached by escalation when
+  // a direct answer does not hold up, so there is nothing global left to
+  // switch. Routing mode stayed: how many models answer is a standing
+  // preference, not a per-message one.
 
 
   $("#cfg-enable-local-llm")?.addEventListener("change", async (e) => {

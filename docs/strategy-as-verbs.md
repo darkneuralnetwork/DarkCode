@@ -75,7 +75,6 @@ When the automatic choice is wrong, say so at the point of use:
 /loop   add retry logic to the HTTP client
 /graph  migrate the storage layer to Postgres
 /ask    how does the retry backoff work
-/consensus is this migration safe
 ```
 
 [Aider](https://aider.chat/docs/usage/modes.html) established this shape and it
@@ -91,10 +90,29 @@ That is the property worth copying. `/graph` should not mean "set one flag":
 | `/ask` | read-only tools, no writes, no plan | `chat_mode` |
 | `/loop` | iterate to acceptance, no plan gate | `agentic_loop`, `max_loops` |
 | `/graph` | plan → approve → parallel waves → per-node proof → repair | `plan_depth`, `plan_approval`, `execution_profile` |
-| `/consensus` | fan out to every registered model, weighted synthesis | `routing_mode`, `post_loop_consensus` |
 
-Seven config fields become four words, and each word is meaningful at the moment
+Six config fields become three words, and each word is meaningful at the moment
 you need it rather than three screens away.
+
+### What is *not* a verb, and why
+
+`/consensus` and `/debate` shipped in the first cut of this and were taken back
+out. They are the only strategies that change **how many models answer** rather
+than how the work is done — and that turns out to be a standing preference, not
+a per-message one. Someone who wants every question checked against every model
+wants it for the session; someone on a metered tier never wants it. So it stays
+in `routing_mode`, one setting, one place.
+
+The deeper reason is the failure this whole document is about. With fan-out
+expressible in two surfaces, the sticky one wins silently whenever they
+disagree: set consensus in configuration, type nothing, and every query fans out
+anyway — the verb that appears to be the control is not the control. A verb that
+loses an argument with a setting is worse than no verb, because it teaches the
+user the wrong model of what governs their run.
+
+Debate follows consensus for the same reason: it is a property of the fan-out —
+what happens *when* several answers disagree — not a separate way of working. It
+is a checkbox beneath routing mode, and means nothing in any other mode.
 
 ### Layer 3 — Sticky only when asked
 
@@ -134,8 +152,8 @@ when they know the shape of a task in advance.
 ### The verb is also the diagnosis
 
 When a run ends badly, the report should name the verb that would have helped:
-*"acceptance still failing after two repairs — `/consensus` would bring the other
-models in."* The override surface doubles as the troubleshooting guide.
+*"acceptance still failing after two repairs — consensus routing would bring the
+other models in."* The override surface doubles as the troubleshooting guide.
 
 ### Escalation as the free classifier
 
@@ -165,7 +183,7 @@ now needs one word, and usually none.
 
 ## Sequencing
 
-1. **`/loop`, `/graph`, `/ask`, `/consensus` as one-shot verbs**, mapping onto
+1. **`/loop`, `/graph`, `/ask` as one-shot verbs**, mapping onto
    the existing `ApplyRequestOverrides` plumbing. Nothing is removed yet, so
    this is additive and safe.
 2. **Delete the "enable it in /config first" coupling.** The verb becomes

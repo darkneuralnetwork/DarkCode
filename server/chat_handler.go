@@ -129,10 +129,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if verbFound {
 		restorePlan := s.kernel.ApplyPlanOverride(verbStrategy.Plan)
 		defer restorePlan()
-		if verbStrategy.Debate {
-			restoreDebate := s.kernel.ApplyDebateOverride(true)
-			defer restoreDebate()
-		}
 	}
 
 	// If an active project is specified, prepend its long-lived context to

@@ -125,6 +125,13 @@ type Config struct {
 	// explicit false on save would silently switch it back on.
 	AutoIngest bool `json:"auto_ingest"`
 
+	// Debate lets two disagreeing models answer each other once before a
+	// verdict is taken, and only when the knowledge graph cannot settle the
+	// claim itself. It is a property of consensus fan-out rather than a way of
+	// working, so it lives beside routing_mode; with any other routing mode
+	// there is no disagreement to settle and it does nothing.
+	Debate bool `json:"debate,omitempty"`
+
 	// BackgroundWork is the one preference the three fields above were asking
 	// separately: "off", "light" (keep indexes current) or "full" (also run the
 	// health daemon). Empty means infer it from health_daemon/auto_ingest, so

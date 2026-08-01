@@ -124,8 +124,11 @@ var descriptors = []Field{
 	{Name: "skip_aux_for_read_only", Label: "Skip aux on read-only", Group: "Execution", Tier: TierAdvanced, Kind: "bool"},
 
 	// --- Derived: readable, never asked ---
-	{Name: "routing_mode", Label: "Routing mode", Group: "Models", Tier: TierDerived, Kind: "string",
-		Help: "Follows from how many models are registered."},
+	{Name: "routing_mode", Label: "Routing mode", Group: "Models", Tier: TierAdvanced, Kind: "string",
+		Choices: []string{"single", "escalation", "consensus"},
+		Help:    "How many models answer: one, escalate on difficulty, or all of them."},
+	{Name: "debate", Label: "Let models debate a conflict", Group: "Models", Tier: TierAdvanced, Kind: "bool",
+		Help: "Consensus only. When two answers disagree and the graph cannot settle it, they critique each other once."},
 	{Name: "context_length", Label: "Context length", Group: "Models", Tier: TierDerived, Kind: "int",
 		Help: "Follows from the model."},
 	{Name: "compress_context", Label: "Compress context", Group: "Execution", Tier: TierDerived, Kind: "bool",

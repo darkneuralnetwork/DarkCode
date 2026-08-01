@@ -33,13 +33,12 @@ import (
 // each node" is one decision, and splitting it back into four settings is how
 // it became configuration in the first place.
 type Strategy struct {
-	Name   string
-	Loop   string // kernel override loop:  "on" | "off" | ""
-	Tools  string // kernel override tools: "on" | "readonly" | ""
-	Mode   string // kernel override mode:  routing mode, "" to leave alone
-	Plan   string // plan override: "always" | "never" | "" (adaptive)
-	Debate bool   // force the conflict exchange for this message
-	Help   string
+	Name  string
+	Loop  string // kernel override loop:  "on" | "off" | ""
+	Tools string // kernel override tools: "on" | "readonly" | ""
+	Mode  string // kernel override mode:  routing mode, "" to leave alone
+	Plan  string // plan override: "always" | "never" | "" (adaptive)
+	Help  string
 }
 
 var table = map[string]Strategy{
@@ -59,21 +58,22 @@ var table = map[string]Strategy{
 		Name: "graph", Loop: "on", Tools: "on", Plan: "always",
 		Help: "plan the work, run it as a task graph, prove each task",
 	},
-	"consensus": {
-		Name: "consensus", Loop: "off", Tools: "on", Mode: "consensus",
-		Help: "answer with every registered model, then synthesise",
-	},
-	"debate": {
-		// Consensus plus one round of the models answering each other. Only
-		// worth asking for when the question is genuinely contested — on a
-		// metered tier this is the most expensive verb there is.
-		Name: "debate", Loop: "off", Tools: "on", Mode: "consensus", Debate: true,
-		Help: "have the models argue it out once, then settle it",
-	},
 }
 
+// Consensus and debate are deliberately absent.
+//
+// They are the only strategies that change HOW MANY models answer rather than
+// how the work is done, and that is a standing preference: someone who wants
+// every question answered by every model wants it for the session, not for one
+// message. It lives in the routing mode setting, and duplicating it here meant
+// two places to say one thing — with the sticky one winning silently whenever
+// the two disagreed, which is the trap these verbs exist to remove.
+//
+// Debate rides along with consensus for the same reason: it is a property of
+// the fan-out, not a separate way of working.
+
 // Names lists the verbs in the order they should be offered, cheapest first.
-func Names() []string { return []string{"ask", "loop", "graph", "consensus", "debate"} }
+func Names() []string { return []string{"ask", "loop", "graph"} }
 
 // Lookup returns the strategy a verb name selects.
 func Lookup(name string) (Strategy, bool) {

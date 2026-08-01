@@ -563,15 +563,10 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	st := c.strategyForMessage(resolvedQuery)
 	loopOverride, toolsOverride := st.Loop, st.Tools
 	modeOverride, planOverride := st.Mode, st.Plan
-	debateOverride := st.Debate
 	restoreOverrides := c.kernel.ApplyRequestOverrides(modeOverride, "", loopOverride, toolsOverride, c.brain)
 	defer restoreOverrides()
 	restorePlan := c.kernel.ApplyPlanOverride(planOverride)
 	defer restorePlan()
-	if debateOverride {
-		restoreDebate := c.kernel.ApplyDebateOverride(true)
-		defer restoreDebate()
-	}
 
 	result, err := c.kernel.Execute(reqCtx, resolvedQuery)
 	close(done)

@@ -95,6 +95,10 @@
               <option value="consensus">Consensus (Multi-Agent)</option>
             </select>
             <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">Escalation routes tasks dynamically between fast and reasoning models based on complexity.</div>
+            <label style="display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--text-mute); cursor: pointer;">
+              <input type="checkbox" id="cfg-debate"> Let models debate a conflict
+            </label>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Consensus only. When two answers disagree and the knowledge graph cannot settle it, they critique each other once before a verdict.</div>
           </div>
           
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
@@ -171,9 +175,10 @@
       <!-- The Agentic Loop panel lived here: an on/off switch plus a Max
            Loops number. Both are gone. Whether a request iterates depends on
            the request, which a global setting cannot know, so it is now the
-           /loop verb typed with the task — or the Loop chat mode for a whole
-           session. The iteration ceiling is a backstop the tool holds itself
-           to rather than a preference. See docs/strategy-as-verbs.md. -->
+           /loop verb typed with the task, and otherwise escalation reaching
+           for it when a direct answer does not hold up. The iteration ceiling
+           is a backstop the tool holds itself to rather than a preference.
+           See docs/strategy-as-verbs.md. -->
 
       <!-- ═══ Local LLM ═══ -->
       <div class="glass-panel" style="padding: 24px;">

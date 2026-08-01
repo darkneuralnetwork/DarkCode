@@ -203,19 +203,3 @@ func usablePositions(c *core.ConsensusResult) []core.ModelContribution {
 	}
 	return out
 }
-
-// ApplyDebateOverride forces the exchange on for one request, returning a
-// restore func to defer. This is what /debate does: the user has said the
-// question is contested, so the conflict gate is bypassed rather than waited
-// for.
-func (k *Kernel) ApplyDebateOverride(on bool) func() {
-	k.mu.Lock()
-	prev := k.debateOn
-	k.debateOn = on
-	k.mu.Unlock()
-	return func() {
-		k.mu.Lock()
-		k.debateOn = prev
-		k.mu.Unlock()
-	}
-}

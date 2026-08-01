@@ -82,6 +82,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"plan_depth":        planDepth,
 		"enable_local_llm":  s.cfg.LocalEnabled(),
 		"background_work":   s.cfg.ResolvedBackgroundWork(),
+		"debate":            s.cfg.Debate,
 		"local_mode":        s.cfg.ResolvedLocalMode(),
 		"force_local":       s.cfg.ForceLocal(),
 		"local_model_role":  s.cfg.LocalModelRole,
@@ -127,6 +128,7 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 
 		EnableLocalLLM *bool   `json:"enable_local_llm,omitempty"`
 		BackgroundWork *string `json:"background_work,omitempty"`
+		Debate         *bool   `json:"debate,omitempty"`
 		// LocalMode sets the three-plus-state local preference directly:
 		// "off" | "auto" | "on" | "force". "force" pins routing to the local
 		// model (no cloud fallback) and starts it on demand. Pointer so an
@@ -329,6 +331,12 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// ApplyLocalPreference below so force-local pins routing and starts the
 		// embedded model without a restart. Keep the legacy EnableLocalLLM bool
 		// in sync so a downgrade to an older build still behaves sensibly.
+		if req.Debate != nil {
+			s.cfg.Debate = *req.Debate
+			if s.kernel != nil {
+				s.kernel.SetDebate(*req.Debate)
+			}
+		}
 		if req.BackgroundWork != nil {
 			switch *req.BackgroundWork {
 			case config.BackgroundOff, config.BackgroundLight, config.BackgroundFull:

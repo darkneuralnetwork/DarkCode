@@ -95,8 +95,6 @@ func (c *Console) buildCompleter() *readline.PrefixCompleter {
 		readline.PcItem("/ask"),
 		readline.PcItem("/loop"),
 		readline.PcItem("/graph"),
-		readline.PcItem("/consensus"),
-		readline.PcItem("/debate"),
 		// /always takes a verb, not a separate chat/build/loop vocabulary.
 		readline.PcItem("/always", alwaysArgs()...),
 		readline.PcItem("/background",

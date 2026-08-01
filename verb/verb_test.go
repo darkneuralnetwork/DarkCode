@@ -16,7 +16,6 @@ func TestSplitVerb(t *testing.T) {
 		{"loop with task", "/loop add retry logic", "loop", "add retry logic", true},
 		{"ask with task", "/ask how does the retry backoff work", "ask", "how does the retry backoff work", true},
 		{"graph with task", "/graph migrate storage to postgres", "graph", "migrate storage to postgres", true},
-		{"consensus with task", "/consensus is this migration safe", "consensus", "is this migration safe", true},
 		{"case insensitive", "/LOOP fix the build", "loop", "fix the build", true},
 		{"carries an until clause", "/loop until `go test ./...` passes: add retries",
 			"loop", "until `go test ./...` passes: add retries", true},
@@ -26,6 +25,13 @@ func TestSplitVerb(t *testing.T) {
 		// sticky-mode trap these verbs exist to avoid.
 		{"bare verb", "/loop", "", "", false},
 		{"bare verb with spaces", "/loop   ", "", "", false},
+
+		// Consensus and debate were verbs and are not any more: how many
+		// models answer is a session preference, so it lives in the routing
+		// mode setting. A stale /consensus must fall through to the model as
+		// ordinary text rather than silently doing nothing.
+		{"consensus is no longer a verb", "/consensus is this migration safe", "", "", false},
+		{"debate is no longer a verb", "/debate which cache is right", "", "", false},
 
 		{"not a verb", "/help", "", "", false},
 		{"not a command", "add retry logic", "", "", false},
@@ -58,7 +64,7 @@ func TestVerbsSelectDistinctStrategies(t *testing.T) {
 	seen := map[string]string{}
 	for _, n := range Names() {
 		s := table[n]
-		key := fmt.Sprintf("%s|%s|%s|%s|%v", s.Loop, s.Tools, s.Mode, s.Plan, s.Debate)
+		key := fmt.Sprintf("%s|%s|%s|%s", s.Loop, s.Tools, s.Mode, s.Plan)
 		if prev, dup := seen[key]; dup {
 			t.Errorf("%q and %q select identical strategies (%s)", n, prev, key)
 		}
@@ -77,19 +83,17 @@ func TestAskIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestDebateIsConsensusPlusAnExchange. It shares consensus's fan-out and adds
-// the round where the models answer each other — which is also why it is the
-// most expensive verb and must never be the default.
-func TestDebateIsConsensusPlusAnExchange(t *testing.T) {
-	d, c := table["debate"], table["consensus"]
-	if !d.Debate {
-		t.Error("/debate does not request the exchange")
-	}
-	if c.Debate {
-		t.Error("/consensus must not debate; that is what makes /debate a separate verb")
-	}
-	if d.Mode != c.Mode {
-		t.Errorf("/debate should fan out like consensus, got mode %q vs %q", d.Mode, c.Mode)
+// TestNoVerbChangesRoutingMode. Every verb here is a one-shot override on how
+// a single message is worked; how many models answer is a standing preference
+// and lives in routing_mode. When both surfaces could say it, the sticky one
+// won silently whenever they disagreed — a verb that quietly loses to a setting
+// is worse than no verb, and that is the trap this package exists to remove.
+func TestNoVerbChangesRoutingMode(t *testing.T) {
+	for name, s := range table {
+		if s.Mode != "" {
+			t.Errorf("/%s sets routing mode %q; that belongs in configuration, "+
+				"where it applies to every query rather than one", name, s.Mode)
+		}
 	}
 }
 
