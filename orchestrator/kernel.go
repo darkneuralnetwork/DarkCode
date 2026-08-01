@@ -205,7 +205,25 @@ func (k *Kernel) ApplyLocalPreference(ctx context.Context, cfg *config.Config) e
 func (k *Kernel) SetCostGovernor(g *metrics.CostGovernor) {
 	k.mu.Lock()
 	k.governor = g
+	loop := k.agenticLoop
 	k.mu.Unlock()
+
+	// The loop consults the same governor between acting turns. Checking once
+	// before the request started meant a cap could be reached on iteration two
+	// and the remaining twenty-three still ran.
+	if loop == nil {
+		return
+	}
+	if g == nil {
+		loop.SetBudgetCheck(nil)
+		return
+	}
+	loop.SetBudgetCheck(func() error {
+		if d := g.Check(); !d.Allowed {
+			return fmt.Errorf("cost limit reached: %s", d.Reason)
+		}
+		return nil
+	})
 }
 
 // getCtxEngine lazily builds the ctxengine.Engine when cfg.UseCtxEngine is

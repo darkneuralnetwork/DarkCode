@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/darkcode/metrics"
 	"github.com/darkcode/router"
 )
 
@@ -102,4 +103,34 @@ func loggedContains(k *Kernel, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestSetCostGovernorReachesTheLoop. The check is installed on the loop the
+// kernel already holds, so wiring order matters: if the governor were set
+// before the loop existed, the per-iteration check would silently never be
+// installed and the cap would go back to being a once-per-request gate.
+func TestSetCostGovernorReachesTheLoop(t *testing.T) {
+	client := &fakeLLMClient{name: "fake", responses: []string{"ok"}}
+	deps := newTestKernel(t, client)
+
+	if deps.Kernel.agenticLoop == nil {
+		t.Fatal("the kernel has no loop, so nothing could be wired")
+	}
+
+	// A cap that is already exceeded: any check must refuse.
+	gov := metrics.NewCostGovernor(metrics.Default, metrics.BudgetLimits{
+		PerSessionUSD: 0.0000001,
+		Action:        metrics.BudgetActionBlock,
+	})
+	deps.Kernel.SetCostGovernor(gov)
+
+	if deps.Kernel.agenticLoop.BudgetCheckInstalled() != true {
+		t.Error("SetCostGovernor did not install a per-iteration check on the loop")
+	}
+
+	// And clearing it removes the check rather than leaving a stale one.
+	deps.Kernel.SetCostGovernor(nil)
+	if deps.Kernel.agenticLoop.BudgetCheckInstalled() {
+		t.Error("clearing the governor left the loop's check installed")
+	}
 }

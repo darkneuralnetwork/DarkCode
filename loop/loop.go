@@ -94,6 +94,14 @@ type ReActLoop struct {
 	registry core.ToolRegistry
 	emitter  *ui.EventEmitter
 	maxLoops int
+	// budget, when set, is consulted before each acting turn and stops the run
+	// when it reports the spend cap reached.
+	//
+	// The cap used to be checked once, before the request started. A single
+	// request can then make twenty-five iterations plus planning, consensus
+	// fan-out and sub-agent calls, so a limit was checked once and then
+	// exceeded several times over inside the run it was meant to bound.
+	budget func() error
 }
 
 // New creates a ReAct loop wired to the model router, tool registry, and event
@@ -109,6 +117,18 @@ func New(rtr core.ModelRouter, reg core.ToolRegistry, emitter *ui.EventEmitter, 
 		maxLoops: maxLoops,
 	}
 }
+
+// SetBudgetCheck installs a per-iteration spend check. nil disables it.
+//
+// It returns an error rather than a bool so the reason reaches the user: "the
+// run stopped" without saying why reads as the agent giving up.
+func (l *ReActLoop) SetBudgetCheck(fn func() error) { l.budget = fn }
+
+// BudgetCheckInstalled reports whether a spend check is wired. It exists so a
+// caller can prove the wiring rather than assume it: the check is installed on
+// the loop the kernel already holds, so a reordering that built the loop later
+// would silently leave the cap as a once-per-request gate.
+func (l *ReActLoop) BudgetCheckInstalled() bool { return l.budget != nil }
 
 // SetMaxLoops updates the iteration ceiling at runtime (hot config from UI).
 func (l *ReActLoop) SetMaxLoops(n int) {
@@ -262,6 +282,10 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	// to stop.
 	var verdict Verdict
 
+	// budgetStop records a spend cap reached mid-run, so the final answer can
+	// say the work was cut short rather than presenting itself as complete.
+	var budgetStop error
+
 	// ── The loop ──────────────────────────────────────────────────────────
 	for {
 		if ctx.Err() != nil {
@@ -269,6 +293,18 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		}
 		if iteration >= l.maxLoops {
 			break
+		}
+		// Stop on a reached spend cap rather than running the remaining
+		// iterations. The work done so far is still returned: losing it would
+		// spend the budget and hand back nothing.
+		if l.budget != nil {
+			if err := l.budget(); err != nil {
+				budgetStop = err
+				if l.emitter != nil {
+					l.emitter.EmitTaskUpdate("agentic-loop", "budget", err.Error())
+				}
+				break
+			}
 		}
 
 		if l.emitter != nil {
@@ -555,18 +591,27 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	// Max loops reached without a final answer — return the best-effort last
 	// assistant content (if any) so the user gets something useful, and emit a
 	// max-reached notice.
-	if l.emitter != nil {
+	// Why the loop ended decides what the user is told. A run cut short by the
+	// spend cap is not the same as one that ran out of iterations, and calling
+	// it "max iterations" would send them to change the wrong setting.
+	stopNote := fmt.Sprintf("_(agentic loop reached the max iteration limit)_")
+	if budgetStop != nil {
+		stopNote = "_(stopped: " + budgetStop.Error() + ")_"
+	} else if l.emitter != nil {
 		l.emitter.EmitTaskUpdate("agentic-loop", "max_reached",
 			fmt.Sprintf("ReAct loop hit max iterations (%d) — returning last partial answer", l.maxLoops))
 	}
 	if partial := bestPartial(messages); partial != "" {
 		return &Result{
-			Output:    partial + "\n\n_(agentic loop reached the max iteration limit)_",
+			Output:    partial + "\n\n" + stopNote,
 			ToolTrace: trace.String(),
 			Completed: false,
 			ToolCalls: allToolCalls,
 			Verdict:   verdict,
 		}, nil
+	}
+	if budgetStop != nil {
+		return nil, budgetStop
 	}
 	return nil, fmt.Errorf("agentic loop reached max iterations (%d) without a final answer", l.maxLoops)
 }
