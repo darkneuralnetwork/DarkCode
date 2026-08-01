@@ -1,6 +1,6 @@
 # Strategy and surfaces: what changed
 
-Nine commits on `agent-execution-contract`, 48 files, +3,427/−587, 52 new tests.
+Eleven commits on `agent-execution-contract`, 52 files, +3,827/−593, 60 new tests.
 
 They are one piece of work. The thread running through all of them: **the tool
 was asking the user, or asking a model, for decisions it could take itself from
@@ -243,6 +243,46 @@ with every resolver returning the same answer, checked both by
 
 ---
 
+## 8. A guess standing in for data
+
+`95608ea` · new `llm/window.go`, `config/providers.go`
+
+Chasing "derive context sizes from the model" turned up a real defect rather
+than a refactor. `ModelInfo` answered *how much context does this model have*
+with a hardcoded 8,000, raised to 32,000 if the name contained `32k` or
+`claude-3`. Measured across the models anyone would actually run:
+
+| model | reported | actual | out by |
+|---|---|---|---|
+| gemini-2.5-flash | 8,000 | 1,048,576 | 131× |
+| claude-sonnet-4-5 | 8,000 | 200,000 | 25× |
+| gpt-4o | 8,000 | 128,000 | 16× |
+| claude-3-5-sonnet | 32,000 | 200,000 | 6× |
+
+The compression trigger fires at 60% of that figure, so it was firing at ~4,800
+tokens on a million-token window — spending a model call to discard context that
+would have fit, on every long conversation.
+
+**The fix was mostly deletion.** `config/providers.go` already carried the
+window per model, curated next to the pricing. It simply had no accessor that
+searched across providers, so a caller holding only a model id could not reach
+it and guessed instead. A pattern table backs it up for what the catalogue does
+not list — self-hosted builds, models newer than the catalogue, and the dated or
+vendor-prefixed ids (`claude-haiku-4-5-20251001`, `openai/gpt-4o`) that exact
+matching misses.
+
+I nearly shipped the pattern table *instead of* using the catalogue, which would
+have been a second copy of a curated list — the exact failure the rest of this
+work was spent removing. The test caught the precedence when the catalogue's
+128,000 for `mistral-large-latest` disagreed with my pattern's 131,072.
+
+Unknown models return 0 — "I don't know" — rather than a number either table
+invented, and the caller falls back to the configured `context_length`.
+Under-reporting only wastes a call; over-reporting gets the request rejected, so
+both tables are conservative wherever a family's members differ.
+
+---
+
 ## Verification
 
 Every commit passed `gofmt` → `go vet` → `go test ./...`, with `-race` on the
@@ -288,10 +328,9 @@ is a real behaviour change, not a cleanup. I left all four alone rather than
 flip three and leave the interesting one — that decision wants a live comparison
 I cannot run without spending quota.
 
-**Deriving context sizes from the model** (step 2). `context_length` and
-`embedded_context_size` are properties of the model rather than preferences, but
-the derivation needs a per-model window table that does not exist yet. Marked
-derived in the descriptors; still read from config.
+**Collapsing `context_length` out of the config entirely.** It is now a fallback
+rather than the primary source (see §8), which is the useful half. Removing the
+field would leave nothing to fall back to when a model is unrecognised.
 
 **The `document.hidden` poller work** turned out to be already done — all five
 server pollers guard visibility. `240-replay`'s timer is user-driven local
