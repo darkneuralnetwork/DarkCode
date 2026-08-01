@@ -38,8 +38,10 @@ import (
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/permission"
 	"github.com/darkcode/project"
+	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/verb"
 )
 
 var ErrSwitchToGUI = fmt.Errorf("switch to gui")
@@ -58,11 +60,14 @@ type Console struct {
 	ckpt          *checkpoint.Manager
 	activeProject string
 
-	// chatMode mirrors the GUI's Chat/Build control: "chat" (talk/Q&A, no
-	// tools), "build" (coding with tools), or "loop" (build + auto-generate &
-	// run tasks). It selects the tool/loop policy per query via
-	// ApplyRequestOverrides, keeping CLI ↔ GUI parity.
-	chatMode string
+	// stickyVerb is the strategy every message uses until the user says
+	// otherwise ("" = none, and escalation decides per message).
+	//
+	// This replaced a separate chat/build/loop vocabulary. Three vocabularies
+	// for "how should this run" — the routing mode, the chat mode, and the
+	// verbs — meant the console could disagree with itself, and did: picking
+	// Loop printed a note telling you to go and enable it somewhere else.
+	stickyVerb string
 	// pendingVerb is the strategy a one-shot verb selected for the NEXT
 	// message only. Nil most of the time; cleared the moment it is used, so a
 	// verb can never silently persist into a later request the way a sticky
@@ -112,9 +117,8 @@ func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.Sys
 		sources:       sources,
 		projects:      projects,
 		activeProject: activeProject,
-		chatMode:      "build", // coding with tools (GUI default); "chat" = no-tools Q&A
-		brain:         "auto",  // local-first, escalate to cloud for hard tasks
-		streamEv:      true,    // minimal spinner on by default
+		brain:         "auto", // local-first, escalate to cloud for hard tasks
+		streamEv:      true,   // minimal spinner on by default
 	}
 
 	c.ckpt = kernel.Checkpoints()
@@ -179,7 +183,7 @@ func (c *Console) Run() error {
 			}
 		}
 		fmt.Println(paint(cGreen+clrBold, "► Resumed CLI session — conversation context preserved") +
-			paint(cGray, "  ·  mode: "+mode+"  ·  chat: "+c.chatMode+"  ·  /help for commands  ·  /gui to return"))
+			paint(cGray, "  ·  mode: "+mode+c.stickyNote()+"  ·  /help for commands  ·  /gui to return"))
 		fmt.Println(paint(cGray, "  "+strings.Repeat("─", 60)))
 	} else {
 		printBanner(c.cfg, c.mem, c.registry, c.kernel)
@@ -552,27 +556,14 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 		}
 	}()
 
-	// Strategy for THIS message: a one-shot verb if the line carried one,
-	// otherwise the sticky chat mode. Nothing consults a persistent flag any
-	// more — picking Loop and then being told to go and enable it in /config
-	// was two places expressing one intent.
-	loopOverride := "off"
-	if c.chatMode == "loop" {
-		loopOverride = "on"
-	}
-	toolsOverride := "on"
-	if c.chatMode == "chat" {
-		// Chat mode: read-only tools only (read/search/web), never writes.
-		toolsOverride = "readonly"
-	}
-	modeOverride, planOverride := "", ""
-	debateOverride := false
-	if c.pendingVerb != nil {
-		v := c.pendingVerb
-		c.pendingVerb = nil // one shot: consumed by this message and no other
-		loopOverride, toolsOverride = v.Loop, v.Tools
-		modeOverride, planOverride, debateOverride = v.Mode, v.Plan, v.Debate
-	}
+	// Strategy for THIS message, in precedence order: a one-shot verb on the
+	// line, then a sticky verb from /always, then escalation. The same order
+	// the web UI uses — the console reads the same table and the same rung
+	// chooser, so "what will this do" has one answer rather than three.
+	st := c.strategyForMessage(resolvedQuery)
+	loopOverride, toolsOverride := st.Loop, st.Tools
+	modeOverride, planOverride := st.Mode, st.Plan
+	debateOverride := st.Debate
 	restoreOverrides := c.kernel.ApplyRequestOverrides(modeOverride, "", loopOverride, toolsOverride, c.brain)
 	defer restoreOverrides()
 	restorePlan := c.kernel.ApplyPlanOverride(planOverride)
@@ -908,4 +899,36 @@ func (c *Console) printUsageDelta(beforeReqs int) {
 		paint(cYellow, fmtDur(avgLat)),
 		paint(cGray, "(total "+fmtNum(snap.TotalTokens)+" tok / "+fmtCost(snap.TotalCost)+")"))
 	fmt.Println()
+}
+
+// strategyForMessage resolves what this one message should do.
+//
+// Precedence is one-shot verb, then sticky verb, then escalation — narrowest
+// intent first. The escalation fallback is what keeps the console and the web
+// UI in step: neither asks the user to pick up front, and both climb on the
+// same signals when the cheap attempt turns out not to be enough.
+func (c *Console) strategyForMessage(query string) verb.Strategy {
+	if v := c.pendingVerb; v != nil {
+		c.pendingVerb = nil // one shot: consumed by this message and no other
+		return *v
+	}
+	if c.stickyVerb != "" {
+		if s, ok := verb.Lookup(c.stickyVerb); ok {
+			return s
+		}
+	}
+	effort, why := router.EntryEffort(query)
+	if v := effort.Verb(); v != "" {
+		fmt.Println(paint(cGray, "  ↳ "+why+" — same as /"+v))
+	}
+	return verb.ForEffort(effort)
+}
+
+// stickyNote renders the active /always verb for the status line, or nothing
+// when escalation is deciding.
+func (c *Console) stickyNote() string {
+	if c.stickyVerb == "" {
+		return ""
+	}
+	return "  ·  always: /" + c.stickyVerb
 }

@@ -1,6 +1,13 @@
 package cli
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 // TestCommandRegistryCoversPhases guards CLI↔GUI parity: every command the
 // 5-phase plan surfaces in the CLI must be registered so it appears in the
@@ -16,7 +23,7 @@ func TestCommandRegistryCoversPhases(t *testing.T) {
 	// Phase-specific + core commands that must exist.
 	required := []string{
 		"/help",           // rebuilt palette
-		"/chatmode",       // Phase 5: Chat/Build/Loop
+		"/always",         // sticky strategy; absorbed the old /chatmode
 		"/brain",          // Phase 1: local/cloud/auto
 		"/memory-profile", // Phase 1: lean/balanced/max
 		"/ingest",         // Phase 3: knowledge ingestion
@@ -57,4 +64,67 @@ func TestCommandSelectorItemsGroupedAndComplete(t *testing.T) {
 	if posHelp == -1 || posMonitor == -1 || posHelp >= posMonitor {
 		t.Errorf("category ordering wrong: /help at %d should precede /monitor at %d", posHelp, posMonitor)
 	}
+}
+
+// TestEverySpellingIsDispatchable reads the command switch itself, so the alias
+// table cannot claim a spelling the console would reject.
+//
+// The first version of this test compared the alias table against a list
+// derived from the alias table, which is self-consistent by construction — it
+// passed for an alias the dispatcher had never heard of. Parsing the switch is
+// what makes it a check rather than a tautology.
+func TestEverySpellingIsDispatchable(t *testing.T) {
+	dispatched := dispatchableCommands(t)
+	if len(dispatched) < 20 {
+		t.Fatalf("only found %d cases in the command switch — the parser is wrong, not the code", len(dispatched))
+	}
+	for _, s := range CommandSpellings() {
+		if !dispatched[s] {
+			t.Errorf("%q is offered to the user but the command switch does not accept it", s)
+		}
+	}
+	for name, aliases := range commandAliases {
+		for _, a := range aliases {
+			if a == name {
+				t.Errorf("%q is listed as an alias of itself", a)
+			}
+		}
+	}
+}
+
+// TestNoChatModeCommand — /chatmode was a second vocabulary for the question
+// the verbs answer, and re-adding it would recreate the ambiguity.
+func TestNoChatModeCommand(t *testing.T) {
+	if dispatchableCommands(t)["/chatmode"] {
+		t.Error("/chatmode is back; /always is the sticky-strategy command")
+	}
+}
+
+// dispatchableCommands returns every "/..." literal appearing in a case clause
+// of the console's slash-command switch.
+func dispatchableCommands(t *testing.T) map[string]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "console_commands.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing the command switch: %v", err)
+	}
+	out := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		cc, ok := n.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		for _, e := range cc.List {
+			lit, ok := e.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			if v, err := strconv.Unquote(lit.Value); err == nil && strings.HasPrefix(v, "/") {
+				out[v] = true
+			}
+		}
+		return true
+	})
+	return out
 }

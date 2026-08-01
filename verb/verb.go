@@ -22,7 +22,11 @@
 // what stops the two drifting again.
 package verb
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/darkcode/router"
+)
 
 // Strategy is the bundle a verb selects. A verb sets several things at once on
 // purpose: `/graph` meaning "plan, then approve, then run the waves, then prove
@@ -122,4 +126,19 @@ func pad(s string, n int) string {
 		s += " "
 	}
 	return s
+}
+
+// ForEffort returns the strategy an escalation rung selects.
+//
+// The rung is chosen from signals and the verb is chosen by the user, but they
+// have to mean the same thing — otherwise /loop and an escalation to loop run
+// differently, and "same as /loop" in an announcement becomes a lie. One
+// mapping, read by every surface.
+func ForEffort(e router.Effort) Strategy {
+	if s, ok := Lookup(string(e)); ok {
+		return s
+	}
+	// The default rung has no verb: tools available, one pass, let the planner
+	// decide whether the goal needs decomposing.
+	return Strategy{Name: string(e), Loop: "off", Tools: "on"}
 }

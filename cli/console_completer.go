@@ -4,6 +4,8 @@ import (
 	"sort"
 
 	"github.com/chzyer/readline"
+
+	"github.com/darkcode/verb"
 )
 
 // completeModelNames returns every known model name — the primary
@@ -27,8 +29,33 @@ func (c *Console) completeModelNames(string) []string {
 	return names
 }
 
+// alwaysArgs offers every verb plus "off", read from the shared table so a new
+// verb cannot be completable in one surface and not the other.
+func alwaysArgs() []readline.PrefixCompleterInterface {
+	args := []readline.PrefixCompleterInterface{readline.PcItem("off")}
+	for _, n := range verb.Names() {
+		args = append(args, readline.PcItem(n))
+	}
+	return args
+}
+
+// aliasItems offers every alias the dispatcher accepts, so tab-completion and
+// the command switch cannot drift apart.
+func aliasItems() []readline.PrefixCompleterInterface {
+	var names []string
+	for _, aliases := range commandAliases {
+		names = append(names, aliases...)
+	}
+	sort.Strings(names) // stable order; map iteration is not
+	items := make([]readline.PrefixCompleterInterface, 0, len(names))
+	for _, a := range names {
+		items = append(items, readline.PcItem(a))
+	}
+	return items
+}
+
 func (c *Console) buildCompleter() *readline.PrefixCompleter {
-	return readline.NewPrefixCompleter(
+	return readline.NewPrefixCompleter(append([]readline.PrefixCompleterInterface{
 		readline.PcItem("/status"),
 		readline.PcItem("/memory"),
 		readline.PcItem("/tools",
@@ -70,13 +97,8 @@ func (c *Console) buildCompleter() *readline.PrefixCompleter {
 		readline.PcItem("/graph"),
 		readline.PcItem("/consensus"),
 		readline.PcItem("/debate"),
-		readline.PcItem("/always",
-			readline.PcItem("chat"), readline.PcItem("build"), readline.PcItem("loop")),
-		readline.PcItem("/chatmode",
-			readline.PcItem("chat"),
-			readline.PcItem("build"),
-			readline.PcItem("loop"),
-		),
+		// /always takes a verb, not a separate chat/build/loop vocabulary.
+		readline.PcItem("/always", alwaysArgs()...),
 		readline.PcItem("/brain",
 			readline.PcItem("auto"),
 			readline.PcItem("local"),
@@ -127,6 +149,5 @@ func (c *Console) buildCompleter() *readline.PrefixCompleter {
 		readline.PcItem("/pipeline"),
 		readline.PcItem("/help"),
 		readline.PcItem("/quit"),
-		readline.PcItem("/exit"),
-	)
+	}, aliasItems()...)...)
 }

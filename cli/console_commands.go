@@ -10,6 +10,7 @@ import (
 	"github.com/darkcode/ingest"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/provider/embedded"
+	"github.com/darkcode/verb"
 )
 
 // ---- slash command dispatch ----
@@ -183,18 +184,28 @@ func (c *Console) handleSlash(input string) bool {
 	// /always makes a verb sticky. Deliberately NOT /mode — that is already
 	// the routing mode (single/escalation/consensus), and overloading it would
 	// recreate the ambiguity these verbs exist to remove.
-	case "/always", "/chatmode":
+	case "/always":
 		if len(parts) > 1 {
-			c.setChatMode(parts[1])
+			c.setAlways(parts[1])
+			break
+		}
+		cur := c.stickyVerb
+		if cur == "" {
+			cur = "off — chosen per message"
 		} else {
-			m := tui.Select("Select Chat Mode (current: "+c.chatMode+"):", []tui.SelectorItem{
-				{Title: "chat", Description: "Talk / ask questions — no tools (fast, cheap)", Value: "chat"},
-				{Title: "build", Description: "Coding with tools", Value: "build"},
-				{Title: "loop", Description: "Build + auto-generate & run tasks (agentic loop)", Value: "loop"},
-			})
-			if m != "" {
-				c.setChatMode(m)
-			}
+			cur = "/" + cur
+		}
+		items := []tui.SelectorItem{{
+			Title:       "off",
+			Description: "Let escalation choose per message, and climb when it needs to",
+			Value:       "off",
+		}}
+		for _, n := range verb.Names() {
+			st, _ := verb.Lookup(n)
+			items = append(items, tui.SelectorItem{Title: "/" + n, Description: st.Help, Value: n})
+		}
+		if m := tui.Select("Always use (current: "+cur+"):", items); m != "" {
+			c.setAlways(m)
 		}
 
 	case "/brain":

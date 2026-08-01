@@ -2,6 +2,7 @@ package cli
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/darkcode/cli/tui"
 )
@@ -34,10 +35,9 @@ var commandRegistry = []cmdInfo{
 	{"/graph", "Strategy", "/graph <task> — plan it, run the graph, prove each task"},
 	{"/consensus", "Strategy", "/consensus <question> — every model answers, then synthesise"},
 	{"/debate", "Strategy", "/debate <question> — the models argue it out once, then settle it"},
-	{"/always", "Strategy", "Keep using one strategy until you say otherwise"},
+	{"/always", "Strategy", "Keep using one strategy until you say otherwise, or /always off"},
 
 	// Chat & modes
-	{"/chatmode", "Chat & Modes", "Chat / Build / Build+Loop (tools & auto-task policy)"},
 	{"/brain", "Chat & Modes", "Routing brain: auto (local-first) / local (offline) / cloud"},
 	{"/mode", "Chat & Modes", "Routing mode: single / escalation / consensus"},
 	{"/safety", "Chat & Modes", "Approval level: strict / normal / relaxed"},
@@ -83,6 +83,39 @@ var commandRegistry = []cmdInfo{
 	{"/log", "Observability", "Replay the activity/trace log"},
 }
 
+// commandAliases maps a canonical command to the other spellings the dispatcher
+// already accepts.
+//
+// These were previously undocumented: the switch answered to them, but nothing
+// listed them, so they were surface nobody maintained. Deleting them would have
+// broken muscle memory for no gain — /q and /exit are universal, /undo reads
+// better than /rollback. Listing them here makes them maintained instead: the
+// palette shows them, the completer offers them, and a test reads the switch
+// itself to prove every listed spelling is actually dispatchable.
+var commandAliases = map[string][]string{
+	"/help":           {"/?"},
+	"/quit":           {"/exit", "/q"},
+	"/new":            {"/reset"},
+	"/rollback":       {"/undo"},
+	"/session":        {"/sessions"},
+	"/know":           {"/knowledge"},
+	"/memory-profile": {"/memprofile"},
+	"/project":        {"/projects"},
+	"/permissions":    {"/perms"},
+}
+
+// CommandSpellings returns every accepted spelling — canonical names and
+// aliases — so the tab-completer offers exactly what the dispatcher accepts.
+func CommandSpellings() []string {
+	out := make([]string, 0, len(commandRegistry)+len(commandAliases))
+	for _, c := range commandRegistry {
+		out = append(out, c.Name)
+		out = append(out, commandAliases[c.Name]...)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // commandSelectorItems builds the palette entries, grouped by category (a
 // category order is imposed, and names are sorted within each category). The
 // Description carries the category tag + summary so the fuzzy filter matches on
@@ -106,9 +139,13 @@ func commandSelectorItems() []tui.SelectorItem {
 	})
 	items := make([]tui.SelectorItem, 0, len(sorted))
 	for _, c := range sorted {
+		desc := c.Category + " · " + c.Summary
+		if a := commandAliases[c.Name]; len(a) > 0 {
+			desc += " (also " + strings.Join(a, ", ") + ")"
+		}
 		items = append(items, tui.SelectorItem{
 			Title:       c.Name,
-			Description: c.Category + " · " + c.Summary,
+			Description: desc,
 			Value:       c.Name,
 		})
 	}

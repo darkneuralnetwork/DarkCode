@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/security"
+	"github.com/darkcode/verb"
 )
 
 func (c *Console) printConfig() {
@@ -116,25 +117,27 @@ func (c *Console) setMode(mode string) {
 // project/auto = full tool runtime, loop = ReAct loop (needs the Agentic
 // Loop master toggle on in Settings). Applied per-query via
 // ApplyRequestOverrides in runQuery.
-func (c *Console) setChatMode(mode string) {
-	mode = strings.ToLower(mode)
-	// Accept the GUI's Chat/Build vocabulary plus back-compat aliases.
-	switch mode {
-	case "chat", "general":
-		c.chatMode = "chat"
-	case "build", "project", "smart":
-		c.chatMode = "build"
-	case "loop":
-		c.chatMode = "loop"
-	default:
-		fmt.Printf("%s invalid chat mode %q. Use: chat, build, loop\n", paint(cRed, "✗"), mode)
+// setAlways makes a strategy verb stick until the user says otherwise.
+//
+// This replaced setChatMode, which had its own chat/build/loop vocabulary for
+// the same question the verbs answer. Two spellings of one intent is what
+// produced "(enable the Agentic Loop in /config for Loop mode to take effect)"
+// — a command surface apologising for a configuration surface.
+func (c *Console) setAlways(name string) {
+	name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(name, "/")))
+	if name == "off" || name == "auto" || name == "none" {
+		c.stickyVerb = ""
+		fmt.Printf("%s strategy → chosen per message\n", paint(cGreen, "✓"))
 		return
 	}
-	// No note about enabling anything first. Picking Loop used to print
-	// "(enable the Agentic Loop in /config for Loop mode to take effect)" —
-	// a command surface apologising for a configuration surface. The mode is
-	// now sufficient on its own.
-	fmt.Printf("%s chat mode → %s\n", paint(cGreen, "✓"), paint(cCyan, c.chatMode))
+	if _, ok := verb.Lookup(name); !ok {
+		fmt.Printf("%s no such verb %q. Use: %s, or off\n",
+			paint(cRed, "✗"), name, strings.Join(verb.Names(), ", "))
+		return
+	}
+	c.stickyVerb = name
+	fmt.Printf("%s every message → %s %s\n", paint(cGreen, "✓"), paint(cCyan, "/"+name),
+		paint(cGray, "(/always off to stop)"))
 }
 
 // setBrain sets the per-session routing brain (Phase 1 parity with the GUI).
