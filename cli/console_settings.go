@@ -6,40 +6,98 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/darkcode/config"
 	"github.com/darkcode/security"
 	"github.com/darkcode/verb"
 )
 
+// printConfig renders the settings from the descriptors on the config type
+// rather than from a list maintained here.
+//
+// The hand-written version showed eleven fields it had picked — a different
+// subset from the API's nineteen and the Settings tab's sixteen, so "what can I
+// configure" had a different answer in each place. Rendering the shared
+// descriptors means the console cannot fall behind again.
 func (c *Console) printConfig() {
+	values := config.Values(c.cfg)
 	fmt.Println(paint(cAmber+clrBold, "CONFIGURATION"))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "model"), paint(cOrange+clrBold, c.cfg.Model))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "provider"), paint(cWhite, c.cfg.Provider))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "base_url"), paint(cGray, c.cfg.BaseURL))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "routing_mode"), paint(cBlue, c.cfg.RoutingMode))
-	prof := c.cfg.ExecutionProfile
-	if prof == "" {
-		prof = "auto"
+
+	tiers := []struct {
+		tier  config.Tier
+		title string
+		note  string
+	}{
+		{config.TierPrimary, "", ""},
+		{config.TierAdvanced, "ADVANCED", "overrides; the defaults are right for almost everyone"},
+		{config.TierDerived, "DERIVED", "computed, not set"},
 	}
-	fmt.Printf("  %-16s %s\n", paint(cGray, "execution_profile"), paint(cCyan, prof))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "safety_level"), paint(cYellow, c.cfg.SafetyLevel))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "max_turns"), paint(cWhite, fmtNum(c.cfg.MaxTurns)))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "max_concurrent"), paint(cWhite, fmtNum(c.cfg.MaxConcurrent)))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "compress_context"), paint(cWhite, fmt.Sprintf("%v", c.cfg.CompressContext)))
-	cm := c.cfg.CompressorModel
-	if cm == "" {
-		cm = "<primary>"
+	for _, t := range tiers {
+		fields := config.FieldsInTier(t.tier)
+		if len(fields) == 0 {
+			continue
+		}
+		if t.title != "" {
+			fmt.Printf("\n  %s %s\n", paint(cGray+clrBold, t.title), paint(cGray, "— "+t.note))
+		}
+		group := ""
+		for _, f := range fields {
+			if f.Group != group {
+				group = f.Group
+				fmt.Printf("  %s\n", paint(cBlue, group))
+			}
+			fmt.Printf("    %-30s %s\n", paint(cGray, f.Name), paint(cWhite, renderValue(values[f.Name])))
+		}
 	}
-	fmt.Printf("  %-16s %s\n", paint(cGray, "compressor_model"), paint(cWhite, cm))
-	fmt.Printf("  %-16s %s\n", paint(cGray, "memory_dir"), paint(cGray, c.cfg.MemoryDir))
+
 	if len(c.cfg.Models) > 0 {
-		fmt.Printf("  %-16s\n", paint(cGray, "registered models:"))
+		fmt.Printf("\n  %s\n", paint(cBlue, "registered models"))
 		for k, m := range c.cfg.Models {
 			primary := ""
 			if k == c.cfg.Model {
 				primary = paint(cOrange, " (primary)")
 			}
-			fmt.Printf("     • %s  %s  %s%s\n", paint(cWhite, m.Model), paint(cGray, m.Provider), paint(cGray, m.BaseURL), primary)
+			fmt.Printf("    • %s  %s  %s%s\n", paint(cWhite, m.Model), paint(cGray, m.Provider), paint(cGray, m.BaseURL), primary)
 		}
+	}
+}
+
+// renderValue prints a setting's value, showing an unset one as a dash rather
+// than as blank space — absence should be visible, not inferred from a gap.
+func renderValue(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "—"
+	case string:
+		if x == "" {
+			return "—"
+		}
+		return x
+	case bool:
+		if x {
+			return "on"
+		}
+		return "off"
+	case float64:
+		if x == float64(int64(x)) {
+			return fmt.Sprintf("%d", int64(x))
+		}
+		return fmt.Sprintf("%g", x)
+	case []any:
+		if len(x) == 0 {
+			return "—"
+		}
+		parts := make([]string, 0, len(x))
+		for _, e := range x {
+			parts = append(parts, fmt.Sprint(e))
+		}
+		return strings.Join(parts, ", ")
+	case map[string]any:
+		if len(x) == 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%d configured", len(x))
+	default:
+		return fmt.Sprint(x)
 	}
 }
 

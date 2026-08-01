@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/chat/cancel", s.csrfMiddleware(http.HandlerFunc(s.handleCancelChat)))
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/verbs", s.handleVerbs)
+	mux.HandleFunc("/api/config/schema", s.handleConfigSchema)
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/tools/execute", s.handleToolExecute)
 	mux.HandleFunc("/api/memory", s.handleMemory)
