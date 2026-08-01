@@ -80,7 +80,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"execution_profile": executionProfile,
 		"plan_approval":     planApproval,
 		"plan_depth":        planDepth,
-		"enable_local_llm":  s.cfg.EnableLocalLLM,
+		"enable_local_llm":  s.cfg.LocalEnabled(),
+		"background_work":   s.cfg.ResolvedBackgroundWork(),
 		"local_mode":        s.cfg.ResolvedLocalMode(),
 		"force_local":       s.cfg.ForceLocal(),
 		"local_model_role":  s.cfg.LocalModelRole,
@@ -124,7 +125,8 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// | "max" | "" (auto). Pointer so an unset field leaves it unchanged.
 		MemoryProfile *string `json:"memory_profile,omitempty"`
 
-		EnableLocalLLM *bool `json:"enable_local_llm,omitempty"`
+		EnableLocalLLM *bool   `json:"enable_local_llm,omitempty"`
+		BackgroundWork *string `json:"background_work,omitempty"`
 		// LocalMode sets the three-plus-state local preference directly:
 		// "off" | "auto" | "on" | "force". "force" pins routing to the local
 		// model (no cloud fallback) and starts it on demand. Pointer so an
@@ -327,6 +329,15 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// ApplyLocalPreference below so force-local pins routing and starts the
 		// embedded model without a restart. Keep the legacy EnableLocalLLM bool
 		// in sync so a downgrade to an older build still behaves sensibly.
+		if req.BackgroundWork != nil {
+			switch *req.BackgroundWork {
+			case config.BackgroundOff, config.BackgroundLight, config.BackgroundFull:
+				s.cfg.BackgroundWork = *req.BackgroundWork
+			default:
+				writeError(w, http.StatusBadRequest, "invalid background_work (want off|light|full)")
+				return
+			}
+		}
 		if req.LocalMode != nil {
 			switch *req.LocalMode {
 			case "off":

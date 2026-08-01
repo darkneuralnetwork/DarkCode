@@ -289,19 +289,17 @@ func (c *Console) setLocal(args []string) {
 
 	arg := strings.ToLower(args[0])
 	switch arg {
+	// Only local_mode is set. enable_local_llm used to be written alongside it
+	// and the two could disagree, which is why ResolvedLocalMode had to exist.
 	case "force":
 		// Force-local: pin routing to the local model — no cloud fallback —
 		// and auto-start it now.
-		c.cfg.EnableLocalLLM = true
 		c.cfg.LocalMode = "force"
 	case "on", "true", "enable", "1":
-		c.cfg.EnableLocalLLM = true
 		c.cfg.LocalMode = "on"
 	case "auto":
-		c.cfg.EnableLocalLLM = true
 		c.cfg.LocalMode = "auto"
 	case "off", "false", "disable", "0":
-		c.cfg.EnableLocalLLM = false
 		c.cfg.LocalMode = "off"
 	default:
 		fmt.Printf("%s invalid state %s (force | on | auto | off)\n", paint(cRed, "✗"), arg)
@@ -383,4 +381,28 @@ func (c *Console) setSandbox(mode string) {
 	}
 	fmt.Printf("%s sandbox → %s %s\n", paint(cGreen, "✓"), paint(cYellow, c.cfg.Sandbox),
 		paint(cGray, "(applies on restart)"))
+}
+
+// setBackgroundWork sets whether the tool may use idle capacity on this
+// machine. One level replaces the two booleans and a percentage that used to
+// ask the same question three times.
+func (c *Console) setBackgroundWork(level string) {
+	level = strings.ToLower(strings.TrimSpace(level))
+	switch level {
+	case config.BackgroundOff, config.BackgroundLight, config.BackgroundFull:
+	default:
+		fmt.Printf("%s invalid level %q. Use: off, light, full\n", paint(cRed, "✗"), level)
+		return
+	}
+	c.cfg.BackgroundWork = level
+	if err := c.cfg.Save(); err != nil {
+		fmt.Printf("%s %s\n", paint(cRed, "✗"), err)
+		return
+	}
+	what := map[string]string{
+		config.BackgroundOff:   "nothing runs on its own",
+		config.BackgroundLight: "workspace indexing stays current",
+		config.BackgroundFull:  "indexing plus the repo-health daemon",
+	}[level]
+	fmt.Printf("%s background work → %s %s\n", paint(cGreen, "✓"), paint(cCyan, level), paint(cGray, "("+what+")"))
 }

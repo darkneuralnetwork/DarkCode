@@ -422,7 +422,7 @@ func (c *Console) readLine() (string, error) {
 // we show a concise summary of what actually changed: which files were
 // modified (before → after diff) and which commands ran.
 func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Attachment) {
-	if c.cfg.Model == "" && !c.cfg.EnableLocalLLM {
+	if c.cfg.Model == "" && !c.cfg.LocalEnabled() {
 		fmt.Printf("%s please select a model or initialise the local llm\n", paint(cRed, "✗"))
 		return
 	}

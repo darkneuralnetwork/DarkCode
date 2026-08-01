@@ -125,6 +125,15 @@ type Config struct {
 	// explicit false on save would silently switch it back on.
 	AutoIngest bool `json:"auto_ingest"`
 
+	// BackgroundWork is the one preference the three fields above were asking
+	// separately: "off", "light" (keep indexes current) or "full" (also run the
+	// health daemon). Empty means infer it from health_daemon/auto_ingest, so
+	// an existing config keeps behaving exactly as it did.
+	//
+	// Read it through ResolvedBackgroundWork, IngestInBackground or
+	// HealthDaemonEnabled rather than directly — see canonical.go.
+	BackgroundWork string `json:"background_work,omitempty"`
+
 	// ExecutionProfile controls DAG + consensus parallelism: "parallel",
 	// "sequential" (safe on strict free-tier RPM limits), or "auto" (default:
 	// sequential when only free-tier cloud models are registered).
@@ -542,7 +551,10 @@ func (cfg *Config) Save() error {
 			return fmt.Errorf("create config directory: %w", err)
 		}
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	// Write the canonical form: one field per question, rather than the two or
+	// three that a resolver has to reconcile. See canonical.go.
+	out := cfg.canonical()
+	data, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -22,7 +22,7 @@ import (
 // Called with s.indexMu held by projectIndex.
 func (s *Server) startAutoIngest(workspace string, idx *intelligence.ProjectIndex) {
 	s.cfgMu.RLock()
-	enabled := s.cfg.AutoIngest
+	enabled := s.cfg.IngestInBackground()
 	memDir := s.cfg.MemoryDir
 	s.cfgMu.RUnlock()
 

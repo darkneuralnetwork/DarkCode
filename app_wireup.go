@@ -169,7 +169,7 @@ func (a *AppRunner) initTools(memDir string) {
 		// it stays out of the way of the machine the user is working on.
 		a.HealthDaemon = memory.NewHealthDaemon(kg, a.Cfg.MemoryDir)
 		a.HealthDaemon.SetCPUPercent(a.Cfg.HealthCPUPercent)
-		if a.Cfg.HealthDaemon {
+		if a.Cfg.HealthDaemonEnabled() {
 			a.HealthDaemon.Start(context.Background())
 		}
 		// Conventions mined here are kept in a library that outlives this
@@ -332,7 +332,7 @@ func (a *AppRunner) initRouterAndModels() {
 	}
 
 	var primaryClient core.LLMClient
-	if a.Cfg.Model != "" || !a.Cfg.EnableLocalLLM {
+	if a.Cfg.Model != "" || !a.Cfg.LocalEnabled() {
 		primaryClient = createClient(config.ModelConfig{Provider: a.Cfg.Provider, BaseURL: a.Cfg.BaseURL, APIKey: a.Cfg.APIKey, Model: a.Cfg.Model})
 		if endpointUsable(a.Cfg.Provider, a.Cfg.BaseURL, a.Cfg.Model) {
 			tier := core.PrimaryTierForMode(routingMode)

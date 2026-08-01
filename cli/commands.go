@@ -38,6 +38,7 @@ var commandRegistry = []cmdInfo{
 	{"/always", "Strategy", "Keep using one strategy until you say otherwise, or /always off"},
 
 	// Chat & modes
+	{"/background", "Chat & Modes", "Idle-capacity work: off / light / full"},
 	{"/brain", "Chat & Modes", "Routing brain: auto (local-first) / local (offline) / cloud"},
 	{"/mode", "Chat & Modes", "Routing mode: single / escalation / consensus"},
 	{"/safety", "Chat & Modes", "Approval level: strict / normal / relaxed"},

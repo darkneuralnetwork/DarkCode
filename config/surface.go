@@ -2,7 +2,7 @@ package config
 
 // surface.go — one answer to "what can the user configure".
 //
-// There were three answers. The config type carried ~50 fields, the HTTP API
+// There were four answers. The config type carried 49 fields, the HTTP API
 // exposed ~19, the Settings tab rendered ~16 controls and the console offered 9
 // commands — and they were different subsets. `plan_depth` reached the browser
 // but not the console; `air_gap` and `cost_limit_*` reached neither and were not
@@ -18,7 +18,7 @@ package config
 // So the field metadata lives next to the field, and the surfaces are generated
 // from it. Adding a setting is one decision again. A field with no descriptor
 // here is not reachable from any interface, deliberately and visibly — see
-// TestEverySettableFieldIsDescribed, which fails when the two drift.
+// TestEveryConfigFieldIsDescribed, which fails when the two drift.
 
 import (
 	"encoding/json"
@@ -77,8 +77,9 @@ var descriptors = []Field{
 		Help: "Only you know your budget. 0 means no cap."},
 	{Name: "air_gap", Label: "Air gap", Group: "Autonomy", Tier: TierPrimary, Kind: "bool",
 		Help: "Refuse every connection that leaves the machine. Cannot be inferred."},
-	{Name: "auto_ingest", Label: "Background work", Group: "Autonomy", Tier: TierPrimary, Kind: "bool",
-		Help: "Whether the tool may use idle capacity on your machine."},
+	{Name: "background_work", Label: "Background work", Group: "Autonomy", Tier: TierPrimary, Kind: "string",
+		Choices: []string{"off", "light", "full"},
+		Help:    "Whether the tool may use idle capacity on your machine."},
 
 	// --- Advanced: real overrides, no default UI ---
 	{Name: "model", Label: "Primary model", Group: "Models", Tier: TierAdvanced, Kind: "string"},
@@ -89,7 +90,6 @@ var descriptors = []Field{
 	{Name: "embedding_model", Label: "Embedding model", Group: "Models", Tier: TierAdvanced, Kind: "string"},
 	{Name: "memory_profile", Label: "Local context size", Group: "Models", Tier: TierAdvanced, Kind: "string",
 		Choices: []string{"lean", "balanced", "max", ""}},
-	{Name: "enable_local_llm", Label: "Local LLM", Group: "Models", Tier: TierAdvanced, Kind: "bool"},
 	{Name: "temperature", Label: "Temperature", Group: "Models", Tier: TierAdvanced, Kind: "float"},
 	{Name: "max_turns", Label: "Max turns", Group: "Execution", Tier: TierAdvanced, Kind: "int"},
 	{Name: "max_concurrent", Label: "Max concurrency", Group: "Execution", Tier: TierAdvanced, Kind: "int"},
@@ -132,7 +132,11 @@ var descriptors = []Field{
 		Help: "Always on: there is no reason to send more tokens than needed."},
 	{Name: "use_ctx_engine", Label: "Context engine", Group: "Execution", Tier: TierDerived, Kind: "bool"},
 	{Name: "health_daemon", Label: "Health daemon", Group: "Autonomy", Tier: TierDerived, Kind: "bool",
-		Help: "Follows the background-work setting."},
+		Help: "Superseded by background_work; kept so old configs load."},
+	{Name: "auto_ingest", Label: "Index the workspace", Group: "Autonomy", Tier: TierDerived, Kind: "bool",
+		Help: "Superseded by background_work; kept so old configs load."},
+	{Name: "enable_local_llm", Label: "Local LLM (legacy)", Group: "Models", Tier: TierDerived, Kind: "bool",
+		Help: "Superseded by local_mode; kept so old configs load."},
 	{Name: "ui_mode", Label: "UI mode", Group: "Storage", Tier: TierDerived, Kind: "bool"},
 }
 
@@ -220,5 +224,20 @@ func Values(c *Config) map[string]any {
 			}
 		}
 	}
+
+	// Report what is in EFFECT, not what happens to be stored.
+	//
+	// Two ways the raw struct misleads. A field that is empty because it is
+	// inferred (background_work) marshals away under omitempty, so a primary
+	// setting renders as unset while actually resolving to "full". And a legacy
+	// field that has been superseded still holds its old value, so the derived
+	// rows can contradict the canonical one directly above them.
+	out["local_mode"] = c.ResolvedLocalMode()
+	out["enable_local_llm"] = c.LocalEnabled()
+	out["background_work"] = c.ResolvedBackgroundWork()
+	out["auto_ingest"] = c.IngestInBackground()
+	out["health_daemon"] = c.HealthDaemonEnabled()
+	out["sandbox"] = c.ResolvedSandboxMode()
+
 	return out
 }

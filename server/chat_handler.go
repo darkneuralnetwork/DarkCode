@@ -60,7 +60,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	s.cfgMu.RLock()
 	primaryModel := s.cfg.Model
-	enableLocal := s.cfg.EnableLocalLLM
+	enableLocal := s.cfg.LocalEnabled()
 	s.cfgMu.RUnlock()
 
 	if primaryModel == "" && !enableLocal {

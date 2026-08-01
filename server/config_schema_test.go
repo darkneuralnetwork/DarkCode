@@ -70,3 +70,42 @@ func TestConfigSchemaRejectsNonGET(t *testing.T) {
 		t.Errorf("status = %d, want 405", w.Code)
 	}
 }
+
+// TestBackgroundWorkIsSettableOverTheAPI. It is a primary setting, and a
+// primary setting the API will not accept is one the browser cannot offer —
+// exactly the gap the descriptors exist to close.
+func TestBackgroundWorkIsSettableOverTheAPI(t *testing.T) {
+	if !config.Described("background_work") {
+		t.Fatal("background_work has no descriptor")
+	}
+	var primary bool
+	for _, f := range config.FieldsInTier(config.TierPrimary) {
+		if f.Name == "background_work" {
+			primary = true
+		}
+	}
+	if !primary {
+		t.Error("background_work is not offered as a primary setting")
+	}
+
+	s := newTestServer(&config.Config{Model: "gpt-4o"})
+	for _, level := range []string{"off", "light", "full"} {
+		w := httptest.NewRecorder()
+		s.updateConfig(w, httptest.NewRequest("POST", "/api/config",
+			strings.NewReader(`{"action":"update_settings","background_work":"`+level+`"}`)))
+		if w.Code != 200 {
+			t.Errorf("setting background_work=%q: status %d, body %s", level, w.Code, w.Body.String())
+			continue
+		}
+		if got := s.cfg.ResolvedBackgroundWork(); got != level {
+			t.Errorf("background_work = %q after setting %q", got, level)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	s.updateConfig(w, httptest.NewRequest("POST", "/api/config",
+		strings.NewReader(`{"action":"update_settings","background_work":"nonsense"}`)))
+	if w.Code != 400 {
+		t.Errorf("an invalid level returned %d, want 400", w.Code)
+	}
+}

@@ -208,6 +208,20 @@ func (c *Console) handleSlash(input string) bool {
 			c.setAlways(m)
 		}
 
+	case "/background":
+		if len(parts) > 1 {
+			c.setBackgroundWork(parts[1])
+			break
+		}
+		cur := c.cfg.ResolvedBackgroundWork()
+		if lv := tui.Select("Background work (current: "+cur+"):", []tui.SelectorItem{
+			{Title: "off", Description: "Nothing runs on its own", Value: "off"},
+			{Title: "light", Description: "Keep the workspace index current", Value: "light"},
+			{Title: "full", Description: "Indexing plus the repo-health daemon", Value: "full"},
+		}); lv != "" {
+			c.setBackgroundWork(lv)
+		}
+
 	case "/brain":
 		if len(parts) > 1 {
 			c.setBrain(parts[1])
@@ -267,7 +281,7 @@ func (c *Console) handleSlash(input string) bool {
 			case "off":
 				status = paint(cRed, "off")
 			default:
-				if c.cfg.EnableLocalLLM {
+				if c.cfg.LocalEnabled() {
 					status = paint(cGreen, "on")
 				}
 			}

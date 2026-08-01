@@ -145,7 +145,7 @@ func (s *Server) primaryClientModel() (core.LLMClient, string) {
 	}
 	s.cfgMu.RLock()
 	baseURL, apiKey, model, provider := s.cfg.BaseURL, s.cfg.APIKey, s.cfg.Model, s.cfg.Provider
-	enableLocal := s.cfg.EnableLocalLLM
+	enableLocal := s.cfg.LocalEnabled()
 	s.cfgMu.RUnlock()
 	if model == "" && baseURL == "" && enableLocal {
 		if emb := embedded.Default(); emb != nil {

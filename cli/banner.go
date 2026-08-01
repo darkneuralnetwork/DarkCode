@@ -100,7 +100,7 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 
 	// Local LLM line — shown when the embedded llama.cpp server is enabled,
 	// regardless of whether a cloud primary is also configured.
-	if cfg.EnableLocalLLM {
+	if cfg.LocalEnabled() {
 		localLine := "disabled"
 		if id := localModelID(); id != "" {
 			localLine = id + " (llama.cpp · running)"
