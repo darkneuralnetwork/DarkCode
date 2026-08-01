@@ -29,7 +29,7 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 		return "", err
 	}
 
-	return k.adjudicate(consensus), nil
+	return k.adjudicateCtx(ctx, userGoal, consensus), nil
 }
 
 // adjudicate settles a consensus round on structural evidence rather than on
@@ -43,6 +43,12 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 // The synthesis keeps ties. It saw every contribution, so it is the right
 // default whenever the evidence does not actually distinguish the candidates.
 func (k *Kernel) adjudicate(consensus *core.ConsensusResult) string {
+	return k.adjudicateCtx(context.Background(), "", consensus)
+}
+
+// adjudicateCtx is adjudicate with the context and goal needed to fall back to
+// a debate round when the graph cannot decide.
+func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core.ConsensusResult) string {
 	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
 	if !ok || kg == nil || consensus == nil {
 		return consensus.Synthesized
@@ -62,7 +68,18 @@ func (k *Kernel) adjudicate(consensus *core.ConsensusResult) string {
 
 	best, supports := kg.AdjudicateCandidates(candidates)
 	if best < 0 || supports[0].Checked == 0 {
-		return consensus.Synthesized // nothing checkable; opinion is all there is
+		// Nothing checkable. This branch used to return the synthesis and move
+		// on, which is the one case where the models disagreeing is all the
+		// information there is — and where letting them answer each other is
+		// worth a call. Everything else is settled by evidence, which is both
+		// cheaper and better.
+		if consensus.Conflict {
+			if d := k.resolveByDebate(ctx, goal, consensus); d.Ran {
+				k.log("consensus", "Debate settled a conflict the graph could not check")
+				return d.Resolved
+			}
+		}
+		return consensus.Synthesized
 	}
 
 	// Report what the graph refuted in the answer we are about to return,
@@ -122,7 +139,7 @@ func (k *Kernel) runConsensusOnOutput(ctx context.Context, userGoal, output, too
 		return "", err
 	}
 
-	return k.adjudicate(consensus), nil
+	return k.adjudicateCtx(ctx, userGoal, consensus), nil
 }
 
 func (k *Kernel) mergeWithConsensus(ctx context.Context, results []*core.SubAgentResult, goal string) (string, error) {

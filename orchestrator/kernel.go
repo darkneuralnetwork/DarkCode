@@ -84,6 +84,10 @@ type Kernel struct {
 	// model call on every successful run is a real cost for advice nobody
 	// asked for, and it can never change the outcome. See reviewer.go.
 	reviewerOn bool
+	// debateOn gates the conflict-triggered exchange. Off by default: it only
+	// fires when models disagree AND the graph cannot check them, but that is
+	// still two extra calls on a metered tier. See debate.go.
+	debateOn bool
 
 	// requestToolsDisabled is a per-request override of tool access. nil ⇒
 	// tools enabled (the default). The web chat sets this from
