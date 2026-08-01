@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/darkcode/observability"
+
+	"github.com/darkcode/safeurl"
 )
 
 type ProcessState int
@@ -325,7 +327,7 @@ func (p *ProcessManager) Start(ctx context.Context, modelPath string, opts Launc
 // without reporting anything, when stop is closed (Stop() was called) or the
 // state has moved on for any other reason (e.g. a manual model swap).
 func (p *ProcessManager) healthLoop(port int, waitDone, stop chan struct{}) {
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := safeurl.EgressClient(3 * time.Second)
 	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
 	ticker := time.NewTicker(healthCheckInterval)
 	defer ticker.Stop()
@@ -389,7 +391,7 @@ func (p *ProcessManager) reportCrash() {
 // milliseconds rather than burning the full timeout. Any captured stderr tail
 // is included in the returned error.
 func (p *ProcessManager) waitForReady(ctx context.Context, timeout time.Duration) error {
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := safeurl.EgressClient(2 * time.Second)
 	url := fmt.Sprintf("http://127.0.0.1:%d/health", p.port)
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -436,7 +438,7 @@ func (p *ProcessManager) SetLoRAScale(ctx context.Context, id int, scale float32
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeurl.EgressClient(0).Do(req)
 	if err != nil {
 		return err
 	}

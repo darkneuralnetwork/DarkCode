@@ -9,6 +9,8 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
+
+	"github.com/darkcode/safeurl"
 )
 
 type LMStudioProvider struct {
@@ -41,7 +43,7 @@ func (p *LMStudioProvider) Type() ProviderType {
 }
 
 func (p *LMStudioProvider) IsAvailable(ctx context.Context) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := safeurl.EgressClient(2 * time.Second)
 	req, _ := http.NewRequestWithContext(ctx, "GET", p.baseURL+"/models", nil)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -52,7 +54,7 @@ func (p *LMStudioProvider) IsAvailable(ctx context.Context) bool {
 }
 
 func (p *LMStudioProvider) ListModels(ctx context.Context) ([]core.ModelMetadata, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := safeurl.EgressClient(5 * time.Second)
 	req, err := http.NewRequestWithContext(ctx, "GET", p.baseURL+"/models", nil)
 	if err != nil {
 		return nil, err

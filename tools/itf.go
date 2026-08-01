@@ -37,6 +37,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/darkcode/safeurl"
 )
 
 // ITFDocument is the top-level structure of an Internal Tool Format file.
@@ -276,7 +278,7 @@ func itfHTTPHandler(t ITFTool) ToolHandler {
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := safeurl.EgressClient(0).Do(req)
 		if err != nil {
 			return &ToolResult{Name: t.Name, Success: false, Error: err.Error()}
 		}
@@ -413,7 +415,7 @@ func HTPExecute(ctx context.Context, baseURL, tool string, args map[string]inter
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeurl.EgressClient(0).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("htp: %w", err)
 	}
@@ -478,7 +480,7 @@ func HTPDiscover(ctx context.Context, baseURL string, headers map[string]string)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeurl.EgressClient(0).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("htp discover: %w", err)
 	}

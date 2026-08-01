@@ -4,12 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"net/http"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/darkcode/safeurl"
 )
 
 // HardwareStats contains real-time resource utilization metrics
@@ -70,8 +71,7 @@ func GetHardwareStats() HardwareStats {
 
 func fetchOllamaPS(stats *HardwareStats) {
 	// Speculatively check local ollama for loaded models
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get("http://127.0.0.1:11434/api/ps")
+	resp, err := safeurl.EgressClient(500 * time.Millisecond).Get("http://127.0.0.1:11434/api/ps")
 	if err != nil {
 		stats.Provider = "cloud" // Default assumption if no local ollama
 		return

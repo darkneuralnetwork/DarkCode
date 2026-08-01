@@ -3,9 +3,10 @@ package model
 import (
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/darkcode/safeurl"
 )
 
 // ModelMetadata represents a model available for download.
@@ -54,7 +55,7 @@ func (m *Manager) Download(model ModelMetadata) error {
 
 	// In a complete implementation, this would stream the download, show a progress bar,
 	// and verify the sha256 checksum after downloading.
-	resp, err := http.Get(model.URL)
+	resp, err := safeurl.EgressClient(0).Get(model.URL)
 	if err != nil {
 		return err
 	}

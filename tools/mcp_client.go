@@ -38,6 +38,8 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
+
+	"github.com/darkcode/safeurl"
 )
 
 // MCPClient is the contract for talking to an MCP server. The SourceManager
@@ -386,7 +388,7 @@ func (c *HTTPMCPClient) doRequest(ctx context.Context, method string, params int
 	for k, v := range c.header {
 		httpReq.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := safeurl.EgressClient(60 * time.Second).Do(httpReq)
 	if err != nil {
 		return nil, err
 	}

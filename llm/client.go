@@ -554,8 +554,9 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 	c.setAuth(req, c.pickKey())
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	// The same guarded dialer the chat path uses. A ping is still a
+	// connection leaving the machine.
+	resp, err := safeurl.EgressClient(5 * time.Second).Do(req)
 	if err != nil {
 		return fmt.Errorf("ping: %w", err)
 	}

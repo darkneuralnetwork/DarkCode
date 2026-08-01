@@ -254,7 +254,7 @@ func readURLAttachment(url string) (string, int, error) {
 	if !safeurl.IsSafeFetchURL(url, false) {
 		return "", 0, fmt.Errorf("blocked: url targets a loopback, link-local, or private address (SSRF guard)")
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := safeurl.EgressClient(20 * time.Second)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", 0, err

@@ -17,6 +17,8 @@ import (
 
 	"github.com/darkcode/capability"
 	"github.com/darkcode/observability"
+
+	"github.com/darkcode/safeurl"
 )
 
 // llamaCppPinnedTag is the specific llama.cpp release tag we pin downloads
@@ -147,7 +149,7 @@ func EnsureLlamaServer(ctx context.Context, destDir string) error {
 	}
 	req.Header.Set("User-Agent", "DarkCode-Embedded")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeurl.EgressClient(0).Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch latest llama.cpp release: %w", err)
 	}
@@ -182,7 +184,7 @@ func EnsureLlamaServer(ctx context.Context, destDir string) error {
 	}
 	reqDl.Header.Set("User-Agent", "DarkCode-Embedded")
 
-	respDl, err := http.DefaultClient.Do(reqDl)
+	respDl, err := safeurl.EgressClient(0).Do(reqDl)
 	if err != nil {
 		return fmt.Errorf("failed to download llama-server zip: %w", err)
 	}
@@ -369,7 +371,7 @@ func EnsureDefaultModels(ctx context.Context, modelsDir string, ramBytes, vramBy
 	req.Header.Set("User-Agent", "DarkCode-Embedded")
 
 	// HuggingFace requires following redirects (http.DefaultClient does)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeurl.EgressClient(0).Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to request model: %w", err)
 	}
@@ -460,7 +462,7 @@ func downloadFile(ctx context.Context, url, dest string) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "DarkCode-Embedded")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeurl.EgressClient(0).Do(req)
 	if err != nil {
 		return err
 	}

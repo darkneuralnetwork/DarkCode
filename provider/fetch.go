@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/darkcode/config"
+
+	"github.com/darkcode/safeurl"
 )
 
 // sortGeminiModels orders models newest-generation-first (e.g. 2.5 before 2.0),
@@ -136,7 +138,7 @@ func FetchModels(p config.Provider, apiKey string, baseURL string) ([]string, er
 		httpReq.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := safeurl.EgressClient(10 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("provider request failed: %w", err)
