@@ -12,6 +12,8 @@ package intelligence
 import (
 	"context"
 	"os"
+
+	"github.com/darkcode/observability"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,7 +46,12 @@ func NewFileWatcher(root string, interval time.Duration) *FileWatcher {
 // Start begins polling in the background. It calls OnChange with the list of
 // changed .go files whenever any mtime advances. Cancel via ctx or Stop().
 func (w *FileWatcher) Start(ctx context.Context) {
-	go func() {
+	// Guarded because OnChange parses whatever appeared in the workspace, and a
+	// panic on a goroutine cannot be recovered by whoever started it — one
+	// malformed file would take the whole process down rather than losing an
+	// index update. The ingest half of the callback chain was already guarded;
+	// the parse half was not.
+	observability.Go("file-watcher", func() {
 		t := time.NewTicker(w.interval)
 		defer t.Stop()
 		for {
@@ -60,7 +67,7 @@ func (w *FileWatcher) Start(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 // Stop halts the watcher.

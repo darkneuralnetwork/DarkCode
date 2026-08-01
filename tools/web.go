@@ -35,6 +35,12 @@ func NewWebTool(registry *Registry, router core.ModelRouter) *WebTool {
 }
 
 // FetchURL retrieves content from a URL.
+// webResponseLimit caps how much of a remote response is read. FetchURL has
+// always capped at this; searchGitHub and searchWikipedia did not, so an
+// oversized or hostile response on those paths could exhaust memory — the
+// agent chooses when to search, so the size is not ours to trust.
+const webResponseLimit = 500000
+
 func (t *WebTool) FetchURL(ctx context.Context, args map[string]interface{}) *ToolResult {
 	url, _ := args["url"].(string)
 	if url == "" {
@@ -63,7 +69,7 @@ func (t *WebTool) FetchURL(ctx context.Context, args map[string]interface{}) *To
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 500000)) // 500KB limit
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webResponseLimit))
 	if err != nil {
 		return &ToolResult{Name: "web_fetch", Success: false, Error: err.Error()}
 	}
@@ -219,7 +225,7 @@ func (t *WebTool) searchGitHub(ctx context.Context, query string) string {
 		return fmt.Sprintf("GitHub API returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webResponseLimit))
 	if err != nil {
 		return "Error reading GitHub response: " + err.Error()
 	}
@@ -268,7 +274,7 @@ func (t *WebTool) searchWikipedia(ctx context.Context, query string) string {
 		return fmt.Sprintf("HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webResponseLimit))
 	if err != nil {
 		return "Error: " + err.Error()
 	}
