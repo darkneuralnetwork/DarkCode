@@ -135,6 +135,25 @@ type Kernel struct {
 	// configured. Set via SetCostGovernor.
 	governor *metrics.CostGovernor
 
+	// Scoped-override bookkeeping. A verb applies to one message, and the
+	// mechanism is save-old / set-new / restore-on-return — but the thing
+	// saved and restored is shared router and gate state, so two overlapping
+	// requests interleaved their saves: the second captured the first's
+	// override as its "base" and put it back on the way out, leaving the
+	// router in a mode no request had asked for. Stuck in consensus means
+	// every later query fans out to every registered model.
+	//
+	// Counting concurrent overrides fixes that: the first captures the real
+	// base, the last restores it, and whatever happens in between is
+	// transient rather than permanent.
+	overrideMu    sync.Mutex
+	modeDepth     int
+	modeBase      core.RoutingMode
+	safetyDepth   int
+	safetyBase    permission.Level
+	forceLocDepth int
+	forceLocBase  bool
+
 	// classifier picks the cognition-cascade entry rung per query (see
 	// cascade.go). Constructed in New; never nil in a kernel built via New.
 	classifier *router.TaskClassifier
@@ -467,24 +486,37 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 	haveBrain := false
 	if k.router != nil {
 		switch strings.ToLower(brain) {
-		case "local":
-			cur := k.router.ForceLocal()
+		case "local", "cloud":
+			k.overrideMu.Lock()
+			if k.forceLocDepth == 0 {
+				k.forceLocBase = k.router.ForceLocal()
+			}
+			k.forceLocDepth++
+			cur := k.forceLocBase
+			k.overrideMu.Unlock()
 			oldForceLocal = &cur
-			k.router.SetForceLocal(true)
-			haveBrain = true
-		case "cloud":
-			cur := k.router.ForceLocal()
-			oldForceLocal = &cur
-			k.router.SetForceLocal(false)
+			k.router.SetForceLocal(strings.ToLower(brain) == "local")
 			haveBrain = true
 		}
 	}
 	if haveMode && k.router != nil {
-		oldMode = k.router.GetMode()
+		k.overrideMu.Lock()
+		if k.modeDepth == 0 {
+			k.modeBase = k.router.GetMode()
+		}
+		k.modeDepth++
+		oldMode = k.modeBase
+		k.overrideMu.Unlock()
 		k.router.SetMode(parseRoutingModeLocal(mode))
 	}
 	if haveSafety && k.gate != nil {
-		oldLevel = k.gate.Level()
+		k.overrideMu.Lock()
+		if k.safetyDepth == 0 {
+			k.safetyBase = k.gate.Level()
+		}
+		k.safetyDepth++
+		oldLevel = k.safetyBase
+		k.overrideMu.Unlock()
 		k.gate.SetLevel(permission.LevelFromString(safety))
 	}
 	if haveLoop || haveTools {
@@ -521,13 +553,31 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 	}
 	return func() {
 		if haveMode && k.router != nil {
-			k.router.SetMode(oldMode)
+			k.overrideMu.Lock()
+			k.modeDepth--
+			last := k.modeDepth == 0
+			k.overrideMu.Unlock()
+			if last {
+				k.router.SetMode(oldMode)
+			}
 		}
 		if haveSafety && k.gate != nil {
-			k.gate.SetLevel(oldLevel)
+			k.overrideMu.Lock()
+			k.safetyDepth--
+			last := k.safetyDepth == 0
+			k.overrideMu.Unlock()
+			if last {
+				k.gate.SetLevel(oldLevel)
+			}
 		}
 		if haveBrain && k.router != nil && oldForceLocal != nil {
-			k.router.SetForceLocal(*oldForceLocal)
+			k.overrideMu.Lock()
+			k.forceLocDepth--
+			last := k.forceLocDepth == 0
+			k.overrideMu.Unlock()
+			if last {
+				k.router.SetForceLocal(*oldForceLocal)
+			}
 		}
 		if haveLoop || haveTools {
 			k.mu.Lock()

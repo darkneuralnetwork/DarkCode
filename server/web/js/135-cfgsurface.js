@@ -10,9 +10,31 @@
  * descriptors, so the list cannot fall behind the program.
  */
 
+// wireConfigSurfaceToggle keeps the generated list behind a button. It is a
+// reference view rather than something you edit, and unfolded by default it
+// pushed the controls people do use off the screen.
+function wireConfigSurfaceToggle() {
+  const btn = $("#cfg-surface-toggle");
+  const body = $("#cfg-surface-body");
+  if (!btn || !body || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+  btn.addEventListener("click", async () => {
+    const showing = !body.hidden;
+    body.hidden = showing;
+    btn.textContent = showing ? "Show all settings" : "Hide all settings";
+    btn.setAttribute("aria-expanded", String(!showing));
+    // Fetch on first open rather than on every config load: nothing needs the
+    // list until someone asks to see it.
+    if (!showing && !host_rendered) await renderConfigSurface();
+  });
+}
+
+let host_rendered = false;
+
 async function renderConfigSurface() {
   const host = $("#cfg-surface");
   if (!host) return;
+  host_rendered = true;
   let data;
   try {
     const res = await fetch(API + "/api/config/schema");
@@ -55,7 +77,7 @@ async function renderConfigSurface() {
   host.innerHTML = html;
 
   const count = $("#cfg-surface-count");
-  if (count) count.textContent = `${data.primary_count} asked · ${fields.length} total`;
+  if (count) count.textContent = `${data.primary_count} asked, ${fields.length} in total.`;
 }
 
 // formatCfgValue shows an unset value as a dash. Absence should be visible

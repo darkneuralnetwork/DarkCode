@@ -274,15 +274,21 @@
        no interface at all — air_gap, the cost limits, the deny rules and the
        blast-radius threshold existed only in the file. -->
   <div class="glass-panel" style="margin-top: 16px;">
-    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
       <h3 style="margin:0;">All settings</h3>
-      <span id="cfg-surface-count" style="font-size:11px; color:var(--text-mute);"></span>
+      <button type="button" class="btn-glow" id="cfg-surface-toggle" aria-expanded="false" aria-controls="cfg-surface">Show all settings</button>
     </div>
-    <p style="font-size:11px; color:var(--text-mute); margin:6px 0 12px;">
-      Generated from the config type, so this cannot fall behind what the program
-      actually reads. Values not shown above are edited in the config file.
-    </p>
-    <div id="cfg-surface"></div>
+    <!-- Collapsed by default. The controls above are the ones anyone edits;
+         this is the full generated list, useful when you want to know what a
+         setting is currently set to rather than to change it. -->
+    <div id="cfg-surface-body" hidden>
+      <p style="font-size:11px; color:var(--text-mute); margin:12px 0;">
+        Generated from the config type, so this cannot fall behind what the program
+        actually reads. <span id="cfg-surface-count"></span> Values without a control
+        above are edited in the config file.
+      </p>
+      <div id="cfg-surface"></div>
+    </div>
   </div>
 
 </div>
