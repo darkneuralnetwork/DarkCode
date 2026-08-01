@@ -109,12 +109,19 @@ call off every single request.
 
 The run then climbs on evidence:
 
-| Signal | Move |
-|---|---|
-| Read-only turn needs to write | ask → direct |
-| The same call keeps failing | → graph (decompose; retrying is what is failing) |
-| Checks still not passing | one rung up |
-| Plan came back as one task | graph → loop (**de-escalate**) |
+| Signal | Move | Wired? |
+|---|---|---|
+| The same call keeps failing | → graph (decompose; retrying is what is failing) | **yes** |
+| Plan came back as one task | graph → loop (**de-escalate**) | **yes** |
+| Checks still not passing | one rung up | ladder only — nothing emits it |
+| Read-only turn needs to write | ask → direct | ladder only — and `/ask` must not start writing |
+
+The last two rungs exist and are tested but **no production code fires them**.
+`SignalUnproven` is wireable — `loopRes.Verdict` is right there at the call site
+— but climbing on a failed acceptance check spends real money, so it is a
+decision rather than an oversight to leave open. `SignalNeedsTools` is arguably
+one that should never fire: `/ask` is a promise not to change anything, and
+silently upgrading it to a writing turn breaks that promise.
 
 **The ladder runs downward too.** Escalation alone ratchets — one climb and the
 run stays expensive to the end. The de-escalation test catches exactly this:
@@ -192,8 +199,8 @@ stops matching the field count:
 | Tier | Count | Meaning |
 |---|---|---|
 | Asked | 6 | models, safety, local mode, spend cap, air gap, background work |
-| Advanced | 37 | real overrides, no default UI |
-| Derived | 6 | computed from the model or the registered count |
+| Advanced | 36 | real overrides, no default UI |
+| Derived | 8 | computed from the model or superseded by a canonical field |
 
 **Redaction moved next to the field.** Each renderer used to be trusted to
 remember, which is how one of them eventually does not.
