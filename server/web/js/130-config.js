@@ -201,41 +201,6 @@ function updateLoopIndicator(on) {
     : "Agentic Loop (ReAct) is OFF — toggle in Configurations to enable the Loop chat mode";
 }
 
-// updateLoopModeOption shows/hides the "Loop Mode" entry in the chat console
-// mode dropdown based on the Settings master toggle. The Loop option is only
-// reachable when loop engineering is enabled, so the agent never silently runs
-// the ReAct loop for users who haven't opted in. If the user disables the
-// loop while Loop mode is the active selection, fall back to General so the
-// next send doesn't dispatch a loop the UI no longer advertises.
-function updateLoopModeOption(on) {
-  const opt = $("#mode-option-loop");
-  if (opt) opt.style.display = on ? "block" : "none";
-  // Phase 5: gate the composer's Loop toggle on the master setting so it never
-  // advertises a loop the user hasn't enabled. Disabled + unchecked when off.
-  const loopToggle = $("#chat-loop-toggle");
-  const loopWrap = $("#chat-loop-wrap");
-  if (loopToggle) {
-    loopToggle.disabled = !on;
-    if (!on) loopToggle.checked = false;
-  }
-  if (loopWrap) {
-    loopWrap.style.opacity = on ? "1" : "0.4";
-    loopWrap.title = on
-      ? "Loop engineering: auto-generate and run tasks"
-      : "Enable Loop engineering in Settings to use this";
-  }
-  if (!on) {
-    const modeVal = $("#chat-mode-value");
-    const modeBtn = $("#chat-mode-btn");
-    if (modeVal && modeVal.value === "loop") {
-      // Fall back to Project (the default mode) — not General — so tools stay
-      // available after the loop is disabled mid-session.
-      modeVal.value = "project";
-      if (modeBtn) modeBtn.title = "Chat Mode: Project Mode";
-    }
-  }
-}
-
 // renderExecutionProfile marks the active segment of the Execution Profile
 // toggle (Auto / Sequential / Parallel) and updates the hint text. Called
 // from loadConfig and the segment click handler (150-events.js).
@@ -338,13 +303,8 @@ async function loadConfig() {
     if (d.sandbox) $("#cfg-sandbox").value = d.sandbox;
     if (d.max_turns) $("#cfg-max-turns").value = d.max_turns;
 
-    // Agentic Loop (looping technology) — populate toggle + max loops +
-    // header indicator.
-    // The agentic-loop switch and Max Loops field are gone: strategy is
-    // chosen per request with /loop, not stored as a setting. Loop mode is
-    // always offered in the mode picker now, because there is no longer a
-    // master toggle that could leave it inert.
-    updateLoopModeOption(true);
+    // No agentic-loop switch, Max Loops field, or mode picker to populate:
+    // strategy is chosen per request with /loop, not stored as a setting.
     renderExecutionProfile(d.execution_profile);
     renderPlanControls(d.plan_approval, d.plan_depth);
 

@@ -26,13 +26,6 @@
         <span style="color: var(--accent-3);">✦</span> DarkCode Orchestrator
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
-        <div class="mode-seg" role="group" aria-label="Mode" style="display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
-          <button type="button" class="mode-seg-btn" data-mode="general" title="Chat — talk / ask questions (no tools)">Chat</button>
-          <button type="button" class="mode-seg-btn active" data-mode="project" title="Build — coding with tools">Build</button>
-        </div>
-        <label id="chat-loop-wrap" class="chat-loop-toggle" title="Loop: keep iterating until the checks pass (same as typing /loop)" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-mute); cursor: pointer;">
-          <input type="checkbox" id="chat-loop-toggle"> Loop
-        </label>
         <label class="chat-brain-wrap" title="Which brain answers: Auto (local-first, escalate), Local (offline), or Cloud" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-mute);">
           🧠
           <select id="chat-brain-select" style="background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 12px;">
@@ -90,7 +83,6 @@
 
     <form class="chat-input glass-panel" id="chat-form" style="margin: 0 24px 24px;">
       <div class="attach-tray" id="attach-tray"></div>
-      <input type="hidden" id="chat-mode-value" value="project">
       <input type="hidden" id="chat-brain-value" value="auto">
       <div class="chat-input-row" style="position: relative;">
         <div style="position: relative; display: flex; align-items: center; padding-left: 12px; opacity: 0.7;">

@@ -70,9 +70,9 @@ async function sendChat() {
       body: JSON.stringify({
         query: text,
         project: activeProjectId || "",
-        // Phase 5: send the composer's Chat/Build(+Loop) mode and the Brain
-        // selector so the server honors them instead of always auto-detecting.
-        chat_mode: $("#chat-mode-value")?.value || "",
+        // No chat_mode: the composer no longer asks the user to pick one up
+        // front. The server decides per message, and a leading verb (/ask,
+        // /loop, /graph…) overrides it for that message only.
         brain: $("#chat-brain-value")?.value || "auto",
         attachments
       }),

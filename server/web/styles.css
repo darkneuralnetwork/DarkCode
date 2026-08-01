@@ -2153,24 +2153,6 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 }
 
 /* Chat/Build mode segmented control (Phase 5). */
-.mode-seg-btn {
-  background: transparent;
-  color: var(--text-mute);
-  border: none;
-  padding: 4px 14px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.mode-seg-btn + .mode-seg-btn { border-left: 1px solid var(--border); }
-.mode-seg-btn.active {
-  background: var(--accent-3);
-  color: #000;
-  font-weight: 600;
-}
-.mode-seg-btn:not(.active):hover { color: var(--text); }
-.chat-loop-toggle input { accent-color: var(--accent-3); }
 
 /* ════════════════════════════════════════════════════════════════════════
    BLUEPRINT — the live run

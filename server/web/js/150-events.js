@@ -2,32 +2,14 @@
 // EVENT WIRING
 // ════════════════════════════════════════════════════════════════════════
 function attachEventListeners() {
-  // Chat/Build mode + Loop + Brain composer controls (Phase 5). These drive the
-  // hidden #chat-mode-value / #chat-brain-value that the send body reads.
-  //  • Chat  → chat_mode "general" (talk/Q&A, no tools) — Loop toggle hidden.
-  //  • Build → chat_mode "project" (coding with tools); with Loop checked →
-  //    "loop" (auto-generate + run tasks). Loop is only meaningful in Build.
-  function syncMode() {
-    const active = document.querySelector(".mode-seg-btn.active");
-    const base = active ? active.dataset.mode : "project";
-    const loopWrap = $("#chat-loop-wrap");
-    const loopOn = $("#chat-loop-toggle")?.checked;
-    if (loopWrap) loopWrap.style.display = base === "project" ? "inline-flex" : "none";
-    const mv = $("#chat-mode-value");
-    if (mv) mv.value = base === "project" && loopOn ? "loop" : base;
-  }
-  $$(".mode-seg-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      $$(".mode-seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
-      syncMode();
-    });
-  });
-  $("#chat-loop-toggle")?.addEventListener("change", syncMode);
+  // Brain selector — the one composer control left. Chat/Build and Loop are
+  // gone: they asked the user to predict, once and up front, something that
+  // changes every message. The server decides per message now, and a leading
+  // verb (/ask, /loop, /graph…) overrides it for that message alone.
   $("#chat-brain-select")?.addEventListener("change", (e) => {
     const bv = $("#chat-brain-value");
     if (bv) bv.value = e.target.value || "auto";
   });
-  syncMode();
 
   // Knowledge ingestion (Phase 3): teach the system from a file/dir/url/text.
   $("#cfg-ingest-btn")?.addEventListener("click", async () => {
@@ -205,19 +187,17 @@ function attachEventListeners() {
   //    modal.
   // Blocked while a response is in flight (pendingChat is the real tracker;
   // the old code referenced an undefined `sendDisabled` which was a dead guard).
-  // New Chat — the single "start fresh" control, uniform across every mode.
-  // It always: (1) in project/loop mode, deactivates the active project so its
-  // plan/workflow stops being injected; (2) POSTs /api/reset, which clears STM
+  // New Chat — the single "start fresh" control. It always: (1) deactivates
+  // the active project so its plan/workflow stops being injected; (2) POSTs /api/reset, which clears STM
   // AND advances the session epoch server-side so prior conversations no longer
   // resurface through memory recall; (3) clears the transcript. Distinct from
   // Clear Screen (Ctrl+L), which only hides the transcript and keeps memory.
   $("#chat-new")?.addEventListener("click", async () => {
     if (pendingChat) { toast("info", "Wait for the current response to finish."); return; }
-    const mode = $("#chat-mode-value")?.value || "general";
     try {
-      // Drop the active project first (project/loop) so its long-lived context
-      // isn't carried into the fresh chat.
-      if (mode !== "general" && activeProjectId) {
+      // Drop the active project first so its long-lived context isn't carried
+      // into the fresh chat.
+      if (activeProjectId) {
         await setActiveProject(null);
       }
       // Wipe conversational context in every mode (STM + session epoch).

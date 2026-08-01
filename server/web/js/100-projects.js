@@ -187,12 +187,6 @@ async function saveProject() {
       window.projectModePending = false;
       window.pendingChatMode = "project";
       setActiveProject(savedData.id);
-      // Re-assert the mode: setActiveProject keeps "loop" for loop mode, but
-      // for project mode it may have flipped to "project" — set explicitly.
-      const mv = $("#chat-mode-value");
-      if (mv) mv.value = pendingMode;
-      const mb = $("#chat-mode-btn");
-      if (mb) mb.title = "Chat Mode: " + (pendingMode === "loop" ? "Loop" : "Project") + " Mode";
       // Loop mode lands on chat (so the user can immediately start a loop);
       // project mode lands on the workflow tab (shows the seeded plan).
       switchTab(pendingMode === "loop" ? "nexus" : "blueprint");
@@ -319,16 +313,6 @@ async function setActiveProject(id) {
   activeProjectId = id || null;
   if (id) {
     try { localStorage.setItem("darkcode_active_project", id); } catch {}
-    const modeVal = $("#chat-mode-value");
-    // Don't clobber Loop mode: loop is a project-bearing mode (project path +
-    // context + plan/workflow + the ReAct loop), so activating a project from
-    // loop mode must KEEP the mode as "loop". Only force "project" when the
-    // current mode is general/auto/blank.
-    if (modeVal && modeVal.value !== "project" && modeVal.value !== "loop") {
-      modeVal.value = "project";
-      const modeBtn = $("#chat-mode-btn");
-      if (modeBtn) modeBtn.title = "Chat Mode: Project Mode";
-    }
   } else {
     try { localStorage.removeItem("darkcode_active_project"); } catch {}
   }
