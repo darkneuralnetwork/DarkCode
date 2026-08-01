@@ -152,6 +152,14 @@ type Result struct {
 	// run and held" from "nothing contradicted the claim" — the caller records
 	// the first as a success and should not record the second as one.
 	Verdict Verdict
+
+	// Stuck reports that the loop gave up because the same call kept failing,
+	// as opposed to running out of iterations or finishing.
+	//
+	// The distinction is what lets the caller escalate instead of apologise:
+	// repeating a call that has already failed four times is the one response
+	// guaranteed not to work, whereas breaking the task up might.
+	Stuck bool
 }
 
 // RunWithContract is Run plus a caller-supplied definition of done. When the
@@ -530,6 +538,7 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 						Completed: false,
 						ToolCalls: allToolCalls,
 						Verdict:   verdict,
+						Stuck:     true,
 					}, nil
 				}
 			} else {

@@ -1,8 +1,14 @@
 package server
 
 import (
+	"fmt"
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/darkcode/core"
+	"github.com/darkcode/router"
+	"github.com/darkcode/ui"
 	"github.com/darkcode/verb"
 )
 
@@ -69,4 +75,81 @@ func TestEveryVerbMapsToAKnownChatMode(t *testing.T) {
 			t.Errorf("/%s maps to unknown chat mode %q", name, mode)
 		}
 	}
+}
+
+// TestChatModeForEffort maps every rung on the escalation ladder onto a chat
+// mode the handler understands. An unmapped rung would fall through to whatever
+// the default happens to be, silently.
+func TestChatModeForEffort(t *testing.T) {
+	want := map[router.Effort]string{
+		router.EffortAsk:       "general", // read-only
+		router.EffortDirect:    "project",
+		router.EffortLoop:      "loop",
+		router.EffortGraph:     "loop",
+		router.EffortConsensus: "project",
+	}
+	for e, w := range want {
+		if got := chatModeForEffort(e); got != w {
+			t.Errorf("chatModeForEffort(%q) = %q, want %q", e, got, w)
+		}
+	}
+}
+
+// TestRoutingCostsNoModelCall. The classifier this replaced spent a call with a
+// 12-second timeout before any work started, and was the first thing a metered
+// tier rate-limited. Routing must now be reachable with no provider at all.
+func TestRoutingCostsNoModelCall(t *testing.T) {
+	for _, q := range []string{
+		"what does the cascade do?",
+		"build a website",
+		"add a retry to the http client",
+	} {
+		e, why := router.EntryEffort(q) // no client, no context, no network
+		if e == "" || why == "" {
+			t.Errorf("EntryEffort(%q) = %q/%q — routing must be total", q, e, why)
+		}
+	}
+}
+
+// TestAnnounceStaysQuietForTheDefault. An announcement on every ordinary
+// message would be the most frequent event in the feed and the first one people
+// learn to skip — and there is no verb to teach for the rung you get by typing
+// nothing.
+func TestAnnounceStaysQuietForTheDefault(t *testing.T) {
+	if router.EffortDirect.Verb() != "" {
+		t.Fatal("the default rung gained a verb; the quiet rule below needs revisiting")
+	}
+	var seen []string
+	em := ui.NewEventEmitter(true, io.Discard)
+	em.OnHandler(func(ev core.UIEvent) {
+		if ev.TaskID == "strategy" {
+			seen = append(seen, contentString(ev.Content))
+		}
+	})
+	s := &Server{emitter: em}
+
+	s.announceEffort(router.EffortDirect, "a single pass with tools should cover it")
+	if len(seen) != 0 {
+		t.Errorf("announced the default rung: %v", seen)
+	}
+
+	s.announceEffort(router.EffortLoop, "the request is multi-step")
+	if len(seen) != 1 {
+		t.Fatalf("a non-default rung produced %d announcements, want 1", len(seen))
+	}
+	if !strings.Contains(seen[0], "/loop") {
+		t.Errorf("announcement does not name the verb: %q", seen[0])
+	}
+	if !strings.Contains(seen[0], "multi-step") {
+		t.Errorf("announcement does not say why: %q", seen[0])
+	}
+}
+
+// contentString renders a UIEvent's content field, whatever concrete type the
+// emitter put in it.
+func contentString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
 }

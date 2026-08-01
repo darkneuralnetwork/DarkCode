@@ -47,6 +47,9 @@ function addEvent(evt) {
   if (eType === "task_update") {
     if (eTask === "verification") eType = "verification_pipeline";
     if (eTask === "router") eType = "router_decision";
+    // Escalation picked or changed the strategy — worth its own colour, since a
+    // silent strategy change is indistinguishable from a bug when cost jumps.
+    if (eTask === "strategy") eType = "strategy_choice";
     if (eTask === "security-sandbox") eType = "security_sandbox";
   }
   const isStreaming = evt.status === "streaming";

@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/darkcode/attach"
 	"github.com/darkcode/core"
@@ -76,119 +75,29 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// per-request, so /api/status and /api/config keep reflecting the
 	// configured (startup) state.
 	//
-	// Loop engineering is an explicit chat mode: the ReAct loop runs only
-	// when the user picks "Loop" mode AND the master toggle is ON in Settings
-	// (the dropdown hides the option otherwise, but we re-check the master
-	// here as defense-in-depth). General/Project/Auto explicitly force the
-	// loop OFF so a globally-enabled loop never silently takes over those
-	// modes — the loop is opt-in per request.
-	// An explicit verb is a decision already made. Spending a classifier call
-	// to re-derive it would be both slower and capable of overriding it.
+	// Strategy is chosen by progressive escalation rather than by asking a
+	// model to predict it. The classifier that used to sit here spent a call
+	// with a 12-second timeout guessing how hard the request would be, was the
+	// first thing a metered tier rate-limited, and fell back to a keyword scan
+	// when it failed — so the keyword scan was carrying it in exactly the
+	// conditions that mattered. Now that scan IS the entry point, and the run
+	// climbs from there on evidence.
+	effort, why := router.EntryEffort(req.Query)
 	if verbFound {
+		// An explicit verb is a decision already made, so there is nothing to
+		// infer and nothing to announce.
 		req.ChatMode = chatModeForVerb(verbStrategy)
+	} else {
+		req.ChatMode = chatModeForEffort(effort)
+		s.announceEffort(effort, why)
 	}
 
-	// Smart Auto-Detection Mode (Advanced Intent Classification)
-	if !verbFound && (req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "") {
-		// Cost guard: for a query that is obviously a general question, skip the
-		// LLM intent-classifier call (and the project auto-creation it can
-		// trigger) entirely — route straight to lean General mode. This keeps a
-		// plain question at a single model call instead of classifier + answer
-		// (+ possible project plan/workflow generation). Ambiguous or clearly
-		// tool-worthy queries still fall through to the LLM classifier below.
-		if router.IsGeneralQuestion(req.Query) {
-			req.ChatMode = "general"
-		}
-	}
-
-	if req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "" {
-		client, clientModel := s.primaryClientModel()
-		prompt := fmt.Sprintf(`Analyze this user query: %q.
-Determine the required execution mode:
-- "general": A simple question, explanation, or chat that does NOT require using any tools or modifying files.
-- "project": A task that requires using tools (reading/writing files, searching) but is relatively straightforward.
-- "loop": A complex, multi-step task (like building an app, a massive refactor, or complex debugging) that requires a continuous agentic loop.
-Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false, "project_name": "...", "project_description": "..."}`, req.Query)
-
-		temp := 0.0
-		llmReq := &core.CompletionRequest{
-			Model: clientModel,
-			Messages: []core.Message{
-				{Role: "system", Content: "You are an orchestration classifier. Output only valid JSON."},
-				{Role: "user", Content: prompt},
-			},
-			Temperature: &temp,
-		}
-
-		// If local LLM is enabled and a classifier LoRA exists, we could mount it here.
-		// For now, we rely on the primary model's intelligence.
-		//
-		// Hard cap the classifier: it is a best-effort routing optimization,
-		// not the actual work, so it must fail FAST to the deterministic
-		// fallback. Without this bound, a rate-limit 429 (whose Retry-After can
-		// be ~46s) sent the retry layer into a multi-minute backoff chain
-		// while the user's build request just hung. 12s is enough for a healthy
-		// call and short enough that a throttled provider surrenders quickly.
-		classifyCtx, cancelClassify := context.WithTimeout(r.Context(), 12*time.Second)
-		resp, err := client.ChatCompletion(classifyCtx, llmReq)
-		cancelClassify()
-		classified := false
-		if err != nil {
-			log.Printf("[server] auto-mode classifier call failed: %v", err)
-		} else if len(resp.Choices) > 0 {
-			text := resp.Choices[0].Message.Content
-			var result struct {
-				Mode         string `json:"mode"`
-				IsNewProject bool   `json:"is_new_project"`
-				ProjectName  string `json:"project_name"`
-				ProjectDesc  string `json:"project_description"`
-			}
-			// Models routinely wrap the JSON in ```json fences or prose —
-			// extract the outermost object instead of failing silently (the
-			// silent failure disabled auto mode-detection AND project
-			// auto-creation whenever the primary model used fences).
-			if jerr := json.Unmarshal([]byte(extractJSONObject(text)), &result); jerr == nil && result.Mode != "" {
-				classified = true
-				req.ChatMode = result.Mode // switch to the detected mode
-				log.Printf("[server] auto-mode classified query → mode=%s is_new_project=%v", result.Mode, result.IsNewProject)
-
-				// Project auto-creation is deterministic-first: any build-shaped
-				// task (mode loop, or mode project with a creation verb) gets a
-				// project so context accumulation, plan/workflow, and the
-				// Blueprint tab all work — the classifier's is_new_project
-				// opinion alone proved too flaky to carry the feature.
-				if req.Project == "" && (result.IsNewProject || isBuildIntent(req.Query, result.Mode)) {
-					if id := s.autoCreateProject(req.Query, result.ProjectName, result.ProjectDesc); id != "" {
-						req.Project = id
-					}
-				}
-			} else {
-				log.Printf("[server] auto-mode classifier output unparsable: %v", jerr)
-			}
-		}
-
-		// Deterministic fallback: when the classifier call failed or its output
-		// was unusable (e.g. the free-tier daily quota is exhausted, so no LLM
-		// call succeeds), don't abandon auto mode — infer intent from the query
-		// itself so a build task still gets loop mode AND a project. Without
-		// this, a rate-limited classifier silently downgraded every build to a
-		// project-less single turn (the reported "auto project creation not
-		// working" symptom).
-		if !classified {
-			if isBuildIntent(req.Query, "project") || looksLikeBuild(req.Query) {
-				req.ChatMode = "loop"
-				log.Printf("[server] classifier unavailable — deterministic fallback → loop mode (build intent)")
-				if req.Project == "" {
-					if id := s.autoCreateProject(req.Query, "", ""); id != "" {
-						req.Project = id
-					}
-				}
-			} else {
-				// No build signal and no classification → treat as a plain
-				// question so a rate-limited classifier doesn't strand the
-				// turn in tool-enabled auto mode.
-				req.ChatMode = "general"
-			}
+	// Project auto-creation stays deterministic. It was already independent of
+	// the classifier's opinion — the is_new_project field proved too flaky to
+	// carry the feature — so it reads the same signal the routing does.
+	if req.Project == "" && router.IsBuildShaped(req.Query, effort) && !verbFound {
+		if id := s.autoCreateProject(req.Query, "", ""); id != "" {
+			req.Project = id
 		}
 	}
 
@@ -496,60 +405,6 @@ func (s *Server) autoCreateProject(query, name, desc string) string {
 	return proj.ID
 }
 
-// looksLikeBuild is the classifier-free build detector used by the
-// deterministic fallback: a build verb anywhere plus an artifact-ish noun, or
-// an explicit "app/website/api/..." mention. Deliberately broader than
-// isBuildIntent (which trusts the classifier's mode) since here there is no
-// mode to lean on.
-func looksLikeBuild(query string) bool {
-	q := strings.ToLower(query)
-	hasVerb := false
-	for _, v := range buildVerbs {
-		if strings.Contains(q, v+" ") {
-			hasVerb = true
-			break
-		}
-	}
-	if !hasVerb {
-		return false
-	}
-	for _, noun := range []string{"app", "website", "web page", "webpage", "site", "api", "service", "server", "script", "program", "tool", "page", "dashboard", "bot", "game", "cli"} {
-		if strings.Contains(q, noun) {
-			return true
-		}
-	}
-	return false
-}
-
-// buildVerbs are the creation verbs that mark a query as a build task for
-// deterministic project auto-creation (see the auto-mode classifier block).
-var buildVerbs = []string{
-	"create", "build", "make", "implement", "develop", "write", "generate",
-	"scaffold", "set up", "setup", "bootstrap", "design and",
-}
-
-// isBuildIntent reports whether a query is build-shaped: loop mode always is;
-// project mode is when the query leads with (or contains early) a creation
-// verb. Questions and read-only tasks stay project-less.
-func isBuildIntent(query, mode string) bool {
-	switch mode {
-	case "loop":
-		return true
-	case "project":
-		q := strings.ToLower(strings.TrimSpace(query))
-		head := q
-		if len(head) > 80 {
-			head = head[:80]
-		}
-		for _, v := range buildVerbs {
-			if strings.HasPrefix(q, v+" ") || strings.Contains(head, " "+v+" ") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // deriveProjectName builds a short human project name from the query when
 // the classifier didn't supply one: the first few meaningful words, minus
 // leading creation verbs and articles.
@@ -611,17 +466,6 @@ func isSkeletonBlueprint(content string) bool {
 	return c == "" || strings.Contains(c, "_Status: awaiting first task_")
 }
 
-// extractJSONObject returns the outermost {...} substring of s, tolerating
-// markdown fences and surrounding prose. Returns s unchanged when no object
-// braces are found (json.Unmarshal then produces the error it would have
-// anyway).
-func extractJSONObject(s string) string {
-	if i, j := strings.Index(s, "{"), strings.LastIndex(s, "}"); i >= 0 && j > i {
-		return s[i : j+1]
-	}
-	return s
-}
-
 func (s *Server) handleCancelChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		writeError(w, http.StatusMethodNotAllowed, "use POST")
@@ -678,4 +522,36 @@ func stripStrategyVerb(query string) (string, verb.Strategy, bool) {
 		return rest, st, true
 	}
 	return query, verb.Strategy{}, false
+}
+
+// chatModeForEffort maps an escalation rung onto the chat mode the rest of the
+// handler reads.
+func chatModeForEffort(e router.Effort) string {
+	switch e {
+	case router.EffortAsk:
+		return "general"
+	case router.EffortLoop, router.EffortGraph:
+		return "loop"
+	default:
+		return "project"
+	}
+}
+
+// announceEffort tells the user which strategy was chosen and why.
+//
+// Not decoration. A silent strategy change is indistinguishable from a bug when
+// the cost or latency jumps, and it is how the verbs get discovered: watching
+// the tool reach for /graph is what teaches someone to type it themselves next
+// time, for a task whose shape they already know.
+//
+// It stays quiet for the default rung. Announcing every ordinary message would
+// make this the most frequent event in the feed and the first one people learn
+// to skip — and there is no verb to teach for the rung you get by typing
+// nothing.
+func (s *Server) announceEffort(e router.Effort, why string) {
+	v := e.Verb()
+	if s.emitter == nil || v == "" {
+		return
+	}
+	s.emitter.EmitTaskUpdate("strategy", string(e), why+" — same as /"+v)
 }

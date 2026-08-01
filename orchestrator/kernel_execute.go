@@ -369,6 +369,19 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		}
 		output := loopRes.Output
 
+		// The loop gave up because the same call kept failing. That report is
+		// honest but it is still a spent request that produced nothing, and the
+		// cause is almost always a task too big to attack in one piece — so
+		// decompose and try once more rather than hand back the apology. Only
+		// when there was no plan already: a stuck run that WAS decomposed has
+		// nothing left to gain from decomposing again.
+		if loopRes.Stuck && planGraph == nil {
+			if out, res, ok := k.escalateStuckLoop(ctx, userGoal, recallBlock, complexity); ok {
+				output, loopRes = out, res
+				planGraph = k.lastRunPlanSnapshot()
+			}
+		}
+
 		// Attach the evidence. A run that says it succeeded and shows the
 		// commands it passed is a different claim from one that only says so.
 		if planGraph != nil {

@@ -1488,6 +1488,7 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 }
 .evt-type.verification_pipeline { background: var(--green-bg) !important; color: var(--green) !important; border: 1px solid rgba(0,230,118,0.5) !important; }
 .evt-type.router_decision       { background: var(--cyan-bg) !important; color: var(--cyan) !important; border: 1px solid rgba(38,198,218,0.5) !important; }
+.evt-type.strategy_choice       { background: rgba(139,92,246,0.15) !important; color: var(--accent-3) !important; border: 1px solid rgba(139,92,246,0.5) !important; }
 .evt-type.security_sandbox      { background: var(--purple-bg) !important; color: var(--purple) !important; border: 1px solid rgba(186,104,200,0.5) !important; }
 
 
