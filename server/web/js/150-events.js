@@ -434,7 +434,7 @@ function attachEventListeners() {
         const res = await fetch(API + "/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "update_settings", routing_mode: routing, safety_level: safety, sandbox: $("#cfg-sandbox")?.value || "auto", max_turns: turns })
+          body: JSON.stringify({ action: "update_settings", routing_mode: routing, safety_level: safety, sandbox: $("#cfg-sandbox")?.value || "auto", max_turns: turns, background_work: $("#cfg-background-work")?.value || undefined })
         });
         if (!res.ok) throw new Error(await res.text());
         toast("success", "✓ Global settings updated");
@@ -609,6 +609,7 @@ function attachEventListeners() {
           routing_mode: $("#cfg-routing").value,
           safety_level: $("#cfg-safety").value,
           sandbox: $("#cfg-sandbox")?.value || "auto",
+          background_work: $("#cfg-background-work")?.value || undefined,
           max_turns: parseInt($("#cfg-max-turns").value, 10)
         })
       });
@@ -668,7 +669,10 @@ function attachEventListeners() {
       const res = await fetch(API + "/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_settings", enable_local_llm: on || force, local_mode: localMode, enable_local_offloading: offload, memory_profile: memoryProfile }),
+        // local_mode only. enable_local_llm is the legacy half of the same
+        // question and the two could disagree, which is why ResolvedLocalMode
+        // had to exist; sending both is what kept that contradiction alive.
+        body: JSON.stringify({ action: "update_settings", local_mode: localMode, enable_local_offloading: offload, memory_profile: memoryProfile }),
       });
       if (!res.ok) throw new Error("save failed");
       const data = await res.json().catch(() => ({}));
