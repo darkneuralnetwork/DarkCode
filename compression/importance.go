@@ -124,13 +124,21 @@ func scoreErrorContent(msg core.Message) float64 {
 
 	score := 0.0
 
-	// Strong error indicators
+	// Strong error indicators.
+	//
+	// The colon-terminated forms are not enough on their own: the most common
+	// failure output in this tool's own workflow carries no colon at all.
+	// "exit status 1" is what a failed go build reports and what the repair
+	// loop feeds back, and it scored zero here — so the messages most worth
+	// keeping were the ones most likely to be compressed away.
 	strongIndicators := []string{
 		"error:", "error :", "fatal:", "panic:",
 		"failed:", "failure:", "exception:",
 		"traceback", "stack trace", "segfault",
 		"permission denied", "not found", "does not exist",
 		"cannot ", "couldn't ", "unable to ",
+		"exit status ", "exit code ", "non-zero exit",
+		"--- fail", "build failed", "test failed", "command failed",
 	}
 	for _, ind := range strongIndicators {
 		if strings.Contains(content, ind) {
@@ -140,9 +148,14 @@ func scoreErrorContent(msg core.Message) float64 {
 	}
 
 	// Weaker error indicators
+	// Weaker indicators, including the bare words. "0 failed" in a passing
+	// summary matches here, which is the right trade: over-scoring keeps a
+	// message that did not need keeping, under-scoring drops the one that
+	// explained everything after it.
 	weakIndicators := []string{
 		"warning:", "warn:", "deprecated",
 		"timeout", "refused", "rejected",
+		"failed", "failure",
 	}
 	for _, ind := range weakIndicators {
 		if strings.Contains(content, ind) {
