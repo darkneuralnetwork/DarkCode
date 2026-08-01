@@ -451,3 +451,25 @@ func ProviderIDs() []string {
 	}
 	return out
 }
+
+// CatalogContextWindow returns the context window for a model id, searching
+// every provider, or 0 when the catalogue does not list it.
+//
+// The catalogue already carried this figure per model, alongside the pricing —
+// it just had no accessor that searched across providers, so callers that only
+// knew a model id could not reach it and guessed instead. A curated exact-id
+// table is better evidence than any pattern match, so this is what callers
+// should consult first.
+func CatalogContextWindow(modelID string) int {
+	if modelID == "" {
+		return 0
+	}
+	for _, p := range providers {
+		for _, m := range p.Models {
+			if m.ID == modelID && m.ContextWindow > 0 {
+				return m.ContextWindow
+			}
+		}
+	}
+	return 0
+}

@@ -527,14 +527,15 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionReques
 
 // ModelInfo returns metadata about this client's model.
 func (c *Client) ModelInfo() core.ModelMetadata {
-	// A simple heuristic for now. Proper provider logic will override this.
-	ctxLen := 8000
-	if strings.Contains(strings.ToLower(c.Model), "32k") || strings.Contains(strings.ToLower(c.Model), "claude-3") {
-		ctxLen = 32000
-	}
+	// 0 means "not recognised", and the caller falls back to the configured
+	// context length. That is deliberately different from the guess this used
+	// to make: 8,000 for everything, which every current cloud model got and
+	// which is out by a factor of 131 on Gemini 2.5 Flash. Compression then
+	// fired long before the window was full, spending a call to discard
+	// context that would have fit. See window.go.
 	return core.ModelMetadata{
 		ID:      c.Model,
-		Context: ctxLen,
+		Context: ContextWindowFor(c.Model),
 	}
 }
 
