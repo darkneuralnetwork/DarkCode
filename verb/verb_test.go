@@ -1,6 +1,9 @@
-package cli
+package verb
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestSplitVerb(t *testing.T) {
 	tests := []struct {
@@ -31,15 +34,15 @@ func TestSplitVerb(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			st, task, ok := splitVerb(tc.in)
+			st, task, ok := Split(tc.in)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
 			if !ok {
 				return
 			}
-			if st.name != tc.wantName {
-				t.Errorf("verb = %q, want %q", st.name, tc.wantName)
+			if st.Name != tc.wantName {
+				t.Errorf("verb = %q, want %q", st.Name, tc.wantName)
 			}
 			if task != tc.wantTask {
 				t.Errorf("task = %q, want %q", task, tc.wantTask)
@@ -53,9 +56,9 @@ func TestSplitVerb(t *testing.T) {
 // spellings.
 func TestVerbsSelectDistinctStrategies(t *testing.T) {
 	seen := map[string]string{}
-	for _, n := range StrategyNames() {
-		s := strategies[n]
-		key := s.loop + "|" + s.tools + "|" + s.mode + "|" + s.plan
+	for _, n := range Names() {
+		s := table[n]
+		key := fmt.Sprintf("%s|%s|%s|%s|%v", s.Loop, s.Tools, s.Mode, s.Plan, s.Debate)
 		if prev, dup := seen[key]; dup {
 			t.Errorf("%q and %q select identical strategies (%s)", n, prev, key)
 		}
@@ -66,11 +69,27 @@ func TestVerbsSelectDistinctStrategies(t *testing.T) {
 // TestAskIsReadOnly is the one that would be a real problem to get wrong: /ask
 // must never be able to change anything.
 func TestAskIsReadOnly(t *testing.T) {
-	if strategies["ask"].tools != "readonly" {
-		t.Errorf("/ask tools = %q, want readonly", strategies["ask"].tools)
+	if table["ask"].Tools != "readonly" {
+		t.Errorf("/ask tools = %q, want readonly", table["ask"].Tools)
 	}
-	if strategies["ask"].loop != "off" {
-		t.Errorf("/ask should not iterate, got loop=%q", strategies["ask"].loop)
+	if table["ask"].Loop != "off" {
+		t.Errorf("/ask should not iterate, got loop=%q", table["ask"].Loop)
+	}
+}
+
+// TestDebateIsConsensusPlusAnExchange. It shares consensus's fan-out and adds
+// the round where the models answer each other — which is also why it is the
+// most expensive verb and must never be the default.
+func TestDebateIsConsensusPlusAnExchange(t *testing.T) {
+	d, c := table["debate"], table["consensus"]
+	if !d.Debate {
+		t.Error("/debate does not request the exchange")
+	}
+	if c.Debate {
+		t.Error("/consensus must not debate; that is what makes /debate a separate verb")
+	}
+	if d.Mode != c.Mode {
+		t.Errorf("/debate should fan out like consensus, got mode %q vs %q", d.Mode, c.Mode)
 	}
 }
 
@@ -79,10 +98,10 @@ func TestAskIsReadOnly(t *testing.T) {
 // criteria to prove. Without that they select identical behaviour and /graph
 // is a synonym rather than a strategy.
 func TestGraphPlansAndLoopDoesNot(t *testing.T) {
-	if strategies["graph"].plan != "always" {
-		t.Errorf("/graph plan = %q, want always", strategies["graph"].plan)
+	if table["graph"].Plan != "always" {
+		t.Errorf("/graph plan = %q, want always", table["graph"].Plan)
 	}
-	if strategies["loop"].plan == "always" {
+	if table["loop"].Plan == "always" {
 		t.Error("/loop should not force a planning phase; that is what /graph is for")
 	}
 }
@@ -92,11 +111,11 @@ func TestGraphPlansAndLoopDoesNot(t *testing.T) {
 // could silently do nothing.
 func TestLoopAndGraphEnableTheLoop(t *testing.T) {
 	for _, n := range []string{"loop", "graph"} {
-		if strategies[n].loop != "on" {
-			t.Errorf("/%s loop = %q, want on", n, strategies[n].loop)
+		if table[n].Loop != "on" {
+			t.Errorf("/%s loop = %q, want on", n, table[n].Loop)
 		}
-		if strategies[n].tools != "on" {
-			t.Errorf("/%s tools = %q, want on", n, strategies[n].tools)
+		if table[n].Tools != "on" {
+			t.Errorf("/%s tools = %q, want on", n, table[n].Tools)
 		}
 	}
 }

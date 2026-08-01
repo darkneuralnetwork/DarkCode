@@ -340,6 +340,12 @@ function commitAtSelection() {
 
 // ---------- keyboard navigation ----------
 function onChatTextKeydown(e) {
+  // The "/" verb picker gets first refusal on arrows/Enter/Tab, so choosing a
+  // strategy does not also submit the half-typed message.
+  if (typeof handleVerbKey === "function" && handleVerbKey(e)) {
+    e.preventDefault();
+    return;
+  }
   // Enter submits — but if an @-picker is open with an active dir/file, let
   // it consume the Enter instead.
   if (attachBrowser && attachBrowser.mode === "at") {

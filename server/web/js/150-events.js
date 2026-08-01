@@ -259,6 +259,7 @@ function attachEventListeners() {
 
 
   $("#chat-text")?.addEventListener("keydown", onChatTextKeydown);
+  attachVerbPicker();
   $("#chat-text")?.addEventListener("input", function () {
     this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 200) + "px";
     syncAtBrowse();

@@ -16,6 +16,7 @@ import (
 	"github.com/darkcode/plan"
 	"github.com/darkcode/project"
 	"github.com/darkcode/router"
+	"github.com/darkcode/verb"
 )
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +40,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+
+	// A leading strategy verb is stripped before anything reads the query, so
+	// the classifier below sees the task rather than the instruction about how
+	// to run it. Without this the web UI sent "/loop fix the parser" to the
+	// model as literal text while the console understood it — one intent with
+	// two spellings, which is what package verb exists to prevent.
+	strippedQuery, verbStrategy, verbFound := stripStrategyVerb(req.Query)
+	req.Query = strippedQuery
 
 	if req.Query == "" {
 		writeError(w, http.StatusBadRequest, "query is required")
@@ -73,8 +82,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// here as defense-in-depth). General/Project/Auto explicitly force the
 	// loop OFF so a globally-enabled loop never silently takes over those
 	// modes — the loop is opt-in per request.
+	// An explicit verb is a decision already made. Spending a classifier call
+	// to re-derive it would be both slower and capable of overriding it.
+	if verbFound {
+		req.ChatMode = chatModeForVerb(verbStrategy)
+	}
+
 	// Smart Auto-Detection Mode (Advanced Intent Classification)
-	if req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "" {
+	if !verbFound && (req.ChatMode == "smart" || req.ChatMode == "auto" || req.ChatMode == "") {
 		// Cost guard: for a query that is obviously a general question, skip the
 		// LLM intent-classifier call (and the project auto-creation it can
 		// trigger) entirely — route straight to lean General mode. This keeps a
@@ -189,8 +204,27 @@ Output ONLY JSON: {"mode": "general|project|loop", "is_new_project": true/false,
 		// Chat mode: read-only tools (read/list/search/web), never writes.
 		toolsOverride = "readonly"
 	}
+	if verbFound {
+		if verbStrategy.Loop != "" {
+			loopOverride = verbStrategy.Loop
+		}
+		if verbStrategy.Tools != "" {
+			toolsOverride = verbStrategy.Tools
+		}
+		if verbStrategy.Mode != "" {
+			req.Mode = verbStrategy.Mode
+		}
+	}
 	restoreOverrides := s.kernel.ApplyRequestOverrides(req.Mode, req.Safety, loopOverride, toolsOverride, req.Brain)
 	defer restoreOverrides()
+	if verbFound {
+		restorePlan := s.kernel.ApplyPlanOverride(verbStrategy.Plan)
+		defer restorePlan()
+		if verbStrategy.Debate {
+			restoreDebate := s.kernel.ApplyDebateOverride(true)
+			defer restoreDebate()
+		}
+	}
 
 	// If an active project is specified, prepend its long-lived context to
 	// the query so the agent operates with project knowledge in scope.
@@ -622,3 +656,26 @@ func (s *Server) handleCancelChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTools lists all registered tools.
+
+// chatModeForVerb maps a strategy onto the chat mode the rest of the handler
+// reads. The verb is the authority: a read-only verb must not be routed down a
+// path that treats the turn as a build.
+func chatModeForVerb(st verb.Strategy) string {
+	switch {
+	case st.Loop == "on":
+		return "loop"
+	case st.Tools == "readonly":
+		return "general"
+	default:
+		return "project"
+	}
+}
+
+// stripStrategyVerb removes a leading strategy verb from a query and returns
+// the strategy it selected. A query with no verb comes back unchanged.
+func stripStrategyVerb(query string) (string, verb.Strategy, bool) {
+	if st, rest, ok := verb.Split(query); ok {
+		return rest, st, true
+	}
+	return query, verb.Strategy{}, false
+}

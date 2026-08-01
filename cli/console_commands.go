@@ -177,7 +177,7 @@ func (c *Console) handleSlash(input string) bool {
 	// A bare verb with no task: explain it rather than arm it. Silently
 	// switching into a mode because someone typed a word is the sticky-mode
 	// trap the verbs exist to avoid.
-	case "/ask", "/loop", "/graph", "/consensus":
+	case "/ask", "/loop", "/graph", "/consensus", "/debate":
 		fmt.Print(verbHelp())
 
 	// /always makes a verb sticky. Deliberately NOT /mode — that is already

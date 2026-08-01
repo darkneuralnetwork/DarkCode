@@ -69,6 +69,7 @@ func (c *Console) buildCompleter() *readline.PrefixCompleter {
 		readline.PcItem("/loop"),
 		readline.PcItem("/graph"),
 		readline.PcItem("/consensus"),
+		readline.PcItem("/debate"),
 		readline.PcItem("/always",
 			readline.PcItem("chat"), readline.PcItem("build"), readline.PcItem("loop")),
 		readline.PcItem("/chatmode",

@@ -2367,3 +2367,38 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   font-style: italic;
   background: none;
 }
+
+/* ---- "/" strategy verb picker (75-verbs.js) ---- */
+.verb-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 260px;
+  /* Panels scroll inside themselves rather than growing the composer. */
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  background: var(--bg-panel, var(--bg-deep));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.verb-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.verb-item:hover,
+.verb-item.active { background: rgba(255, 255, 255, 0.07); }
+.verb-name {
+  color: var(--accent-3, #8b5cf6);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+  min-width: 92px;
+}
+.verb-help { color: var(--text-mute); }
