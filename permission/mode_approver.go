@@ -74,7 +74,7 @@ func (m *ModeAwareApprover) Approve(req ApprovalRequest) Verdict {
 	}
 	// No terminal delegate and not in GUI mode: fail safe (deny) with an
 	// explanation rather than blocking forever on an unanswerable prompt.
-	return Verdict{Decision: DecisionDeny, Feedback: "no approval surface available in the active mode"}
+	return Verdict{Decision: DecisionDeny, Unanswered: true, Feedback: "no approval surface available in the active mode"}
 }
 
 // GUIApprover returns the wrapped ServerApprover (so the server can wire its

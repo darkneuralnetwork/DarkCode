@@ -111,7 +111,7 @@ func (s *ServerApprover) Approve(req ApprovalRequest) Verdict {
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		return Verdict{Decision: DecisionDeny, Feedback: "approval timed out (no response from UI)"}
+		return Verdict{Decision: DecisionDeny, Unanswered: true, Feedback: "approval timed out (no response from UI)"}
 	}
 }
 

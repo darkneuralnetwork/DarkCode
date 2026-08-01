@@ -105,6 +105,10 @@ func (d Decision) String() string {
 type Verdict struct {
 	Decision Decision
 	Feedback string
+	// Unanswered marks a denial the user never actually gave — a prompt that
+	// timed out, or a surface that could not ask. The call still fails closed,
+	// but the absence of an answer must not be cached as if it were one.
+	Unanswered bool
 }
 
 // AllowV is a convenience constructor for an allow verdict.
@@ -496,7 +500,15 @@ func (g *Gate) ask(req ApprovalRequest) (bool, string) {
 	case DecisionAllowOnce:
 		g.approved++
 	default:
-		g.denied[req.Tool] = true
+		// A refusal sticks for the session, but only when the user actually
+		// refused. A prompt that timed out is the absence of an answer, and
+		// caching it would silently kill the tool for the rest of the run:
+		// every later call would be denied without ever asking again, so
+		// stepping away from one prompt would look like the agent losing the
+		// ability to write files.
+		if !v.Unanswered {
+			g.denied[req.Tool] = true
+		}
 		g.deniedCount++
 	}
 	g.mu.Unlock()
@@ -520,7 +532,7 @@ func askWithTimeout(approver Approver, req ApprovalRequest, timeout time.Duratio
 	case v := <-ch:
 		return v
 	case <-time.After(timeout):
-		return Verdict{Decision: DecisionDeny,
+		return Verdict{Decision: DecisionDeny, Unanswered: true,
 			Feedback: "approval timed out after " + timeout.String() + " — denied (fail closed)"}
 	}
 }
