@@ -1,10 +1,18 @@
 # Strategy and surfaces: what changed
 
-Eleven commits on `agent-execution-contract`, 52 files, +3,827/−593, 60 new tests.
+Twenty-eight commits on `agent-execution-contract`, 87 files, +6,831/−636,
+179 new tests.
 
-They are one piece of work. The thread running through all of them: **the tool
-was asking the user, or asking a model, for decisions it could take itself from
-evidence it already had** — and each surface was asking differently.
+Two bodies of work with a shared cause.
+
+**Part one (§1–8)** replaced decisions the tool was asking for — of the user, or
+of a model — with decisions it could take itself from evidence it already had.
+Each surface was asking differently, so the same intent had three spellings.
+
+**Part two (§9)** is what a re-review turned up afterwards. Eleven defects, and
+after the third it stopped being a list and became a pattern: *a feature built
+correctly, wired incompletely, with no test crossing the seam.* In every case
+the component was right and the join was wrong.
 
 ---
 
@@ -290,10 +298,131 @@ both tables are conservative wherever a family's members differ.
 
 ---
 
+## 9. Eleven defects, one shape
+
+A fresh bottom-to-top review after the work above, then a targeted hunt once
+the pattern became clear. Listed by what a user would have experienced.
+
+### Silent, and costing money or safety
+
+**The spend cap was a starting gun.** The cost governor was consulted once, at
+the top of `Execute`. A single request then makes up to twenty-five acting
+turns plus planning, consensus fan-out and sub-agent calls — so a cap was
+checked once and could be exceeded several times over inside the run it was
+meant to bound. The loop now consults the same governor between turns, and the
+stop reason stays distinct from running out of iterations: reporting a spend cap
+as "max iterations" sends someone to change the wrong setting.
+
+**Nothing was priced.** The provider catalogue's newest Anthropic entry was
+Claude 3.5, so the pricing lookup found nothing for any current model, cost
+recorded as zero, and the cap never fired regardless. A limit with no prices to
+work from is a limit that cannot trigger.
+
+**Air gap was not airtight.** It is enforced in the dialer's `Control` hook, so
+it only covers clients `safeurl` hands out — and nine places built their own,
+including the model downloader pulling GGUF files from HuggingFace, the MCP
+client, and the provider ping sitting in the same file as a chat path that used
+the guarded client correctly. A tree-scanning test now fails on any reintroduced
+raw client, with file and line.
+
+**The execution backend lied.** `NewBackend` deliberately errors on an unknown
+or incomplete backend rather than defaulting to local — its own comment names
+"I thought it ran in Docker" as the misunderstanding the feature exists to
+prevent. The caller fell back to local anyway, warning on a stderr that in GUI
+mode nobody reads. The terminal tool now refuses and says why.
+
+### Silent, and degrading trust
+
+**An unanswered prompt killed a tool.** An approval that timed out was cached
+exactly like a refusal the user gave. Step away once and that tool was dead for
+the rest of the run — every later call denied instantly, never asking again. A
+timeout is the absence of an answer.
+
+**A refusal was read too widely.** Denying `write_file` for `/etc/passwd`
+blocked every `write_file` for the session. The allow side already distinguishes
+once from session; the deny side took the widest reading of a narrower answer.
+Now keyed on the whole call.
+
+**Compression dropped the messages that mattered most.** Every error indicator
+required a colon — `error:`, `failed:`, `panic:`. But `exit status 1` is what a
+failed `go build` reports and what the repair loop feeds back, and it scored
+zero. So failure messages were the likeliest to be compressed away, leaving the
+model reasoning about an error it could no longer see.
+
+**Every model reported an 8,000-token window.** `ModelInfo` guessed, raising to
+32,000 only for names containing `32k` or `claude-3`. Gemini 2.5 Flash has
+1,048,576 — out by 131×. Compression fired at 60% of a figure that was mostly
+imaginary. The catalogue already held the real number; it had no accessor a
+caller with only a model id could reach, so the code guessed instead of looking.
+
+### Crashes and resource exhaustion
+
+**A malformed workspace file could kill the process.** The file watcher's
+callback parses whatever turned up, on a bare goroutine, where a panic cannot be
+recovered by whoever started it. The ingest half of that chain was guarded; the
+parse half was not. The test crashes the binary without the guard rather than
+failing.
+
+**Two unbounded response reads.** `FetchURL` has always capped at 500KB;
+`searchGitHub` and `searchWikipedia`, same file and same threat model, read
+whatever arrived.
+
+### And one in the write-up
+
+The escalation table in this document listed four signals as working. Two of
+them are ladder-only — nothing in production emits them. Corrected in §4 rather
+than quietly wired, because one spends money and one probably should never fire.
+
+### What did not turn out to be a defect
+
+Worth recording, because verifying cost a minute each and filing them would have
+been worse than useless:
+
+- The smart-approval judge's comment claims it cannot clear a high or critical
+  action while the call site only checks blast radius and secrets. The check is
+  real; it lives in `judgeAllows`.
+- The SPA fallback looked able to answer `/api/` paths. It cannot — there is a
+  test proving unrouted `/api/` returns a JSON 404. I was grepping the wrong
+  file.
+- Attachments use a raw HTTP client, which looked unguarded. They call
+  `IsSafeFetchURL` first, which does check air gap.
+- Rollback looked like it would abort when asked to delete a file the user had
+  already removed. `Diff` compares against the current workspace, so the file is
+  never listed as created. The design is robust there.
+
+---
+
 ## Verification
 
 Every commit passed `gofmt` → `go vet` → `go test ./...`, with `-race` on the
-touched packages. 36 packages green.
+touched packages. 38 packages green, 6 with no tests (all either off by default,
+type declarations, or needing a live terminal).
+
+**Every fix in §9 was verified by reverting it** and confirming the new test
+fails against the old code — not because the test passes, which proves nothing.
+Three are worth naming:
+
+- Removing the guard makes the watcher test *crash the binary* rather than fail.
+- A naive double-quote `shellQuote` lets `$HOME` through as `/home/kali` and
+  executes backticks, against a real bash rather than an assertion about one.
+- Restoring the tool-scoped refusal makes the approval test report the approver
+  consulted once where it must be consulted twice.
+
+Coverage moved where it mattered rather than everywhere:
+
+| Package | Before | After |
+|---|---|---|
+| `safeurl` | 71.2% | **91.5%** |
+| `permission` | 55.5% | 59.2% |
+| `attach` | **0%** | 45.6% |
+| `plugin` | **0%** | 41.2% |
+| `scheduler` | 15.9% | 40.7% |
+| `compression` | 22.9% | 37.6% |
+| `cli` | **1.4%** | 10.6% |
+
+`cli` needed an unblock before it could be tested at all: every setter ends in
+`Save`, and `ConfigPath` resolved to the developer's own `~/.darkcode/config.json`
+with no override. `DARKCODE_CONFIG` now wins outright.
 
 Browser-verified against a build on port 12399 (leaving the usual 12345
 untouched):
