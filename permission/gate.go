@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -141,7 +142,13 @@ type Gate struct {
 
 	// session-scoped decisions, keyed by tool name.
 	allowed map[string]bool
-	denied  map[string]bool
+	// denied is keyed by the whole call, not just the tool name. Refusing one
+	// write_file to /etc/passwd used to block every later write_file for the
+	// session, so a single "no" to a bad path disabled the tool outright with
+	// no way back short of a new session. The allow side already distinguishes
+	// once from session; the deny side had no such choice and took the widest
+	// reading of an answer the user gave about one call.
+	denied map[string]bool
 
 	// telemetry counters
 	asked       int
@@ -404,7 +411,7 @@ func (g *Gate) Check(tool string, args map[string]interface{}) (bool, ApprovalRe
 		g.mu.Unlock()
 		return true, ApprovalRequest{Tool: tool, Args: args, Timestamp: time.Now()}, ""
 	}
-	if g.denied[tool] {
+	if g.denied[callKey(tool, args)] {
 		g.mu.Unlock()
 		return false, ApprovalRequest{Tool: tool, Args: args, Timestamp: time.Now()}, ""
 	}
@@ -483,7 +490,7 @@ func (g *Gate) ask(req ApprovalRequest) (bool, string) {
 		g.mu.Unlock()
 		return true, ""
 	}
-	if g.denied[req.Tool] {
+	if g.denied[callKey(req.Tool, req.Args)] {
 		g.mu.Unlock()
 		return false, ""
 	}
@@ -507,7 +514,7 @@ func (g *Gate) ask(req ApprovalRequest) (bool, string) {
 		// stepping away from one prompt would look like the agent losing the
 		// ability to write files.
 		if !v.Unanswered {
-			g.denied[req.Tool] = true
+			g.denied[callKey(req.Tool, req.Args)] = true
 		}
 		g.deniedCount++
 	}
@@ -938,4 +945,31 @@ func existsLabel(exists bool) string {
 func str(v interface{}) string {
 	s, _ := v.(string)
 	return s
+}
+
+// callKey identifies one specific call for the refusal cache: the tool plus a
+// stable rendering of its arguments.
+//
+// Keying on the tool alone made a refusal far broader than the question that
+// was asked. The user is shown a single call and answers about that call, so
+// that is what gets remembered; a later call to the same tool with different
+// arguments is a different question and gets asked.
+func callKey(tool string, args map[string]interface{}) string {
+	if len(args) == 0 {
+		return tool
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // map order is not stable; the key must be
+	var b strings.Builder
+	b.WriteString(tool)
+	for _, k := range keys {
+		b.WriteByte(0x1f) // unit separator: cannot appear in a rendered value
+		b.WriteString(k)
+		b.WriteByte('=')
+		fmt.Fprintf(&b, "%v", args[k])
+	}
+	return b.String()
 }

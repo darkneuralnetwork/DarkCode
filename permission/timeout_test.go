@@ -43,9 +43,9 @@ func TestTimedOutPromptDeniesButAsksAgain(t *testing.T) {
 	}
 }
 
-// TestExplicitDenyStillSticks. The user saying no is a decision, and repeating
-// the prompt for every later call to the same tool is its own problem.
-func TestExplicitDenyStillSticks(t *testing.T) {
+// TestRefusingTheSameCallIsRememberedOnce. Repeating an identical call must
+// not re-ask; the user already answered that exact question.
+func TestRefusingTheSameCallIsRememberedOnce(t *testing.T) {
 	var asked int32
 	refuse := func(req ApprovalRequest) Verdict {
 		atomic.AddInt32(&asked, 1)
@@ -55,12 +55,57 @@ func TestExplicitDenyStillSticks(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if ok, _, _ := g.Check("terminal", map[string]interface{}{"command": "rm -rf /"}); ok {
-			t.Fatal("a refused tool was allowed")
+			t.Fatal("a refused call was allowed")
 		}
 	}
 	if n := atomic.LoadInt32(&asked); n != 1 {
-		t.Errorf("the approver was consulted %d times; an explicit refusal should "+
-			"be remembered for the session", n)
+		t.Errorf("the approver was consulted %d times for the identical call", n)
+	}
+}
+
+// TestRefusalDoesNotBlockTheWholeTool. Saying no to writing /etc/passwd is not
+// saying no to writing anything. Keyed on the tool name alone, one refusal
+// disabled the tool for the rest of the session with no way back.
+func TestRefusalDoesNotBlockTheWholeTool(t *testing.T) {
+	var seen []string
+	approver := func(req ApprovalRequest) Verdict {
+		path, _ := req.Args["path"].(string)
+		seen = append(seen, path)
+		if path == "/etc/passwd" {
+			return Verdict{Decision: DecisionDeny}
+		}
+		return Verdict{Decision: DecisionAllowOnce}
+	}
+	g := gateWithApprover(t, approver, time.Minute)
+
+	if ok, _, _ := g.Check("write_file", map[string]interface{}{"path": "/etc/passwd"}); ok {
+		t.Fatal("the refused path was allowed")
+	}
+	if ok, _, _ := g.Check("write_file", map[string]interface{}{"path": "main.go"}); !ok {
+		t.Error("a different path was refused because an earlier one was; the " +
+			"refusal was applied to the whole tool")
+	}
+	if len(seen) != 2 {
+		t.Errorf("the approver saw %v; the second call should have been asked", seen)
+	}
+}
+
+// TestArgumentOrderDoesNotChangeTheKey. Go map iteration is random, so a key
+// built from unsorted arguments would differ between two identical calls and
+// re-prompt for a question already answered.
+func TestArgumentOrderDoesNotChangeTheKey(t *testing.T) {
+	a := map[string]interface{}{"path": "x", "content": "y", "mode": 644}
+	b := map[string]interface{}{"mode": 644, "content": "y", "path": "x"}
+	for i := 0; i < 50; i++ {
+		if callKey("write_file", a) != callKey("write_file", b) {
+			t.Fatal("the same call produced two different keys")
+		}
+	}
+	if callKey("write_file", a) == callKey("write_file", map[string]interface{}{"path": "z"}) {
+		t.Error("different arguments produced the same key")
+	}
+	if callKey("a", map[string]interface{}{"x": "1"}) == callKey("a", map[string]interface{}{"x1": ""}) {
+		t.Error("the separator does not stop key and value running together")
 	}
 }
 
