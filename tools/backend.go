@@ -39,6 +39,30 @@ func (b LocalBackend) Argv(workDir, command string) []string {
 	return argv
 }
 
+// MisconfiguredBackend stands in for a backend that could not be built. Every
+// command it is asked to run refuses with the configuration error.
+//
+// It exists because the alternative was worse. NewBackend deliberately errors
+// on an unknown or incomplete backend rather than defaulting to local, and the
+// caller then fell back to local anyway with a warning on stderr — which in
+// GUI mode goes to a terminal nobody is reading. Someone who set
+// execution_backend to "docker" and mistyped the image, or chose "ssh" without
+// a host, believed their commands were running elsewhere while they ran on
+// their own machine.
+//
+// Refusing matches how a strict sandbox with no backend already behaves: the
+// terminal tool declines rather than running unconfined.
+type MisconfiguredBackend struct{ Err error }
+
+func (b MisconfiguredBackend) Name() string { return "misconfigured" }
+
+// Argv is never reached — the terminal tool checks Err first — but returning a
+// failing command rather than a working local one keeps the refusal true even
+// if some future caller skips that check.
+func (b MisconfiguredBackend) Argv(workDir, command string) []string {
+	return []string{"false"}
+}
+
 // DockerBackend runs each command in a fresh container with the workspace
 // bind-mounted. The container is disposable, drops all capabilities, and
 // cannot gain new privileges — so a destructive command hurts the container,

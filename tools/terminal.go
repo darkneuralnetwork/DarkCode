@@ -40,6 +40,14 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]interface{})
 	// own isolation, so a strict-mode refusal would be wrong there.
 	local := t.Backend == nil || t.Backend.Name() == "local"
 
+	// A backend that could not be built refuses every command. Running locally
+	// instead would silently contradict what the user configured.
+	if mb, bad := t.Backend.(MisconfiguredBackend); bad {
+		return &ToolResult{Name: "terminal", Success: false,
+			Error: "blocked: the configured execution backend is unusable — " + mb.Err.Error() +
+				". Commands are NOT running locally as a fallback; fix execution_backend or set it to \"local\"."}
+	}
+
 	// Strict sandbox with no backend fails closed rather than running unconfined.
 	if local && t.Sandbox != nil && t.Sandbox.MustRefuse() {
 		return &ToolResult{Name: "terminal", Success: false,

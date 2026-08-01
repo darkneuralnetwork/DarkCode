@@ -143,8 +143,14 @@ func (a *AppRunner) initTools(memDir string) {
 	backend, err := tools.NewBackend(a.Cfg.ExecutionBackend, a.Cfg.ExecutionImage,
 		a.Cfg.ExecutionHost, a.Cfg.ExecutionPort, a.Sandbox)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v; falling back to local execution\n", err)
-		backend = tools.LocalBackend{Sandbox: a.Sandbox}
+		// Not a fallback to local. Someone who asked for docker or ssh and got
+		// local without noticing would believe their commands were isolated
+		// when they were not, and the warning goes to a stderr the GUI user
+		// never sees. The terminal tool refuses instead, so the error arrives
+		// where they are actually working.
+		fmt.Fprintf(os.Stderr, "Warning: %v; shell commands will be refused until this is fixed\n", err)
+		observability.Log().Error("execution backend unusable", err, nil)
+		backend = tools.MisconfiguredBackend{Err: err}
 	}
 	if backend.Name() != "local" {
 		observability.Log().Info("shell commands run on "+backend.Name(), nil)
