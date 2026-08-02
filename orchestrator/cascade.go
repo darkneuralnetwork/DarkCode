@@ -106,6 +106,15 @@ type CascadeEntry struct {
 	// for rungs 0/1 and for AST-verified rung-2 answers, which aren't
 	// individually demotable.
 	AnsweredNodeIDs []string `json:"answered_node_ids,omitempty"`
+	// Signal names the retrieval signal that produced a recall answer:
+	// "vector" or "keyword".
+	//
+	// Which RUNG answered was already recorded; which signal INSIDE the rung
+	// did the work was not. That gap makes "is the embedding model earning its
+	// cost?" unanswerable — and it is the question that decides whether the
+	// vector half of retrieval is worth running, since the keyword half is
+	// free. Without it, any change to the ranking is unfalsifiable.
+	Signal string `json:"signal,omitempty"`
 }
 
 // CascadeRungStats aggregates one rung's lifetime counters plus its current
@@ -157,6 +166,29 @@ func (k *Kernel) CascadeStats() []CascadeRungStats {
 			Retried:   k.cascadeRungRetried[rung],
 			Threshold: k.cascadeThresholds[rung],
 		})
+	}
+	return out
+}
+
+// SignalWins counts, per retrieval signal, how many answers it produced.
+//
+// This is the number that decides whether the embedding model is worth running.
+// The keyword signal is free; the vector signal costs an embedding call on
+// every query plus a vector per stored entry. If recall answers come back
+// overwhelmingly "keyword", that cost is buying nothing and the honest move is
+// to turn embeddings off rather than to keep paying for a feature that reads
+// well in the architecture diagram.
+//
+// Counted from the in-memory log, so it reflects the current session; the
+// persisted JSONL carries the same field for longer-run analysis.
+func (k *Kernel) SignalWins() map[string]int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	out := map[string]int{}
+	for _, e := range k.cascadeLog {
+		if e.Answered && e.Signal != "" {
+			out[e.Signal]++
+		}
 	}
 	return out
 }
@@ -304,7 +336,7 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 		entryRung = k.classifier.EntryRung(goal)
 	}
 
-	retryOf := ""
+	retryOf, signal := "", ""
 	finish := func(rung int, name string, conf core.Confidence, answer string, nodeIDs []string) (string, bool) {
 		answered := answer != ""
 		k.recordCascade(CascadeEntry{
@@ -318,6 +350,7 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 			LatencyMs:       time.Since(start).Milliseconds(),
 			RetryOfRungName: retryOf,
 			AnsweredNodeIDs: nodeIDs,
+			Signal:          signal,
 		})
 		if answered {
 			k.log("cascade", "Rung "+strconv.Itoa(rung)+" ("+name+") answered without LLM: "+conf.Reason)
@@ -419,6 +452,11 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 				Reason:     ra.Reason,
 				Provenance: []string{"episodic:" + ra.ID},
 			}
+			// Record WHICH signal matched, not just that the rung answered.
+			// This is what makes the embedding model's contribution auditable:
+			// if recall answers are consistently "keyword", the vector half is
+			// costing an embedding call per query and earning nothing.
+			signal = ra.Signal
 			return finish(router.RungRecall, "recall", conf, formatRecallAnswer(ra), nil)
 		}
 	}
@@ -463,7 +501,11 @@ func (k *Kernel) tryDeterministicRung(ctx context.Context, goal string) (string,
 		return "", core.Confidence{}, false
 	}
 
-	tool, args := "", map[string]interface{}{}
+	// Declared without an initial map: every branch below assigns one and the
+	// default returns, so the literal was an allocation made and discarded on
+	// every call — and this runs on the cascade's hot path.
+	var tool string
+	var args map[string]interface{}
 	switch {
 	case matchCapture(reCascadeDefine, goal) != "":
 		sym := matchCapture(reCascadeDefine, goal)

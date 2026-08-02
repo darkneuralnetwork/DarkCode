@@ -42,7 +42,6 @@ type Kernel struct {
 	executor   *agents.ConcurrentExecutor
 	emitter    *ui.EventEmitter
 	verifier   *agents.VerificationPipeline
-	agentBus   *agents.AgentBus
 
 	// permission gate — enforces user approval for dangerous tool calls.
 	// The registry consults it before executing any tool.
@@ -201,7 +200,26 @@ func (k *Kernel) ApplyLocalPreference(ctx context.Context, cfg *config.Config) e
 func (k *Kernel) SetCostGovernor(g *metrics.CostGovernor) {
 	k.mu.Lock()
 	k.governor = g
+	loop := k.agenticLoop
 	k.mu.Unlock()
+
+	// Also check per ITERATION, not only per request. Execute's check bounds
+	// how many requests may START after the cap is reached; it does nothing
+	// about how much a single request spends, and one agentic run makes up to
+	// maxLoops model calls (times the fan-out on a consensus turn).
+	if loop != nil {
+		if g == nil {
+			loop.SetBudgetCheck(nil)
+			return
+		}
+		loop.SetBudgetCheck(func() string {
+			d := g.Check()
+			if d.Allowed {
+				return "" // "warn" mode logs at Execute; it must not halt a run
+			}
+			return d.Reason
+		})
+	}
 }
 
 // getCtxEngine lazily builds the ctxengine.Engine when cfg.UseCtxEngine is
@@ -237,7 +255,6 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 	factory := agents.NewAgentFactory(rtr, reg, emitter, errMgr)
 	executor := agents.NewConcurrentExecutor(factory, cfg.MaxConcurrent, emitter)
 	verifier := agents.NewVerificationPipeline(rtr, emitter, "")
-	bus := agents.NewAgentBus()
 
 	// Create the permission gate from the configured safety level and wire it
 	// into the tool registry so every tool call is checked before execution.
@@ -260,7 +277,6 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		executor:    executor,
 		emitter:     emitter,
 		verifier:    verifier,
-		agentBus:    bus,
 		gate:        gate,
 		agenticLoop: loop.New(rtr, reg, emitter, 0), // 0 → loop.DefaultMaxLoops
 		classifier:  router.NewTaskClassifier(),

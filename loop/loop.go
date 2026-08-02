@@ -94,7 +94,24 @@ type ReActLoop struct {
 	registry core.ToolRegistry
 	emitter  *ui.EventEmitter
 	maxLoops int
+	// budget, when set, is consulted before each iteration. It returns a
+	// non-empty reason when the run must stop.
+	//
+	// The spend cap used to be tested once, at the start of Kernel.Execute.
+	// That bounds how many REQUESTS start after the cap is reached, not how
+	// much any one of them spends: a single run here can make 25 model calls,
+	// and a consensus turn multiplies that by the number of registered models.
+	// A cap that only decides whether to begin is not a cap.
+	budget func() string
 }
+
+// SetBudgetCheck installs the per-iteration spend check. nil disables it.
+func (l *ReActLoop) SetBudgetCheck(fn func() string) { l.budget = fn }
+
+// BudgetCheck returns the installed check, or nil. Exported so the wiring can
+// be asserted from outside the package — a cap that is configured but never
+// reaches the loop looks identical to one that works until the bill arrives.
+func (l *ReActLoop) BudgetCheck() func() string { return l.budget }
 
 // New creates a ReAct loop wired to the model router, tool registry, and event
 // emitter. maxLoops <= 0 falls back to DefaultMaxLoops.
@@ -261,6 +278,23 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		}
 		if iteration >= l.maxLoops {
 			break
+		}
+		// Stop as soon as the cap is reached rather than at the next request.
+		// The partial answer is returned instead of an error: the user asked
+		// for a spend limit, not for the work already paid for to be discarded.
+		if l.budget != nil {
+			if reason := l.budget(); reason != "" {
+				if l.emitter != nil {
+					l.emitter.EmitTaskUpdate("agentic-loop", "budget", "stopping: "+reason)
+				}
+				return &Result{
+					Output:    bestPartial(messages) + "\n\n_(stopped: " + reason + ")_",
+					ToolTrace: trace.String(),
+					Completed: false,
+					ToolCalls: allToolCalls,
+					Verdict:   verdict,
+				}, nil
+			}
 		}
 
 		if l.emitter != nil {

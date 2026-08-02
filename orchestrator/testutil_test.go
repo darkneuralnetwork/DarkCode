@@ -12,7 +12,6 @@ package orchestrator
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,33 +145,4 @@ func newTestKernelWithMode(t *testing.T, mode core.RoutingMode, client *fakeLLMC
 	k := New(DefaultConfig(), rtr, reg, mem, comp, nil)
 
 	return &testKernelDeps{Kernel: k, Router: rtr, Registry: reg, Memory: mem, Client: client}
-}
-
-// fakeTool registers a trivial always-succeeding tool with the registry, for
-// tests that need a DAG/loop path to actually exercise tool dispatch.
-func registerFakeTool(reg *tools.Registry, name string) {
-	reg.Register(&tools.ToolEntry{
-		Name:        name,
-		Description: "test tool",
-		Parameters:  tools.MustParseSchema(`{"type":"object","properties":{}}`),
-		Handler: func(ctx context.Context, args map[string]interface{}) *tools.ToolResult {
-			return &tools.ToolResult{Name: name, Success: true, Output: "tool ran"}
-		},
-	})
-}
-
-// waitGroupTimeout runs wg.Wait() with a timeout, failing the test instead of
-// hanging forever if a cancellation test's goroutines don't exit promptly.
-func waitGroupTimeout(t *testing.T, wg *sync.WaitGroup, d time.Duration) {
-	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(d):
-		t.Fatal("timed out waiting for goroutines to finish")
-	}
 }
