@@ -331,44 +331,14 @@ type TokenUsageStats struct {
 	CumulativeReqs   int     `json:"cumulative_requests"`
 }
 
-// ============================================================================
-// AGENT COMMUNICATION TYPES
-// ============================================================================
-
-// MessagePriority controls urgency of inter-agent messages.
-type MessagePriority string
-
-const (
-	MsgPriorityCritical MessagePriority = "critical"
-	MsgPriorityHigh     MessagePriority = "high"
-	MsgPriorityNormal   MessagePriority = "normal"
-	MsgPriorityLow      MessagePriority = "low"
-)
-
-// MessageKind identifies the type of inter-agent message.
-type MessageKind string
-
-const (
-	MsgTaskAssignment  MessageKind = "task_assignment"
-	MsgStatusUpdate    MessageKind = "status_update"
-	MsgResultReport    MessageKind = "result_report"
-	MsgCritiqueRequest MessageKind = "critique_request"
-	MsgApprovalRequest MessageKind = "approval_request"
-	MsgKnowledgeShare  MessageKind = "knowledge_share"
-)
-
-// AgentMessage is a structured message between agents.
-type AgentMessage struct {
-	ID            string          `json:"id"`
-	Kind          MessageKind     `json:"kind"`
-	Sender        AgentRole       `json:"sender"`
-	Receiver      AgentRole       `json:"receiver"`
-	Priority      MessagePriority `json:"priority"`
-	Task          string          `json:"task"`
-	Payload       string          `json:"payload"`
-	CorrelationID string          `json:"correlation_id,omitempty"`
-	Timestamp     time.Time       `json:"timestamp"`
-}
+// The inter-agent message types that lived here went with agents/bus.go. The
+// bus was a complete typed pub/sub system — priorities, correlation IDs,
+// bounded history — that the kernel constructed and that never sent a single
+// message. Sub-agents run as a flat wave scheduler; no agent directs another.
+//
+// The conflict-triggered exchange designed in docs/debate-and-hierarchy.md is
+// what would make a bus load-bearing, and it wants one shaped by that design
+// rather than this one. Rebuild then, not before.
 
 // ============================================================================
 // AUDIT & GOVERNANCE TYPES

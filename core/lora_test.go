@@ -40,12 +40,6 @@ func formatScale(s float32) string {
 	return "0"
 }
 
-// plainClient is an LLMClient with NO LoRA support — WithLoRA must run fn on
-// the base model without touching adapters.
-type plainClient struct{ fakeLoRAClient }
-
-func (plainClient) MountLoRA(name string, scale float32) error { panic("must not be called") }
-
 func TestWithLoRA_MountsRunsUnmounts(t *testing.T) {
 	c := &fakeLoRAClient{}
 	ran := false

@@ -31,7 +31,27 @@ package agents
 import (
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/tools"
 )
+
+// relevantFor applies the cost filter to a sub-agent's schemas. llm.ToolSchema
+// and core.ToolSchema are the same shape; the conversion is a re-slice, not a
+// copy of the schema bodies.
+func relevantFor(goal string, schemas []llm.ToolSchema) []llm.ToolSchema {
+	if len(schemas) == 0 {
+		return schemas
+	}
+	in := make([]core.ToolSchema, 0, len(schemas))
+	for _, s := range schemas {
+		in = append(in, core.ToolSchema(s))
+	}
+	kept := tools.RelevantSchemas(goal, in, nil)
+	out := make([]llm.ToolSchema, 0, len(kept))
+	for _, s := range kept {
+		out = append(out, llm.ToolSchema(s))
+	}
+	return out
+}
 
 // ToolScope is how much of the registry a role may reach.
 type ToolScope int
@@ -82,6 +102,17 @@ func schemasFor(reg core.ToolRegistry, cfg core.SubAgentConfig) []llm.ToolSchema
 	} else {
 		schemas, _ = reg.LLMSchemas().([]llm.ToolSchema)
 	}
+
+	// Drop the narrow tools this goal has no use for, the same way the ReAct
+	// loop does. Sub-agents are where this matters most and where it was
+	// missing: the filter had exactly one call site, in loop/, while a wave of
+	// sub-agents pays the schema cost once per agent per turn.
+	//
+	// This is a COST filter, not the security boundary. Role scope above is the
+	// boundary, and it has already been applied — a research agent has no
+	// terminal to be filtered out of.
+	schemas = relevantFor(cfg.Goal, schemas)
+
 	if len(cfg.Tools) == 0 {
 		return schemas
 	}

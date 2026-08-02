@@ -49,17 +49,6 @@ func (d *languageDetector) IsNodeProject() bool {
 	return err == nil
 }
 
-// detectLanguage returns the primary project language.
-func (d *languageDetector) detectLanguage() string {
-	if d.IsGoProject() {
-		return "go"
-	}
-	if d.IsNodeProject() {
-		return "js"
-	}
-	return "unknown"
-}
-
 // GoStage is a CmdVerificationStage that only runs on Go projects.
 type GoStage struct {
 	CmdVerificationStage
