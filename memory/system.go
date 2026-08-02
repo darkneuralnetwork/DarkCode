@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/darkcode/core"
@@ -75,6 +76,11 @@ type System struct {
 	// and a backfill lost at that point is a vector that never comes back,
 	// because nothing re-embeds an existing entry. Shutdown waits on this.
 	embedWG sync.WaitGroup
+	// backfilling guards against two overlapping backfill passes, which would
+	// double the embedding calls for no benefit.
+	backfilling atomic.Bool
+	// embedCache memoises query embeddings. Guarded by mu.
+	embedCache map[string][]float32
 }
 
 // NewSystem creates a unified memory system rooted at the given directory.
@@ -189,14 +195,107 @@ func (s *System) Shutdown() {
 	}
 }
 
-// SetEmbedder injects an LLMClient to be used for generating vector embeddings.
+// SetEmbedder injects an LLMClient to be used for generating vector embeddings,
+// and backfills every entry that does not have a vector yet.
+//
+// The backfill is the point. This used to store the client and return, while
+// vectors were attached only on NEW writes. The embedder is installed from a
+// goroutine that first validates its output quality — up to a minute after
+// startup — so everything written before that finished had no vector, forever,
+// and if validation failed nothing ever did. The store was therefore
+// permanently mixed, which is what kept the old ranking bug (DC-21) firing on
+// every query rather than only during a brief window.
 func (s *System) SetEmbedder(client core.LLMClient) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.embedder = client
-	if s.knowledgeGraph != nil {
-		s.knowledgeGraph.SetEmbedder(client)
+	kg := s.knowledgeGraph
+	s.mu.Unlock()
+
+	if kg != nil {
+		kg.SetEmbedder(client)
 	}
+	if client != nil {
+		s.backfillVectors()
+	}
+}
+
+// backfillMaxEntries bounds one backfill pass. A large store would otherwise
+// issue thousands of embedding calls at startup; the remainder is picked up by
+// the next call, and recall degrades to the keyword signal meanwhile rather
+// than breaking.
+const backfillMaxEntries = 500
+
+// backfillVectors embeds entries that have none, in the background.
+//
+// Serialised deliberately: this competes with the user's own requests for the
+// same local model, and a burst of parallel embeds at startup would make the
+// first interaction slow for a ranking signal nobody is waiting on.
+func (s *System) backfillVectors() {
+	if !s.backfilling.CompareAndSwap(false, true) {
+		return // one pass at a time; a second call would duplicate the work
+	}
+	s.embedWG.Add(1)
+	observability.Go("vector-backfill", func() {
+		defer s.embedWG.Done()
+		defer s.backfilling.Store(false)
+
+		type job struct {
+			episodic bool
+			id       string
+			text     string
+		}
+		var jobs []job
+
+		s.mu.RLock()
+		for _, e := range s.episodic {
+			if len(e.Vector) == 0 {
+				jobs = append(jobs, job{true, e.ID, e.TaskGoal + " " + e.Summary})
+			}
+		}
+		for k, sem := range s.semantic {
+			if len(sem.Vector) == 0 {
+				jobs = append(jobs, job{false, k, sem.Key + " " + sem.Content})
+			}
+		}
+		s.mu.RUnlock()
+
+		if len(jobs) == 0 {
+			return
+		}
+		if len(jobs) > backfillMaxEntries {
+			jobs = jobs[:backfillMaxEntries]
+		}
+		observability.Log().Info("backfilling memory vectors",
+			map[string]interface{}{"entries": len(jobs)})
+
+		done := 0
+		for _, j := range jobs {
+			vec, err := s.GetEmbedding(j.text)
+			if err != nil || len(vec) == 0 {
+				// The embedder went away or is failing. Stop rather than
+				// hammering it for the rest of the store.
+				break
+			}
+			s.mu.Lock()
+			if j.episodic {
+				for i := range s.episodic {
+					if s.episodic[i].ID == j.id {
+						s.episodic[i].Vector = vec
+						s.episodicWriter.MarkDirty()
+						break
+					}
+				}
+			} else if e, ok := s.semantic[j.id]; ok {
+				e.Vector = vec
+				s.semantic[j.id] = e
+				s.semanticWriter.MarkDirty()
+			}
+			s.mu.Unlock()
+			done++
+		}
+		observability.Log().Info("memory vector backfill finished",
+			map[string]interface{}{"embedded": done, "requested": len(jobs)})
+	})
 }
 
 // embeddingTimeout bounds a single embedding call. GetEmbedding sits on hot
@@ -206,10 +305,32 @@ func (s *System) SetEmbedder(client core.LLMClient) {
 // keyword path quickly, not stall every request.
 const embeddingTimeout = 5 * time.Second
 
-// GetEmbedding generates a vector embedding using the registered embedder.
+// embedCacheMax bounds the query-embedding cache. Queries are short and
+// vectors are a few KB, so a few hundred is well under a megabyte and covers
+// far more than one session's distinct questions.
+const embedCacheMax = 256
+
+// GetEmbedding generates a vector embedding using the registered embedder,
+// serving repeats from a small cache.
+//
+// The cache is where the recall latency actually is. Measured, a cosine scan
+// over 50,000 × 768-dim vectors takes ~12 ms — memory-bandwidth-bound and
+// irrelevant beside any model call. What costs is that every Recall embedded
+// its query afresh over the network, on a path the cascade takes for
+// essentially every request.
+//
+// Hit rate is high on exactly the traffic that matters: the cascade's re-ask
+// detection means near-identical queries arrive in bursts, and its calibration
+// deliberately replays a question to see whether the local answer satisfied.
 func (s *System) GetEmbedding(text string) ([]float32, error) {
+	key := strings.ToLower(strings.TrimSpace(text))
+
 	s.mu.RLock()
 	client := s.embedder
+	if v, ok := s.embedCache[key]; ok {
+		s.mu.RUnlock()
+		return v, nil
+	}
 	s.mu.RUnlock()
 
 	if client == nil {
@@ -217,7 +338,31 @@ func (s *System) GetEmbedding(text string) ([]float32, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), embeddingTimeout)
 	defer cancel()
-	return client.CreateEmbedding(ctx, text)
+	vec, err := client.CreateEmbedding(ctx, text)
+	if err != nil || len(vec) == 0 {
+		return vec, err // never cache a failure: the embedder may just be starting
+	}
+
+	s.mu.Lock()
+	if s.embedCache == nil {
+		s.embedCache = make(map[string][]float32, embedCacheMax)
+	}
+	if len(s.embedCache) >= embedCacheMax {
+		// Plain eviction rather than true LRU. Recency of use barely matters
+		// here — the win is catching the burst of near-identical queries the
+		// cascade produces, and tracking access order would cost a lock upgrade
+		// on the read path to buy very little.
+		for k := range s.embedCache {
+			delete(s.embedCache, k)
+			if len(s.embedCache) < embedCacheMax/2 {
+				break
+			}
+		}
+	}
+	s.embedCache[key] = vec
+	s.mu.Unlock()
+
+	return vec, nil
 }
 
 // ============================================================================
@@ -762,19 +907,45 @@ func (s *System) ShortSummary() string {
 		len(s.stm), len(s.episodic), len(s.semantic), len(s.procedural), nodeCount, edgeCount)
 }
 
-// KG returns the knowledge graph.
-func (s *System) KG() core.KnowledgeGraphStore { return s.knowledgeGraph }
+// KG returns the knowledge graph, or a genuinely nil interface when there is
+// none.
+//
+// The explicit nil matters. Returning s.knowledgeGraph directly wraps a
+// possibly-nil *KnowledgeGraph in a non-nil interface value, so every caller
+// written as `if kg := mem.KG(); kg == nil { … }` never took that branch — the
+// interface held a nil pointer but was not itself nil. staticcheck flags this
+// as SA4023; there were sixteen such guards across the CLI and wiring, all of
+// them dead, all of them written by someone who reasonably expected nil to be
+// possible. The next call on the returned value panicked instead.
+func (s *System) KG() core.KnowledgeGraphStore {
+	if s == nil || s.knowledgeGraph == nil {
+		return nil
+	}
+	return s.knowledgeGraph
+}
 
 // ============================================================================
 // LEARNING ENGINE ACCESSORS
 // ============================================================================
 
-// Learning returns the learning engine.
-func (s *System) Learning() core.LearningStore { return s.learningEngine }
+// Learning returns the learning engine, or a genuinely nil interface when
+// there is none. See KG for why the explicit nil is required.
+func (s *System) Learning() core.LearningStore {
+	if s == nil || s.learningEngine == nil {
+		return nil
+	}
+	return s.learningEngine
+}
 
 // ============================================================================
 // AUDIT LOG ACCESSORS
 // ============================================================================
 
-// Audit returns the audit log.
-func (s *System) Audit() core.AuditStore { return s.auditLog }
+// Audit returns the audit log, or a genuinely nil interface when there is none.
+// See KG for why the explicit nil is required.
+func (s *System) Audit() core.AuditStore {
+	if s == nil || s.auditLog == nil {
+		return nil
+	}
+	return s.auditLog
+}

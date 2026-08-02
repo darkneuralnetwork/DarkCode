@@ -183,8 +183,7 @@ func TestKnowledgeGraphStartupPruning(t *testing.T) {
 	if n, _ := kg1.Stats(); n != over {
 		t.Fatalf("Stats() before reload = %d nodes, want %d (AddNode alone must not prune)", n, over)
 	}
-	kg1.writer.FlushNow()
-	kg1.Shutdown()
+	kg1.Shutdown() // writes are synchronous; there is nothing to flush
 
 	kg2, err := NewKnowledgeGraph(dir)
 	if err != nil {
@@ -231,10 +230,44 @@ func TestNewKnowledgeGraphUsesGivenDir(t *testing.T) {
 	}
 	defer kg.Shutdown()
 	mustAddNode(t, kg, "a", core.KGNodeFile)
-	kg.writer.FlushNow()
 
-	if _, err := os.Stat(filepath.Join(dir, "knowledge_graph.json")); err != nil {
-		t.Errorf("expected knowledge_graph.json to be written in %s: %v", dir, err)
+	// The store is now SQLite, written per row as the mutation happens, rather
+	// than a JSON document rewritten in full on a debounce. This assertion used
+	// to name knowledge_graph.json and to need an explicit flush first.
+	if _, err := os.Stat(filepath.Join(dir, "knowledge_graph.db")); err != nil {
+		t.Errorf("expected knowledge_graph.db to be written in %s: %v", dir, err)
+	}
+}
+
+// TestKnowledgeGraphWritesAreImmediate is the regression guard for DC-08.
+//
+// The old writer marshalled the ENTIRE graph on a 2-second debounce — measured
+// at 173 ms for a 3.6 MB store, under a read lock, forever, and linear in size.
+// Two properties replace it: a write is visible without waiting for a timer,
+// and it survives a process that never got to shut down cleanly.
+func TestKnowledgeGraphWritesAreImmediate(t *testing.T) {
+	dir := t.TempDir()
+	kg, err := NewKnowledgeGraph(dir)
+	if err != nil {
+		t.Fatalf("NewKnowledgeGraph: %v", err)
+	}
+	mustAddNode(t, kg, "durable", core.KGNodeFile)
+
+	// Read the store directly, without Shutdown: this is what a crash would
+	// leave behind. Under the debounced writer the node would not be there.
+	probe, err := openKGStore(filepath.Join(dir, "knowledge_graph.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	nodes, _, err := probe.Count()
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	_ = probe.Close()
+	kg.Shutdown()
+
+	if nodes == 0 {
+		t.Error("a node written before shutdown was not on disk; writes must land as they happen, not on a debounce")
 	}
 }
 

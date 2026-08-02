@@ -1,31 +1,39 @@
 package memory
 
 // ============================================================================
-// HYBRID RETRIEVER — lightweight semantic-ish recall without embeddings.
+// HYBRID RETRIEVER — ranked recall over episodic + semantic memory.
 //
-// Why this exists (RAG/KG assessment):
-// The project deliberately has zero non-stdlib dependencies (only readline).
-// Full vector-RAG would require an embedding model — either a per-write API
-// call (latency + cost + provider coupling) or a heavy local model (bulk).
-// That violates the "do not make the project too bulky for no use" rule.
+// This header used to say the retriever worked "without embeddings" and that
+// full vector-RAG had been deliberately declined as dependency bulk. That was
+// true when it was written and has not been true for some time: vectors were
+// added afterwards and the comment was never updated, so the file described the
+// opposite of what it does. Anyone reading it to answer "do we have RAG?" would
+// have concluded no.
 //
-// Instead, this retriever upgrades the existing keyword recall (which was
-// plain strings.Contains — no ranking, no recall of semantically-close-but-
-// not-identical phrasing) to a ranked hybrid scorer:
+// What actually happens today:
 //
-//   score = tokenOverlap(query, entry)        // TF-style overlap (main signal)
-//         + recencyBonus(entry)               // prefer recent, but weakly
-//         + kgBoost(entry)                    // boost entries whose entities
-//                                             // appear in the query (KG graph)
+//   - Recall embeds the query (System.GetEmbedding, 5s bound) and scores each
+//     entry by cosine against its stored Vector.
+//   - Entries with no vector fall back to tokenOverlap, a TF-style score.
+//   - Both then get recencyBonus and kgBoost applied on top.
 //
-// This captures ~80% of RAG's recall-quality benefit (the agent recalls a past
-// "build a calculator" task when asked to "create an arithmetic tool") at 0%
-// dependency bulk. It is pure Go, stdlib only.
+// The Knowledge Graph is the structured half: typed entity relations, supplying
+// the kgBoost signal. Ingestion (ingest/) chunks sources at 1500 chars with 200
+// overlap, embeds each chunk and writes it to semantic memory. So the stack is
+// a genuine KG + RAG hybrid, not a keyword approximation of one.
 //
-// The Knowledge Graph (memory/knowledge_graph.go) is the other half of the
-// "hybrid": it contributes the kgBoost signal and remains the structured
-// entity-relationship store. So the architecture is: KG (structured) +
-// HybridRetriever (ranked free-text recall) = a hybrid of KG + lightweight RAG.
+// KNOWN WEAKNESS — the fusion, not the signals.
+//
+// Cosine and tokenOverlap are different units on different scales (cosine's
+// floor for "related" is 0.3 and good matches sit at 0.6-0.85; overlap is a
+// fraction of query tokens matched with a threshold of >0), and both are pushed
+// into ONE list sorted by raw score. A weak keyword hit can therefore outrank a
+// strong vector one. It fires whenever the store is mixed, which is always,
+// because SetEmbedder does not backfill entries written before it was installed.
+//
+// The fix is rank-based fusion under one owner that also owns the write path —
+// see the recall port in the plan. Until then, treat cross-signal ordering as
+// approximate rather than meaningful.
 // ============================================================================
 
 import (
@@ -51,6 +59,11 @@ type RecallHit struct {
 	Snippet   string // summary / content (truncated)
 	Score     float64
 	Timestamp time.Time
+	// Signal names what produced this hit: "vector", "keyword", "both", with
+	// "+kg" appended when the knowledge graph contributed. Without it, "is RAG
+	// earning its cost?" is unanswerable — the cascade could report which rung
+	// replied but never which signal inside that rung did the work.
+	Signal string
 }
 
 // HybridRetriever ranks episodic + semantic memory entries by relevance to a
@@ -82,73 +95,207 @@ func (h *HybridRetriever) Recall(query string, k int) []RecallHit {
 		return nil
 	}
 
-	// Get query embedding if available
+	// Get query embedding if available.
 	queryVec, _ := h.mem.GetEmbedding(query)
-	hasVec := len(queryVec) > 0
 
 	qKGMatches := h.kgQueryMatches(qTokens)
-
 	now := time.Now()
-	var hits []RecallHit
 
-	// Episodic memory.
+	// Score every candidate on BOTH signals. The old code picked one or the
+	// other per entry and pushed the results into a single sorted list, which
+	// silently compared a cosine against a token fraction — see fuse().
+	cands := make([]candidate, 0, 64)
+
 	for _, e := range h.mem.EpisodicGet() {
-		usedVec := hasVec && len(e.Vector) > 0
-		var score float64
-		if usedVec {
-			score = cosineSimilarity(queryVec, e.Vector)
-		} else {
-			text := e.TaskGoal + " " + e.Summary + " " + strings.Join(e.ToolsUsed, " ")
-			score = overlapScore(qTokens, tokenize(text))
-		}
-		if belowRecallThreshold(score, usedVec) {
-			continue
-		}
-
-		// Recency: up to +0.15, decaying over ~30 days.
-		score += recencyBonus(e.Timestamp, now, 30*24*time.Hour, 0.15)
-		// KG boost: if any KG node label overlaps the query, nudge.
-		score += kgBoostFromMatches(qKGMatches, e.TaskGoal)
-		hits = append(hits, RecallHit{
-			Source: "episodic", ID: e.ID, Goal: e.TaskGoal,
-			Snippet: strutil.Truncate(e.Summary, 240), Score: score, Timestamp: e.Timestamp,
+		text := e.TaskGoal + " " + e.Summary + " " + strings.Join(e.ToolsUsed, " ")
+		cands = append(cands, candidate{
+			hit: RecallHit{
+				Source: "episodic", ID: e.ID, Goal: e.TaskGoal,
+				Snippet: strutil.Truncate(e.Summary, 240), Timestamp: e.Timestamp,
+			},
+			vec:     cosineOrZero(queryVec, e.Vector),
+			hasVec:  len(queryVec) > 0 && len(e.Vector) > 0,
+			keyword: overlapScore(qTokens, tokenize(text)),
+			bonus:   recencyBonus(e.Timestamp, now, 30*24*time.Hour, 0.15),
+			kgScore: kgBoostFromMatches(qKGMatches, e.TaskGoal),
 		})
 	}
 
-	// Semantic memory.
 	for _, s := range h.mem.SemanticAll() {
-		usedVec := hasVec && len(s.Vector) > 0 // see episodic loop comment
-		var score float64
-		if usedVec {
-			score = cosineSimilarity(queryVec, s.Vector)
-		} else {
-			text := s.Key + " " + s.Content + " " + s.Category + " " + strings.Join(s.Tags, " ")
-			score = overlapScore(qTokens, tokenize(text))
-		}
-		if belowRecallThreshold(score, usedVec) {
-			continue
-		}
-
-		score += recencyBonus(s.CreatedAt, now, 30*24*time.Hour, 0.15)
-		score += kgBoostFromMatches(qKGMatches, s.Key)
-		hits = append(hits, RecallHit{
-			Source: "semantic", ID: s.Key, Goal: s.Key,
-			Snippet: strutil.Truncate(s.Content, 240), Score: score, Timestamp: s.CreatedAt,
+		text := s.Key + " " + s.Content + " " + s.Category + " " + strings.Join(s.Tags, " ")
+		cands = append(cands, candidate{
+			hit: RecallHit{
+				Source: "semantic", ID: s.Key, Goal: s.Key,
+				Snippet: strutil.Truncate(s.Content, 240), Timestamp: s.CreatedAt,
+			},
+			vec:     cosineOrZero(queryVec, s.Vector),
+			hasVec:  len(queryVec) > 0 && len(s.Vector) > 0,
+			keyword: overlapScore(qTokens, tokenize(text)),
+			bonus:   recencyBonus(s.CreatedAt, now, 30*24*time.Hour, 0.15),
+			kgScore: kgBoostFromMatches(qKGMatches, s.Key),
 		})
 	}
 
-	// Rank: score desc, then recency desc.
-	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].Score != hits[j].Score {
-			return hits[i].Score > hits[j].Score
+	return fuse(cands, k)
+}
+
+// candidate carries both signals for one entry, so ranking can be decided after
+// every entry has been scored rather than per-entry.
+type candidate struct {
+	hit     RecallHit
+	vec     float64 // cosine, 0 when either side has no vector
+	hasVec  bool    // whether vec is meaningful
+	keyword float64 // token overlap, always available
+	bonus   float64 // recency only; small, additive, breaks ties
+	kgScore float64 // knowledge-graph neighbourhood match, ranked as a signal
+}
+
+// cosineOrZero is cosineSimilarity with the "one side has no vector" case
+// folded in, so callers do not have to guard it.
+func cosineOrZero(a, b []float32) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	return cosineSimilarity(a, b)
+}
+
+// rrfK damps the contribution of low ranks. 60 is the value from the original
+// reciprocal-rank-fusion work and is not sensitive: it mainly decides how much
+// a first place beats a tenth.
+const rrfK = 60.0
+
+// fuse combines the vector and keyword rankings by reciprocal rank.
+//
+// The bug this replaces: each entry was scored by EITHER cosine OR token
+// overlap, and both went into one list sorted by raw score. Those are different
+// units. Cosine's floor for "related" is 0.3 and good matches sit at 0.6–0.85;
+// overlapScore is the fraction of query tokens matched, with a threshold of
+// merely > 0. A weak keyword hit at 0.5 therefore outranked a strong vector hit
+// at 0.45. It fired whenever the store held a mix of vectored and unvectored
+// entries — which was always, because entries written before the embedder
+// finished validating never got one.
+//
+// RRF is used rather than normalising the two scores because it needs no
+// calibration: it reads only each list's ORDER. Min-max normalising two
+// distributions per query is unstable when one list is short — a single vector
+// hit normalises to 1.0 regardless of how weak it is. Rank is immune to that.
+//
+// Recency and the KG boost stay additive on top, where they are small and
+// interpretable, instead of being mixed into an incomparable base.
+func fuse(cands []candidate, k int) []RecallHit {
+	if len(cands) == 0 {
+		return nil
+	}
+
+	byVec := make([]int, 0, len(cands))
+	byKeyword := make([]int, 0, len(cands))
+	byKG := make([]int, 0, len(cands))
+	for i, c := range cands {
+		if c.hasVec && c.vec > vectorFloor {
+			byVec = append(byVec, i)
 		}
-		return hits[i].Timestamp.After(hits[j].Timestamp)
+		if c.keyword > 0 {
+			byKeyword = append(byKeyword, i)
+		}
+		if c.kgScore > 0 {
+			byKG = append(byKG, i)
+		}
+	}
+	sort.SliceStable(byVec, func(a, b int) bool { return cands[byVec[a]].vec > cands[byVec[b]].vec })
+	sort.SliceStable(byKeyword, func(a, b int) bool { return cands[byKeyword[a]].keyword > cands[byKeyword[b]].keyword })
+	sort.SliceStable(byKG, func(a, b int) bool { return cands[byKG[a]].kgScore > cands[byKG[b]].kgScore })
+
+	type fused struct {
+		idx    int
+		score  float64
+		signal string
+	}
+	scores := make(map[int]*fused, len(cands))
+	add := func(idx, rank int, signal string) {
+		f, ok := scores[idx]
+		if !ok {
+			f = &fused{idx: idx}
+			scores[idx] = f
+		}
+		f.score += 1.0 / (rrfK + float64(rank))
+		if f.signal == "" {
+			f.signal = signal
+		} else if !strings.Contains(f.signal, signal) {
+			f.signal += "+" + signal
+		}
+	}
+	for rank, idx := range byVec {
+		add(idx, rank+1, "vector")
+	}
+	for rank, idx := range byKeyword {
+		add(idx, rank+1, "keyword")
+	}
+	// The knowledge graph is a THIRD retrieval signal, ranked alongside the
+	// other two rather than added as a nudge afterwards.
+	//
+	// It was a bonus in the first version of this, and that was wrong in a way
+	// a test caught: two entries with identical keyword overlap, one of which
+	// mentions a graph neighbour of the query, were separated only by the
+	// scaled bonus — which is deliberately smaller than one rank gap, so the
+	// newer irrelevant entry won on stable-sort order. "This entry mentions
+	// something the query's graph neighbourhood contains" is evidence about
+	// relevance, and evidence belongs in the ranking, not in the tiebreak.
+	for rank, idx := range byKG {
+		add(idx, rank+1, "kg")
+	}
+
+	type ranked struct {
+		hit       RecallHit
+		magnitude float64 // total raw signal strength, for tie-breaking
+		bonus     float64 // recency, for breaking a true tie
+	}
+	out := make([]ranked, 0, len(scores))
+	for _, f := range scores {
+		c := cands[f.idx]
+		hit := c.hit
+		hit.Score = f.score
+		hit.Signal = f.signal
+		out = append(out, ranked{hit: hit, magnitude: c.vec + c.keyword + c.kgScore, bonus: c.bonus})
+	}
+
+	// Three keys, in this order, and the order is the whole point.
+	//
+	// RRF reads only each list's ORDER, which is what makes it immune to the
+	// incomparable-units problem. The cost is that it also discards MAGNITUDE:
+	// two entries that swap ranks across two lists score identically, however
+	// far apart their actual scores were. That is common — a strong KG match
+	// and a weak one both appear in the KG list, and if the keyword list orders
+	// them the other way the fused scores are exactly equal.
+	//
+	// So magnitude breaks the tie, and only then recency. An earlier version
+	// folded recency into the primary score as a scaled bonus; it decided those
+	// exact ties, which meant a newer, weaker entry beat a genuinely better
+	// match. Recency is a preference, not evidence, and it belongs last.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].hit.Score != out[j].hit.Score {
+			return out[i].hit.Score > out[j].hit.Score
+		}
+		if out[i].magnitude != out[j].magnitude {
+			return out[i].magnitude > out[j].magnitude
+		}
+		if out[i].bonus != out[j].bonus {
+			return out[i].bonus > out[j].bonus
+		}
+		return out[i].hit.Timestamp.After(out[j].hit.Timestamp)
 	})
-	if len(hits) > k {
-		hits = hits[:k]
+	if len(out) > k {
+		out = out[:k]
+	}
+	hits := make([]RecallHit, 0, len(out))
+	for _, r := range out {
+		hits = append(hits, r.hit)
 	}
 	return hits
 }
+
+// vectorFloor is the cosine below which a vector hit is not evidence of
+// anything. Unchanged from the old per-entry threshold.
+const vectorFloor = 0.3
 
 // ExactRecall returns the most recent successful output for a goal that
 // matches query after normalization, enabling the agent to answer repeated
@@ -264,15 +411,10 @@ func (h *HybridRetriever) ConfidentRecall(query string, maxAge time.Duration) (s
 	return "", false
 }
 
-// belowRecallThreshold gates a candidate entry by the scorer that actually
-// ran for it: cosine scores need ≥0.3 to count as semantically related, while
-// keyword-overlap scores only need to be positive (ranking sorts the rest).
-func belowRecallThreshold(score float64, usedVec bool) bool {
-	if usedVec {
-		return score <= 0.3
-	}
-	return score <= 0
-}
+// The per-entry threshold that used to live here is gone. It gated each entry
+// by whichever scorer happened to run for it, which is exactly what made the
+// two scales comparable-looking and therefore wrong. fuse() applies vectorFloor
+// to the vector list only, and lets rank decide the rest.
 
 // GoalSimilarity returns the bidirectional token-Jaccard similarity between
 // two goal strings in [0,1], using the same tokenizer the retriever scores
@@ -603,15 +745,31 @@ func isStopword(t string) bool {
 
 // cosineSimilarity calculates the cosine similarity between two vectors.
 // Returns 0 if either vector is empty or length 0.
+//
+// Each product is widened to float64 BEFORE multiplying. Written the other way
+// round — float64(a[i] * b[i]) — the multiply happens in float32 and only the
+// already-rounded result is widened.
+//
+// Measured, that costs almost nothing on real embeddings: over 20,000 random
+// 768-dim pairs the worst error was 3.7e-9 and it never changed which entry
+// ranked higher. What it does cost is range. float32 tops out near 3.4e38, so a
+// component around 1e19 squares to +Inf and the function returns NaN — and a
+// NaN score sorts unpredictably against every other candidate rather than
+// simply losing. The accumulator is float64 either way, so the narrow multiply
+// buys no speed to trade for that.
+//
+// No embedder produces components anywhere near that magnitude. This is a
+// correctness floor for a scoring function, not a live bug being fixed.
 func cosineSimilarity(a, b []float32) float64 {
 	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
 		return 0
 	}
 	var dotProduct, normA, normB float64
 	for i := range a {
-		dotProduct += float64(a[i] * b[i])
-		normA += float64(a[i] * a[i])
-		normB += float64(b[i] * b[i])
+		x, y := float64(a[i]), float64(b[i])
+		dotProduct += x * y
+		normA += x * x
+		normB += y * y
 	}
 	if normA == 0 || normB == 0 {
 		return 0

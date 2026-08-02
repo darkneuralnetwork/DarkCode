@@ -32,12 +32,6 @@ type LearningEngine struct {
 	stratWriter *DebouncedWriter
 }
 
-// learningData is the serialized form.
-type learningData struct {
-	Feedback   []core.LearningFeedback          `json:"feedback"`
-	Strategies map[string]*core.LearnedStrategy `json:"strategies"`
-}
-
 // NewLearningEngine creates a learning engine with persistence.
 func NewLearningEngine(dir string) (*LearningEngine, error) {
 	le := &LearningEngine{

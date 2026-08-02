@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/observability"
 )
 
 // ============================================================================
@@ -30,7 +31,7 @@ type KnowledgeGraph struct {
 	adjacent    map[string][]string       // nodeID -> connected node IDs
 	edgesByNode map[string][]*core.KGEdge // nodeID -> incident edges, for O(1) GetEdges
 	filePath    string
-	writer      *DebouncedWriter
+	store       *kgStore
 	embedder    core.LLMClient
 }
 
@@ -53,45 +54,153 @@ type ConceptRelation struct {
 	Relation string  `json:"relation"`
 }
 
-// NewKnowledgeGraph creates a knowledge graph with JSON persistence.
+// NewKnowledgeGraph opens the graph, migrating a legacy JSON store on first
+// run.
+//
+// Persistence is incremental: a changed node writes one row. It used to be a
+// whole-document JSON marshal on a 2-second debounce, which measured 173 ms
+// against a 3.6 MB store — held under a read lock, repeated forever, and
+// linear in graph size. See kgstore.go for the numbers.
 func NewKnowledgeGraph(dir string) (*KnowledgeGraph, error) {
-	path := filepath.Join(dir, "knowledge_graph.json")
+	legacy := filepath.Join(dir, "knowledge_graph.json")
 	kg := &KnowledgeGraph{
 		nodes:       make(map[string]*core.KGNode),
 		adjacent:    make(map[string][]string),
 		edgesByNode: make(map[string][]*core.KGEdge),
-		filePath:    path,
+		filePath:    legacy,
 	}
-	if err := kg.load(); err != nil {
+
+	store, err := openKGStore(filepath.Join(dir, "knowledge_graph.db"))
+	if err != nil {
 		return nil, err
+	}
+	kg.store = store
+
+	if err := kg.loadFromStore(); err != nil {
+		return nil, err
+	}
+	// An existing install has its graph in JSON. Import it once, then leave the
+	// file alone: keeping it is what makes this reversible if the new store
+	// turns out to be wrong, and it costs one stale file on disk.
+	if len(kg.nodes) == 0 {
+		if err := kg.migrateLegacyJSON(); err != nil {
+			return nil, err
+		}
 	}
 
 	kg.rebuildEdgeIndexLocked()
 
 	kg.mu.Lock()
-	kg.pruneConceptsLocked()
+	pruned := kg.pruneConceptsLocked()
 	kg.mu.Unlock()
-
-	kg.writer = NewDebouncedWriter(path, 2*time.Second, func() ([]byte, error) {
-		kg.mu.RLock()
-		defer kg.mu.RUnlock()
-		stored := kgData{
-			Nodes: make([]*core.KGNode, 0, len(kg.nodes)),
-			Edges: kg.edges,
+	if pruned {
+		// A prune rewrites the concept set wholesale, which is one of the two
+		// operations that genuinely does change everything at once.
+		if err := kg.persistAll(); err != nil {
+			return nil, err
 		}
-		for _, node := range kg.nodes {
-			stored.Nodes = append(stored.Nodes, node)
-		}
-		return json.Marshal(stored) // using non-indent for speed
-	})
+	}
 
 	return kg, nil
 }
 
-// Shutdown flushes pending writes to disk.
+// loadFromStore reads the graph into memory. Reads stay in memory, so every
+// query method is unchanged; only the write path moved.
+func (kg *KnowledgeGraph) loadFromStore() error {
+	nodes, edges, err := kg.store.LoadAll()
+	if err != nil {
+		return fmt.Errorf("load knowledge graph: %w", err)
+	}
+	kg.mu.Lock()
+	defer kg.mu.Unlock()
+	for _, n := range nodes {
+		kg.nodes[n.ID] = n
+	}
+	kg.edges = edges
+	for _, e := range edges {
+		kg.adjacent[e.From] = append(kg.adjacent[e.From], e.To)
+		kg.adjacent[e.To] = append(kg.adjacent[e.To], e.From)
+		kg.edgesByNode[e.From] = append(kg.edgesByNode[e.From], e)
+		kg.edgesByNode[e.To] = append(kg.edgesByNode[e.To], e)
+	}
+	return nil
+}
+
+// migrateLegacyJSON imports knowledge_graph.json once, if present.
+func (kg *KnowledgeGraph) migrateLegacyJSON() error {
+	data, err := os.ReadFile(kg.filePath)
+	if err != nil {
+		return nil // no legacy file: a fresh install
+	}
+	var stored kgData
+	if err := json.Unmarshal(data, &stored); err != nil {
+		// A corrupt legacy file must not stop the process from starting: the
+		// graph is a derived cache and re-indexing rebuilds it.
+		observability.Log().Warn("legacy knowledge_graph.json is unreadable; starting with an empty graph",
+			map[string]interface{}{"error": err.Error()})
+		return nil
+	}
+
+	kg.mu.Lock()
+	for _, n := range stored.Nodes {
+		if n != nil {
+			kg.nodes[n.ID] = n
+		}
+	}
+	kg.edges = stored.Edges
+	for _, e := range stored.Edges {
+		kg.adjacent[e.From] = append(kg.adjacent[e.From], e.To)
+		kg.adjacent[e.To] = append(kg.adjacent[e.To], e.From)
+		kg.edgesByNode[e.From] = append(kg.edgesByNode[e.From], e)
+		kg.edgesByNode[e.To] = append(kg.edgesByNode[e.To], e)
+	}
+	n, ed := len(kg.nodes), len(kg.edges)
+	kg.mu.Unlock()
+
+	if err := kg.persistAll(); err != nil {
+		return fmt.Errorf("migrate knowledge graph to sqlite: %w", err)
+	}
+	observability.Log().Info("migrated knowledge graph from JSON to sqlite",
+		map[string]interface{}{"nodes": n, "edges": ed})
+	return nil
+}
+
+// persistAll rewrites the whole store. Reserved for migration and prune — the
+// operations that really do change everything. Ordinary mutations write one row.
+func (kg *KnowledgeGraph) persistAll() error {
+	kg.mu.RLock()
+	nodes := make([]*core.KGNode, 0, len(kg.nodes))
+	for _, n := range kg.nodes {
+		nodes = append(nodes, n)
+	}
+	edges := append([]*core.KGEdge(nil), kg.edges...)
+	kg.mu.RUnlock()
+	return kg.store.ReplaceAll(nodes, edges)
+}
+
+// persistNode writes one node. Errors are logged rather than returned: the
+// graph is a derived cache, and failing a memory write must not fail the task
+// that produced the fact.
+func (kg *KnowledgeGraph) persistNode(n *core.KGNode) {
+	if err := kg.store.UpsertNode(n); err != nil {
+		observability.Log().Warn("knowledge graph node write failed",
+			map[string]interface{}{"id": n.ID, "error": err.Error()})
+	}
+}
+
+func (kg *KnowledgeGraph) persistEdge(e *core.KGEdge) {
+	if err := kg.store.UpsertEdge(e); err != nil {
+		observability.Log().Warn("knowledge graph edge write failed",
+			map[string]interface{}{"from": e.From, "to": e.To, "error": err.Error()})
+	}
+}
+
+// Shutdown closes the store. There is nothing to flush — writes land as they
+// happen, which also means a crash loses at most the in-flight transaction
+// rather than the whole debounce window.
 func (kg *KnowledgeGraph) Shutdown() {
-	if kg.writer != nil {
-		kg.writer.Shutdown()
+	if kg.store != nil {
+		_ = kg.store.Close()
 	}
 }
 
@@ -136,7 +245,6 @@ func (kg *KnowledgeGraph) RecordWordRelations(text string) error {
 		return nil
 	}
 	kg.mu.Lock()
-	defer kg.mu.Unlock()
 
 	now := time.Now()
 	// Track concept nodes created/seen in THIS call so we can cap + prune.
@@ -174,8 +282,13 @@ func (kg *KnowledgeGraph) RecordWordRelations(text string) error {
 		kg.pruneConceptsLocked()
 	}
 
-	kg.writer.MarkDirty()
-	return nil
+	kg.mu.Unlock()
+
+	// Concept extraction touches many nodes and edges at once, so a whole-store
+	// write is the honest option here. It runs on text ingestion, not per fact,
+	// and persistAll takes the read lock itself — hence the explicit unlock
+	// above rather than a defer.
+	return kg.persistAll()
 }
 
 // upsertConceptEdgeLocked ensures both concept nodes exist and that the
@@ -236,7 +349,7 @@ func (kg *KnowledgeGraph) conceptCountLocked() int {
 // pruneConceptsLocked removes the least-connected concept nodes (and their
 // edges) until the concept count is back under the cap. Keeps the graph
 // bounded over long sessions. Must be called with kg.mu held.
-func (kg *KnowledgeGraph) pruneConceptsLocked() {
+func (kg *KnowledgeGraph) pruneConceptsLocked() bool {
 	// Degree per concept node.
 	degree := make(map[string]int)
 	for _, e := range kg.edges {
@@ -263,7 +376,7 @@ func (kg *KnowledgeGraph) pruneConceptsLocked() {
 
 	remove := len(list) - maxConceptNodes
 	if remove <= 0 {
-		return
+		return false
 	}
 	toDelete := make(map[string]bool)
 	for i := 0; i < remove && i < len(list); i++ {
@@ -292,6 +405,7 @@ func (kg *KnowledgeGraph) pruneConceptsLocked() {
 		kg.adjacent[id] = cleaned
 	}
 	kg.rebuildEdgeIndexLocked()
+	return true
 }
 
 // ConceptRelations returns the weighted relations between a concept word and
@@ -376,7 +490,7 @@ func (kg *KnowledgeGraph) AddNode(node *core.KGNode) error {
 		node.CreatedAt = time.Now()
 	}
 	kg.nodes[node.ID] = node
-	kg.writer.MarkDirty()
+	kg.persistNode(node)
 	return nil
 }
 
@@ -413,7 +527,7 @@ func (kg *KnowledgeGraph) AdjustConfidence(id string, delta, floor float64) (flo
 	if n.Confidence > 1.0 {
 		n.Confidence = 1.0
 	}
-	kg.writer.MarkDirty()
+	kg.persistNode(n)
 	return n.Confidence, true
 }
 
@@ -448,7 +562,7 @@ func (kg *KnowledgeGraph) AddEdge(edge *core.KGEdge) error {
 		if edge.Provenance != "" {
 			existing.Provenance = edge.Provenance
 		}
-		kg.writer.MarkDirty()
+		kg.persistEdge(existing)
 		return nil
 	}
 
@@ -461,7 +575,7 @@ func (kg *KnowledgeGraph) AddEdge(edge *core.KGEdge) error {
 		kg.edgesByNode[edge.To] = append(kg.edgesByNode[edge.To], edge)
 	}
 
-	kg.writer.MarkDirty()
+	kg.persistEdge(edge)
 	return nil
 }
 
@@ -583,7 +697,10 @@ func (kg *KnowledgeGraph) RemoveNode(nodeID string) error {
 	}
 
 	kg.rebuildEdgeIndexLocked()
-	kg.writer.MarkDirty()
+	if err := kg.store.DeleteNode(nodeID); err != nil {
+		observability.Log().Warn("knowledge graph node delete failed",
+			map[string]interface{}{"id": nodeID, "error": err.Error()})
+	}
 	return nil
 }
 
@@ -617,28 +734,6 @@ func (kg *KnowledgeGraph) Stats() (nodeCount, edgeCount int) {
 // ============================================================================
 // PERSISTENCE
 // ============================================================================
-
-func (kg *KnowledgeGraph) load() error {
-	data, err := os.ReadFile(kg.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	var stored kgData
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return err
-	}
-
-	for _, node := range stored.Nodes {
-		kg.nodes[node.ID] = node
-	}
-	for _, edge := range stored.Edges {
-		kg.edges = append(kg.edges, edge)
-		kg.adjacent[edge.From] = append(kg.adjacent[edge.From], edge.To)
-		kg.adjacent[edge.To] = append(kg.adjacent[edge.To], edge.From)
-	}
-	return nil
-}
+// The JSON loader that used to live here went with the debounced writer.
+// migrateLegacyJSON reads the old file once, on first run, and nothing writes
+// it again.

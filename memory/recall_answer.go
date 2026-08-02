@@ -44,6 +44,7 @@ type RecallAnswer struct {
 	ID        string    // episodic entry id (Confidence.Provenance)
 	Score     float64   // graded confidence in [0,1]
 	Reason    string    // human-readable signal description (telemetry)
+	Signal    string    // machine-readable signal: "vector" | "keyword" (telemetry)
 	Timestamp time.Time // when the answer was produced (staleness display)
 	ToolsUsed []string  // how it was produced (citation)
 }
@@ -104,10 +105,10 @@ func (h *HybridRetriever) BestRecallAnswer(query string, toolMaxAge time.Duratio
 			continue
 		}
 
-		score, reason := 0.0, ""
+		score, reason, signal := 0.0, "", ""
 		if len(queryVec) > 0 && len(e.Vector) > 0 {
 			if cos := cosineSimilarity(queryVec, e.Vector); cos > score {
-				score, reason = cos, "embedding similarity to a past successful answer"
+				score, reason, signal = cos, "embedding similarity to a past successful answer", "vector"
 			}
 		}
 		// The keyword signal can still beat a weak cosine (Recall()'s
@@ -116,6 +117,7 @@ func (h *HybridRetriever) BestRecallAnswer(query string, toolMaxAge time.Duratio
 		if score < recallAnswerKeywordScore && answerTextCovers(qTokens, e) {
 			score = recallAnswerKeywordScore
 			reason = "every query term (or its spelled-out acronym) appears in a past successful answer"
+			signal = "keyword"
 		}
 		if reason == "" {
 			continue
@@ -129,6 +131,7 @@ func (h *HybridRetriever) BestRecallAnswer(query string, toolMaxAge time.Duratio
 				ID:        e.ID,
 				Score:     score,
 				Reason:    reason,
+				Signal:    signal,
 				Timestamp: e.Timestamp,
 				ToolsUsed: e.ToolsUsed,
 			}
