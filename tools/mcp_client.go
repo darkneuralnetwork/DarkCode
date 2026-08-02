@@ -36,6 +36,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/darkcode/httpx"
+
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
 )
@@ -386,7 +388,7 @@ func (c *HTTPMCPClient) doRequest(ctx context.Context, method string, params int
 	for k, v := range c.header {
 		httpReq.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := httpx.Client(httpx.Egress).Do(httpReq)
 	if err != nil {
 		return nil, err
 	}

@@ -126,7 +126,16 @@ func (r *Registry) Get(name string) (*ToolEntry, bool) {
 }
 
 // List returns all registered tool entries.
+//
+// A nil receiver yields an empty list rather than a segfault. This is reachable:
+// /api/status calls it through AllEntries, so a Server constructed before the
+// registry is wired takes the whole process down — and an unrecovered panic in
+// an HTTP handler drops every in-flight request, which is why DispatchAll
+// already guards tools the same way.
 func (r *Registry) List() []*ToolEntry {
+	if r == nil {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]*ToolEntry, 0, len(r.tools))

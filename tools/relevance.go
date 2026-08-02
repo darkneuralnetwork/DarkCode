@@ -29,58 +29,48 @@ import (
 	"github.com/darkcode/core"
 )
 
-// coreTools are offered for every task. They are the ones a coding agent
-// reaches for without the goal having to hint at them, and withholding one to
-// save bytes would trade a certain cost for an uncertain failure.
-var coreTools = map[string]bool{
-	"read_file": true, "write_file": true, "list_dir": true, "list_files": true,
-	"search_files": true, "terminal": true, "patch": true,
-	"replace_file_content": true, "memory": true,
-}
-
-// domainTools maps a specialised tool to the words that make it relevant. A
-// goal has to actually mention the domain; inferring "they might want a PDF"
-// from silence is how the saving disappears.
-var domainTools = map[string][]string{
-	"pdf":                   {"pdf", "document", "report", "invoice"},
-	"image":                 {"image", "picture", "screenshot", "png", "jpg", "jpeg", "diagram", "photo"},
-	"browser_subagent":      {"browser", "navigate", "click", "webpage", "web page", "scrape", "screenshot"},
-	"monitoring":            {"cpu", "memory usage", "process", "disk", "load", "health", "monitor", "resource"},
-	"git":                   {"git", "commit", "branch", "merge", "diff", "stage", "checkout", "rebase"},
-	"github":                {"github", "pull request", "pr ", "issue", "repo", "release"},
-	"web_search":            {"search", "look up", "find out", "latest", "current", "news", "documentation", "docs"},
-	"web_fetch":             {"fetch", "url", "http", "website", "download", "page"},
-	"research":              {"research", "investigate", "compare", "survey"},
-	"todo":                  {"todo", "task list", "checklist", "plan"},
-	"debug":                 {"debug", "breakpoint", "step through", "stack trace"},
-	"lsp":                   {"definition", "reference", "symbol", "rename", "hover", "completion"},
-	"ingest":                {"ingest", "index", "learn from", "teach"},
-	"graph_query":           {"graph", "related to", "depends on", "who calls"},
-	"self_heal":             {"heal", "auto-fix", "repair"},
-	"rank_patches":          {"patch", "candidate", "rank"},
-	"pdf_extract":           {"pdf", "extract"},
-	"deterministic_kg_sync": {"index", "sync", "graph"},
-}
-
-// RelevantSchemas returns the subset of schemas worth sending for this goal:
-// the core set, plus any specialised tool the goal actually mentions, plus
-// anything in extra (tools the model has already asked for this run).
+// domainTools maps a narrow tool to the words that make it relevant. A goal has
+// to actually mention the domain; inferring "they might want a PDF" from
+// silence is how the saving disappears.
 //
-// A tool with no domain entry is treated as core rather than dropped. Being
-// unlisted means nobody has classified it yet, and silently withholding an
-// unclassified tool would make adding one a trap.
+// This list used to hold eighteen tools. It holds four, and the difference is
+// the whole point of the redesign.
+//
+// Measured against the registry, the four below are 3,010 of 8,171 schema bytes
+// — 37% of the per-turn cost, concentrated in tools that a coding task genuinely
+// never needs unless it says so. Gating them is most of the saving available.
+//
+// The other fourteen were gated on words the USER had to type, which inverts
+// who is supposed to know. "fix the failing test" mentions no graph, no symbol
+// and no breakpoint, so it was offered no graph_query, no lsp and no debug —
+// the three tools that most distinguish this agent from a plain ReAct loop,
+// withheld from exactly the task they were built for. The unlock-on-request
+// escape could not save it either: a model cannot ask for a tool it has never
+// been shown.
+//
+// Cutting a further ~2,000 bytes is not worth making the agent worse at its
+// core job. Anything not listed here is offered.
+var domainTools = map[string][]string{
+	"pdf":              {"pdf", "document", "report", "invoice"},
+	"image":            {"image", "picture", "screenshot", "png", "jpg", "jpeg", "diagram", "photo"},
+	"browser_subagent": {"browser", "navigate", "click", "webpage", "web page", "scrape", "screenshot"},
+	"monitoring":       {"cpu", "memory usage", "process", "disk", "load", "health", "monitor", "resource"},
+}
+
+// RelevantSchemas returns the schemas worth sending for this goal: everything
+// except the narrow tools in domainTools, which are included only when the goal
+// mentions their domain or the model has already asked for them this run.
+//
+// The default is to OFFER. Withholding is the exception and has to be earned by
+// a tool being both expensive and genuinely task-specific — see domainTools.
 func RelevantSchemas(goal string, all []core.ToolSchema, extra map[string]bool) []core.ToolSchema {
 	g := strings.ToLower(goal)
 	out := make([]core.ToolSchema, 0, len(all))
 	for _, s := range all {
 		name := s.Function.Name
-		if coreTools[name] || extra[name] {
+		words, narrow := domainTools[name]
+		if !narrow || extra[name] {
 			out = append(out, s)
-			continue
-		}
-		words, classified := domainTools[name]
-		if !classified {
-			out = append(out, s) // unknown tool: err toward offering it
 			continue
 		}
 		for _, w := range words {

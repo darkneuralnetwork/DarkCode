@@ -34,9 +34,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/darkcode/httpx"
 )
 
 // ITFDocument is the top-level structure of an Internal Tool Format file.
@@ -251,7 +254,14 @@ func itfHTTPHandler(t ITFTool) ToolHandler {
 		if method == "" {
 			method = "GET"
 		}
-		url := renderTemplate(t.Execution.URL, args)
+		// The URL is a template filled with MODEL-SUPPLIED arguments, so values
+		// are percent-encoded on the way in. Without that, an argument
+		// containing "/", "?", "#" or "@" does not fill a slot in the URL — it
+		// rewrites the URL's structure, and a template like
+		// "https://api.example.com/{{path}}" becomes a request to wherever the
+		// model wanted. The dial-time SSRF guard below is the backstop; this
+		// stops the request being malformed in the first place.
+		url := renderURLTemplate(t.Execution.URL, args)
 		body := renderTemplate(t.Execution.Body, args)
 
 		timeout := t.Execution.Timeout
@@ -276,7 +286,7 @@ func itfHTTPHandler(t ITFTool) ToolHandler {
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpx.Client(httpx.Fetch).Do(req)
 		if err != nil {
 			return &ToolResult{Name: t.Name, Success: false, Error: err.Error()}
 		}
@@ -296,6 +306,28 @@ func itfHTTPHandler(t ITFTool) ToolHandler {
 // renderTemplate replaces every {{name}} token with the string form of the
 // matching value from args. Unknown names become empty strings.
 func renderTemplate(tmpl string, args map[string]interface{}) string {
+	return renderWith(tmpl, args, func(s string) string { return s })
+}
+
+// renderURLTemplate is renderTemplate for a URL: each substituted value is
+// percent-encoded so it can only fill the slot it was written for.
+//
+// The values come from the model. Unencoded, an argument containing "/", "?",
+// "#" or "@" does not fill a slot — it restructures the URL. "{{q}}" in
+// "https://api.example.com/search/{{q}}" with q = "../../admin" walks the path;
+// with q = "x@evil.example/" it can move the authority. The dial-time SSRF
+// guard is the backstop for where a request ends up, but a request that was
+// never meant to be built should not be built.
+//
+// Encoding is per-value rather than over the whole rendered string, because the
+// template's own separators are legitimate and must survive.
+func renderURLTemplate(tmpl string, args map[string]interface{}) string {
+	return renderWith(tmpl, args, url.PathEscape)
+}
+
+// renderWith is the shared template walk; escape is applied to substituted
+// values only, never to the template's literal text.
+func renderWith(tmpl string, args map[string]interface{}, escape func(string) string) string {
 	// Fast path: no placeholders.
 	if !strings.Contains(tmpl, "{{") {
 		return tmpl
@@ -316,7 +348,7 @@ func renderTemplate(tmpl string, args map[string]interface{}) string {
 			break
 		}
 		key := strings.TrimSpace(tmpl[j : j+end])
-		sb.WriteString(toStr(args[key]))
+		sb.WriteString(escape(toStr(args[key])))
 		i = j + end + 2
 	}
 	return sb.String()
@@ -413,7 +445,7 @@ func HTPExecute(ctx context.Context, baseURL, tool string, args map[string]inter
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpx.Client(httpx.Fetch).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("htp: %w", err)
 	}
@@ -478,7 +510,7 @@ func HTPDiscover(ctx context.Context, baseURL string, headers map[string]string)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpx.Client(httpx.Fetch).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("htp discover: %w", err)
 	}

@@ -75,7 +75,10 @@ func TestPatchAppliesFuzzyMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := (&FileTool{}).PatchFile(context.Background(), map[string]interface{}{
+	// The temp dir is this call's workspace. Path confinement now falls back to
+	// the working directory when none is declared, so a tool writing under /tmp
+	// has to say where it is working — which is what a real caller does.
+	res := (&FileTool{}).PatchFile(withWorkspace(dir), map[string]interface{}{
 		"path":       path,
 		"old_string": "println(\"old\")",
 		"new_string": "    println(\"new\")",

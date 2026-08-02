@@ -306,41 +306,6 @@ func (t *WebTool) searchWikipedia(ctx context.Context, query string) string {
 	return out.String()
 }
 
-// extractTags is a simple HTML extractor for DDG snippets (kept for backward compatibility or other tools)
-func extractTags(html string, classMatch string, limit int) []string {
-	var results []string
-	searchStr := "class='" + classMatch + "'"
-	idx := 0
-	for len(results) < limit {
-		start := strings.Index(html[idx:], searchStr)
-		if start == -1 {
-			break
-		}
-		start += idx
-		// find closing tag
-		closeTag := strings.Index(html[start:], "</td>")
-		if closeTag == -1 {
-			break
-		}
-		closeTag += start
-
-		// find start of content
-		contentStart := strings.Index(html[start:closeTag], ">")
-		if contentStart == -1 {
-			idx = closeTag
-			continue
-		}
-		contentStart += start + 1
-
-		text := html[contentStart:closeTag]
-		text = strings.ReplaceAll(text, "<b>", "")
-		text = strings.ReplaceAll(text, "</b>", "")
-		results = append(results, strings.TrimSpace(text))
-		idx = closeTag
-	}
-	return results
-}
-
 // WebResult is a helper for error results.
 type WebResult struct{ err error }
 

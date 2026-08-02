@@ -65,9 +65,7 @@ func (b *toolBreaker) recordSuccess(name string) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.state[name]; ok {
-		delete(b.state, name)
-	}
+	delete(b.state, name) // delete on a missing key is already a no-op
 }
 
 // recordFailure registers an execution failure. On reaching the threshold the

@@ -16,9 +16,20 @@ func withWorkspace(ws string) context.Context {
 func TestConfineWrite(t *testing.T) {
 	ws := t.TempDir()
 
-	// No workspace in context → always allowed (preserves CLI behavior).
-	if err := confineWrite(context.Background(), "/etc/passwd"); err != nil {
-		t.Errorf("no-workspace confineWrite should be a no-op, got %v", err)
+	// No workspace in context → confined to the working directory.
+	//
+	// This assertion used to read "should be a no-op, preserves CLI behavior".
+	// That behaviour was the bug: core.WorkspaceKey is set only by the HTTP
+	// handlers and the ACP entry point, so on the whole CLI surface the guard
+	// returned nil and the agent could write anywhere the user could. The test
+	// was encoding the hole as the contract, which is why it survived review.
+	if err := confineWrite(context.Background(), "/etc/passwd"); err == nil {
+		t.Error("a write to /etc with no workspace in context must be refused, not permitted")
+	}
+	// …but the working directory itself stays writable, so ordinary use is
+	// unaffected.
+	if err := confineWrite(context.Background(), "./scratch.txt"); err != nil {
+		t.Errorf("a write inside the working directory must still be allowed, got %v", err)
 	}
 
 	ctx := withWorkspace(ws)

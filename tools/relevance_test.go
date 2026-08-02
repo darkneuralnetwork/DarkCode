@@ -38,6 +38,20 @@ func TestRelevanceKeepsTheCoreToolset(t *testing.T) {
 }
 
 // TestRelevanceDropsUnrelatedSpecialists — the actual saving.
+//
+// The floor here was 40% and is now 30%, which is a deliberate trade and worth
+// recording rather than quietly adjusting.
+//
+// Measured against the registry, the four narrow tools below are 3,010 of 8,171
+// schema bytes: 37%. The old filter reached ~43% by ALSO gating graph_query,
+// lsp, debug, git, todo and web_search behind words the user had to type — so
+// "fix the failing test" was offered none of them. That bought roughly six
+// percentage points of one fixed-size component of the prompt, and paid for it
+// by withholding the tools that most distinguish this agent from a plain ReAct
+// loop, on exactly the tasks they exist for.
+//
+// The floor stays well above zero so the filter still has to earn its
+// complexity; it simply no longer rewards withholding useful tools.
 func TestRelevanceDropsUnrelatedSpecialists(t *testing.T) {
 	all := fullSchemas(t)
 	sub := RelevantSchemas("rename the Greet function to Welcome", all, nil)
@@ -51,7 +65,7 @@ func TestRelevanceDropsUnrelatedSpecialists(t *testing.T) {
 	if len(small) >= len(full) {
 		t.Fatalf("no saving: %d vs %d bytes", len(small), len(full))
 	}
-	if saving := 100 - (len(small) * 100 / len(full)); saving < 40 {
+	if saving := 100 - (len(small) * 100 / len(full)); saving < 30 {
 		t.Errorf("saving is only %d%%; the filter is not earning its complexity", saving)
 	}
 }
