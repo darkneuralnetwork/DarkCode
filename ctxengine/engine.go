@@ -85,11 +85,16 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 		trimmed = e.compressor.Compress(ctx, ranked, convoBudget)
 	}
 
-	// Final order: system prompt → ranked/trimmed conversation. Re-sort the
-	// conversation to original chronological order for coherence (ranking
-	// determined *what* to keep; we present it in order).
-	trimmed = chronologicalSort(trimmed)
-
+	// Final order: system prompt → the trimmed conversation in ranker order.
+	//
+	// This is NOT chronological. The ranker returns most-relevant-first and we
+	// present that order unchanged. A chronologicalSort helper used to be
+	// called here; it returned its input untouched while its own comment
+	// explained it had decided not to sort, so the claimed re-ordering never
+	// happened. Restoring chronological order is a real (and probably correct)
+	// change to make — it wants message timestamps, which core.Message does not
+	// carry today — but it should be made deliberately and measured, not
+	// implied by a no-op.
 	final := make([]core.Message, 0, len(system)+len(trimmed)+1)
 	final = append(final, system...)
 	if req.SystemPrompt != "" {
@@ -98,18 +103,6 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 	final = append(final, trimmed...)
 
 	return &ContextWindow{Messages: final}, nil
-}
-
-// chronologicalSort stable-sorts messages by recreating original order from
-// the conversation. Since we don't have timestamps, we preserve the order in
-// which messages arrive (which is chronological for STM).
-func chronologicalSort(msgs []core.Message) []core.Message {
-	// The ranker returns most-relevant-first; for presentation we want
-	// chronological. We reverse the ranked slice ONLY if it looks reversed,
-	// but the safest behavior is to keep the ranker's order (the kernel
-	// already adds messages chronologically and the LLM handles order fine).
-	// To keep it simple and predictable, return as-is.
-	return msgs
 }
 
 // Summarize is a convenience wrapper exposing the summarizer.

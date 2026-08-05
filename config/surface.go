@@ -129,6 +129,8 @@ var descriptors = []Field{
 		Help:    "How many models answer: one, escalate on difficulty, or all of them."},
 	{Name: "debate", Label: "Let models debate a conflict", Group: "Models", Tier: TierAdvanced, Kind: "bool",
 		Help: "Consensus only. When two answers disagree and the graph cannot settle it, they critique each other once."},
+	{Name: "reviewer", Label: "Review work after the checks pass", Group: "Models", Tier: TierAdvanced, Kind: "bool",
+		Help: "One extra call once a run is proven done, saying how it could be better. It can never fail a run."},
 	{Name: "context_length", Label: "Context length", Group: "Models", Tier: TierDerived, Kind: "int",
 		Help: "Follows from the model."},
 	{Name: "compress_context", Label: "Compress context", Group: "Execution", Tier: TierDerived, Kind: "bool",

@@ -657,6 +657,11 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// the setting would be one nothing reads.
 	a.Kernel.SetDebate(a.Cfg.Debate)
 
+	// Same reason as debate, and more urgently: without this line the reviewer
+	// cannot run at all. SetReviewer had no caller outside tests, so 173 lines
+	// wired into the execute path were unreachable in a shipped binary.
+	a.Kernel.SetReviewer(a.Cfg.Reviewer)
+
 	gate := a.Kernel.Gate()
 	gate.SetDenyRules(a.Cfg.DenyRules)
 	gate.SetAllowedTools(a.Policy.Tools.AllowOnly)

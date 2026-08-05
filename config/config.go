@@ -132,6 +132,18 @@ type Config struct {
 	// there is no disagreement to settle and it does nothing.
 	Debate bool `json:"debate,omitempty"`
 
+	// Reviewer runs a post-acceptance review: once the checks have proven the
+	// work is done, one graph-grounded call says how it could be better. It
+	// runs after the acceptance gate, never instead of it, and can never fail
+	// a run — see orchestrator/reviewer.go for why both of those matter.
+	//
+	// This setting exists because the feature shipped without one and was
+	// therefore unreachable: reviewerOn's only setter was called from tests,
+	// so 173 wired-in lines could not execute in a real binary. Off by
+	// default, because an extra call on every successful run is a real cost
+	// for advice nobody asked for.
+	Reviewer bool `json:"reviewer,omitempty"`
+
 	// BackgroundWork is the one preference the three fields above were asking
 	// separately: "off", "light" (keep indexes current) or "full" (also run the
 	// health daemon). Empty means infer it from health_daemon/auto_ingest, so

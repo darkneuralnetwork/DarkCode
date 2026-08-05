@@ -13,3 +13,5 @@ kernel-entry 6
 orchestrator-impl-imports 12
 # HTTP clients constructed outside safeurl/
 raw-http-clients 0
+# Exported Kernel setters that nothing outside tests calls
+unwired-kernel-setters 0

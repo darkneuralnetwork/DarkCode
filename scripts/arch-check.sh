@@ -85,6 +85,27 @@ EXCLUDES=(
 # orchestrator-impl-imports only applies within orchestrator/
 RESTRICTS=( '' '' '' '^\./orchestrator/' '' )
 
+# unwired_setters lists exported Kernel Set* methods that no non-test code
+# calls. Such a method is a feature switch with no way to reach it: the
+# reviewer shipped this way, 173 lines wired into the execute path whose only
+# setter was called from reviewer_test.go, so it could not run in a real
+# binary. go vet cannot see this — an exported method is "used" by definition.
+unwired_setters() {
+  local m callers
+  grep -hoE '^func \(k \*Kernel\) (Set[A-Za-z0-9_]+)\(' orchestrator/*.go 2>/dev/null \
+    | sed -E 's/^func \(k \*Kernel\) //; s/\($//' | sort -u \
+  | while read -r m; do
+      [ -z "$m" ] && continue
+      callers=$(grep -rn --include='*.go' "\.$m(" . 2>/dev/null \
+        | grep -v '_test\.go:' \
+        | grep -v "^\./orchestrator/.*func (k \*Kernel) $m" \
+        | grep -vE "^\./orchestrator/[a-z_]+\.go:[0-9]+:func " \
+        | grep -c . )
+      [ "$callers" -eq 0 ] && echo "orchestrator: Kernel.$m has no non-test caller"
+    done
+  true
+}
+
 declare -A CURRENT
 for i in "${!NAMES[@]}"; do
   out="$(scan "${PATTERNS[$i]}" "${EXCLUDES[$i]}")"
@@ -100,6 +121,18 @@ for i in "${!NAMES[@]}"; do
     echo
   fi
 done
+
+# Sixth boundary, computed differently (call-graph, not a line count).
+unwired_out="$(unwired_setters)"
+unwired_count="$(printf '%s' "$unwired_out" | grep -c . || true)"
+CURRENT["unwired-kernel-setters"]="$unwired_count"
+NAMES+=(unwired-kernel-setters)
+DESCS+=("Exported Kernel setters that nothing outside tests calls")
+if [ "$MODE" = "list" ]; then
+  echo "── unwired-kernel-setters ($unwired_count) — ${DESCS[-1]}"
+  [ "$unwired_count" -gt 0 ] && printf '%s\n' "$unwired_out" | sed 's/^/   /'
+  echo
+fi
 
 [ "$MODE" = "list" ] && exit 0
 

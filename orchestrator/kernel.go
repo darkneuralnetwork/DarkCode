@@ -63,15 +63,13 @@ type Kernel struct {
 	modeApprover *permission.ModeAwareApprover
 
 	// agenticLoop is the optional ReAct execution loop (looping technology).
-	// Non-nil always; activated/deactivated via SetAgenticLoop.
+	// Non-nil always; whether it runs is decided per request, see requestLoop.
 	agenticLoop *loop.ReActLoop
-	agenticOn   bool
 
 	// requestLoop is a per-request override of the agentic-loop decision.
-	// nil ⇒ fall back to the master toggle (agenticOn). The web chat sets
-	// this from chat_mode=="loop" so the loop runs only when the user
-	// explicitly picks Loop mode; the CLI/single-query path leaves it nil so
-	// the master toggle still drives loop usage there. Guarded by mu.
+	// nil ⇒ the loop does not run. The web chat sets this from
+	// chat_mode=="loop" and the CLI from the /loop verb, so iteration is
+	// always an explicit per-message choice. Guarded by mu.
 	requestLoop *bool
 	// requestPlan forces (or forbids) the planning phase for one request.
 	// It is what separates /graph from /loop: both iterate, but /graph always
@@ -442,28 +440,6 @@ func (k *Kernel) softenBeliefsAfterRollback(changes []checkpoint.Change) {
 	}
 }
 
-// SetApprovalCallback is a legacy bridge: it wraps the simple bool callback
-// as a permission.Approver on the gate. Prefer SetPermissionGate +
-// Gate().SetApprover for the full allow-once / allow-session / deny flow.
-func (k *Kernel) SetApprovalCallback(cb func(action string) bool) {
-	if cb == nil {
-		return
-	}
-	g := k.Gate()
-	g.SetApprover(func(req permission.ApprovalRequest) permission.Verdict {
-		if cb(req.Summary) {
-			return permission.AllowV(permission.DecisionAllowOnce)
-		}
-		return permission.DenyV("")
-	})
-}
-
-// SetAgenticLoop is retained so an older client that still posts the setting
-// gets a definite answer rather than a 500, but it no longer stores anything:
-// whether a request iterates is decided per request by the /loop verb or the
-// Loop chat mode. The iteration ceiling is loop.DefaultMaxLoops.
-func (k *Kernel) SetAgenticLoop(bool, int) {}
-
 // ApplyRequestOverrides applies per-request routing/safety/loop/tool overrides
 // to the live router, gate, and kernel flags, returning a restore func to defer.
 // Empty strings leave a setting unchanged; loop is "on"/"off"/"", tools is
@@ -594,17 +570,21 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 }
 
 // loopEnabledForRequest reports whether the ReAct loop should run for the
-// current request. A per-request override (set by the web chat's Loop mode)
-// wins; otherwise the master toggle (agenticOn) decides — preserving the
-// CLI/single-query behaviour where the loop runs iff the user enabled it in
-// Settings. Mutex-safe.
+// current request. Iteration is a per-request decision — the /loop verb or the
+// Loop chat mode — so with no override the answer is no.
+//
+// This used to fall back to a master `agenticOn` toggle, described as
+// "preserving the CLI behaviour where the loop runs iff the user enabled it in
+// Settings". That setting was removed when strategy moved to verbs, but the
+// field stayed: never assigned, so the fallback was a constant false wearing
+// the costume of a user preference. Mutex-safe.
 func (k *Kernel) loopEnabledForRequest() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.requestLoop != nil {
 		return *k.requestLoop
 	}
-	return k.agenticOn
+	return false
 }
 
 // toolsDisabledForRequest reports whether tool access is disabled for the
@@ -626,13 +606,6 @@ func (k *Kernel) readOnlyForRequest() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.requestReadOnly != nil && *k.requestReadOnly
-}
-
-// AgenticLoopEnabled reports whether the ReAct loop is currently active.
-func (k *Kernel) AgenticLoopEnabled() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.agenticOn
 }
 
 // ReloadModels re-wires the model router with the latest config so that models
