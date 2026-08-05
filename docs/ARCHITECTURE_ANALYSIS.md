@@ -596,6 +596,9 @@ Each stage is one revertible commit, `make ci` green (race detector included).
 | 5 — Context re-tiering | `0a7e944`, `e2bd18d` | **done** — trigger fixed, offloading added, retention added |
 | 5b — Surface parity | `0179179`, `3e8e94f`, `4519fa6` | **done** — four surfaces, one door, identical behaviour |
 | 5c — Adaptive concurrency | `4519fa6` | **done** — `auto` decides per wave from live signals |
+| 5d — Tool-result offloading | `e2bd18d` | **done** — verified live on a 208 KB file |
+| 5e — Conversational turns keep tools | `23156de` | **done** — no tool-less mode; read-only is per-call |
+| 5f — Content-hash file beliefs | `67c8c31`, `ba342d7` | **done** — catches uncommitted edits |
 | 6 — Memory Manager | — | not started (32 write sites) |
 | 7 — Data Source Manager | — | not started |
 | 8 — Documentation | — | this file |
@@ -709,6 +712,62 @@ by default so it carries no user-visible urgency, and it wants the Data Source
 Manager (Stage 7) to exist first so `Evidence` has a real home instead of
 reaching into `memory` directly. Doing it late in a long session is how the two
 reverts in this repository's history happened.
+
+---
+
+## 6.3 Measured against the alternatives
+
+Held against the agents this competes with, per mechanism rather than per
+feature list. Only the rows where the mechanisms genuinely differ.
+
+| Mechanism | CLI agent A | IDE agent B | Agents C / D | DarkCode now |
+|---|---|---|---|---|
+| Oversized tool result | truncate | truncate | truncate | **offload + head/tail preview + `read_result` handle** |
+| Conversation at the limit | compact, originals discarded | RAG-first, no accumulation | compact, pre-flush | **compact at window−reserve, originals retained** |
+| Repo knowledge across sessions | none — re-reads each session | vector index, re-embedded on change | none | **graph with provenance + confidence** |
+| Staleness of that knowledge | n/a | re-embed on file change | n/a | **per-file content hash, catches uncommitted edits** |
+| Concurrency | fixed | fixed | fixed | **decided per wave from provider pressure + cores** |
+| Conversational turn | tools always available | retrieval always available | tools available | **read-only tools; no tool-less mode** |
+| Read-only boundary | per-tool | n/a | per-tool | **per-call — `pdf info` reads, `pdf merge` writes** |
+
+### Where this is genuinely ahead
+
+**Tool-result offloading.** The others truncate; the bytes are gone. Here the
+full result is content-addressed on disk and the model gets head *and* tail
+plus a handle. Verified live: asked for the **last** function in a 208 KB file,
+the agent answered correctly — impossible under head-only truncation. ~282 KB
+of observation became ~3 KB of context with the answer still reachable.
+
+**Knowledge that knows when it is wrong.** Agent A starts every session
+cold. Agent B's index re-embeds on change but carries no provenance or
+confidence, so it cannot tell you *why* it believes something. Here a file
+belief carries the hash of the version it was formed from, so "which of my
+beliefs are about a file that has changed" is exact — and it catches
+uncommitted edits, including the agent's own, which is the most likely moment
+for a belief to go wrong mid-task.
+
+**Concurrency as a decision, not a constant.** Everyone else ships a number.
+This reads provider pressure, budget, locality and core count per wave, and
+explains the choice.
+
+### Where it is still behind
+
+- **Retrieval quality.** Agent B's whole-codebase embedding index beats the
+  agent's read-triggered graph for cold "where is X" questions. The graph is
+  richer per fact but sparser overall — it knows what the agent has looked at.
+- **Multi-language parsing is regex** outside Go. tree-sitter needs CGo, which
+  costs the static binary. Deliberate, and correctly documented as
+  "superset-with-noise".
+- **No published benchmark number.** The harness and fixtures exist and now
+  drive the product's own API surface, but nothing has been scored.
+
+### The rule this section exists to enforce
+
+Adding a mechanism because a competitor has it is how the anti-scope list in
+`HERMES_GAP_STATUS.md` §9.4 gets violated. The question is always whether the
+*mechanism* is better, not whether the feature is present — retrieval and
+compaction are complementary layers (§5.0), and the reason to keep both is that
+each solves something the other structurally cannot.
 
 ---
 
