@@ -36,7 +36,6 @@ import (
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/permission"
-	"github.com/darkcode/planwork"
 	"github.com/darkcode/project"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
@@ -651,43 +650,6 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// prompt responsive and honors the sequential contract; the plan updates
 	// on the next Parallel request. (Retry + timeout are still applied in
 	// Parallel mode so a hanging/slow model can't linger for 300s.)
-	if c.activeProject != "" && c.projects != nil && c.kernel != nil && !c.kernel.SequentialMode() {
-		go func(projID, q, out string) {
-			// One implementation, shared with the web UI. This used to be a
-			// second copy: two calls instead of one, against a cloud client
-			// built right here — which meant it skipped the router, the cost
-			// governor and token accounting, so a console session spent money
-			// the usage report never showed. See planwork.
-			//
-			// The model comes from RouteAux, the kernel's decision point for
-			// auxiliary calls, so this prefers a healthy local model exactly
-			// as the web path does.
-			client, model, ok := c.kernel.RouteAux("plan_amend", 0)
-			if !ok || client == nil {
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			oldPlan, _ := c.projects.GetPlan(projID)
-			oldWorkflow, _ := c.projects.GetWorkflow(projID)
-			amended := fmt.Sprintf("%s\n\n(the agent has just done this work: %s)", q, out)
-
-			plan, workflow := planwork.Amend(ctx, client, model, amended, oldPlan, oldWorkflow)
-			if plan != oldPlan {
-				c.projects.SetPlan(projID, plan)
-				if c.emitter != nil {
-					c.emitter.EmitPlanUpdated(projID, plan)
-				}
-			}
-			if workflow != oldWorkflow {
-				c.projects.SetWorkflow(projID, workflow)
-				if c.emitter != nil {
-					c.emitter.EmitWorkflowUpdated(projID, workflow)
-				}
-			}
-		}(c.activeProject, origQuery, result)
-	}
 }
 
 // recordActivity appends an event to the in-memory activity log used by /log.

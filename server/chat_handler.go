@@ -241,6 +241,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		amending := needsPlanAmend(req.Query, s.kernel.RecentSTM(), skipReadOnly)
 		if amending {
 			plan, workflow = s.amendPlanWorkflowSync(ctx, req.Project, req.Query, plan, workflow)
+			// Amending before the turn is what lets the plan drive execution.
+			// Tell the shared post-turn refresh not to rewrite the same two
+			// documents again afterwards.
+			turn.PlanAlreadyAmended = true
 		}
 		if id, line, ok := orchestrator.NextPendingWorkflowTask(workflow); ok {
 			pendingTaskID = id

@@ -153,3 +153,90 @@ func TestNilEngineIsRefused(t *testing.T) {
 			"where no recover can see it")
 	}
 }
+
+// ── post-turn parity ────────────────────────────────────────────────────────
+
+type recordingPostTurn struct {
+	calls []Request
+	panic bool
+}
+
+func (r *recordingPostTurn) AfterTurn(ctx context.Context, req Request, out string) {
+	r.calls = append(r.calls, req)
+	if r.panic {
+		panic("post-turn work exploded")
+	}
+}
+
+// TestPostTurnRunsForEverySurface is the parity regression. The web ran seven
+// post-turn steps, the console one, and the editor and headless paths none, so
+// a project's plan updated when you asked from the browser and silently did not
+// when you asked from the terminal.
+func TestPostTurnRunsForEverySurface(t *testing.T) {
+	for _, surface := range []Surface{SurfaceCLI, SurfaceHeadless, SurfaceGUI, SurfaceACP, SurfaceAPI} {
+		t.Run(string(surface), func(t *testing.T) {
+			rec := &recordingPostTurn{}
+			m, err := New(&fakeEngine{out: "done"}, WithPostTurn(rec))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.Execute(context.Background(), Request{
+				Query: "x", Surface: surface, Workspace: t.TempDir(), Project: "p1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(rec.calls) != 1 {
+				t.Errorf("%s ran post-turn work %d times, want 1 — surfaces have drifted apart again", surface, len(rec.calls))
+			}
+		})
+	}
+}
+
+// TestPostTurnDoesNotRunWhenTheTurnFailed — there is no new state to reflect.
+func TestPostTurnDoesNotRunWhenTheTurnFailed(t *testing.T) {
+	rec := &recordingPostTurn{}
+	m, _ := New(&fakeEngine{err: context.DeadlineExceeded}, WithPostTurn(rec))
+
+	if _, err := m.Execute(context.Background(), Request{
+		Query: "x", Surface: SurfaceCLI, Workspace: t.TempDir(), Project: "p1",
+	}); err == nil {
+		t.Fatal("expected the engine error to surface")
+	}
+	if len(rec.calls) != 0 {
+		t.Error("post-turn work ran after a failed turn")
+	}
+}
+
+// TestPostTurnPanicDoesNotLoseTheAnswer — this runs in an HTTP handler
+// goroutine where neither net/http's per-connection recovery nor the recover
+// middleware can see it, so a panic here would take down the process and the
+// user would lose a turn that had already succeeded.
+func TestPostTurnPanicDoesNotLoseTheAnswer(t *testing.T) {
+	rec := &recordingPostTurn{panic: true}
+	m, _ := New(&fakeEngine{out: "the answer"}, WithPostTurn(rec))
+
+	out, err := m.Execute(context.Background(), Request{
+		Query: "x", Surface: SurfaceGUI, Workspace: t.TempDir(), Project: "p1",
+	})
+	if err != nil {
+		t.Fatalf("a panic in post-turn work failed the turn: %v", err)
+	}
+	if out != "the answer" {
+		t.Errorf("output = %q, want the engine's answer", out)
+	}
+}
+
+func TestPlanAlreadyAmendedReachesTheHook(t *testing.T) {
+	rec := &recordingPostTurn{}
+	m, _ := New(&fakeEngine{out: "done"}, WithPostTurn(rec))
+
+	if _, err := m.Execute(context.Background(), Request{
+		Query: "x", Surface: SurfaceGUI, Workspace: t.TempDir(),
+		Project: "p1", PlanAlreadyAmended: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 1 || !rec.calls[0].PlanAlreadyAmended {
+		t.Error("the hook cannot tell the plan was already amended, so it will spend a second call")
+	}
+}

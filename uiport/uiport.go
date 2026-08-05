@@ -85,6 +85,16 @@ type Request struct {
 	// These ride on the request's context and cannot be seen by another
 	// request.
 	Loop, Tools, Plan string
+
+	// PlanAlreadyAmended tells the post-turn refresh to stand down because the
+	// caller rewrote the project plan BEFORE running the turn.
+	//
+	// The web does that deliberately — amending first is what lets the plan
+	// drive the execution rather than merely describe it afterwards — and
+	// without this flag the shared post-turn hook would rewrite the same two
+	// documents a second time, spending two model calls per turn where the
+	// point of sharing the hook was to spend one.
+	PlanAlreadyAmended bool
 }
 
 // Validate reports why a request cannot be run, or nil.
@@ -107,18 +117,52 @@ func (r Request) Validate() error {
 	return nil
 }
 
+// PostTurn is work that runs after a turn succeeds, on every surface.
+//
+// It exists because the surfaces had drifted into doing different amounts of
+// it: the web ran seven post-turn steps, the console ran one, and the editor
+// and headless paths ran none. The same request produced a different result
+// depending on which door it came through — a project's plan updated when you
+// asked from the browser and silently did not when you asked from the terminal.
+//
+// An implementation must not fail the turn. The work already succeeded and the
+// user already has an answer; a plan refresh that errors is a stale plan, not a
+// failed request.
+type PostTurn interface {
+	AfterTurn(ctx context.Context, req Request, output string)
+}
+
 // Manager is the presentation layer's handle on the agent.
 type Manager struct {
-	engine Engine
+	engine   Engine
+	postTurn []PostTurn
+}
+
+// Option configures a Manager.
+type Option func(*Manager)
+
+// WithPostTurn registers work to run after every successful turn on every
+// surface. Registering it here rather than in a handler is the point: a new
+// surface gets it without knowing it exists.
+func WithPostTurn(p PostTurn) Option {
+	return func(m *Manager) {
+		if p != nil {
+			m.postTurn = append(m.postTurn, p)
+		}
+	}
 }
 
 // New returns a Manager over engine. A nil engine is refused here rather than
 // panicking later inside a goroutine, where no recover can see it.
-func New(engine Engine) (*Manager, error) {
+func New(engine Engine, opts ...Option) (*Manager, error) {
 	if engine == nil {
 		return nil, fmt.Errorf("uiport: nil engine")
 	}
-	return &Manager{engine: engine}, nil
+	m := &Manager{engine: engine}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m, nil
 }
 
 // Execute runs one turn and returns its output.
@@ -147,5 +191,21 @@ func (m *Manager) Execute(ctx context.Context, req Request) (string, error) {
 	defer restore()
 	ctx = m.engine.WithPlanOverride(ctx, req.Plan)
 
-	return m.engine.Execute(ctx, req.Query)
+	out, err := m.engine.Execute(ctx, req.Query)
+	if err != nil {
+		return "", err
+	}
+
+	// Post-turn work runs here so it runs identically for every surface. A
+	// panic in it must not take down a turn that has already succeeded, nor
+	// the process: this can be called from an HTTP handler goroutine where
+	// neither net/http's per-connection recovery nor the recover middleware
+	// can see it.
+	for _, p := range m.postTurn {
+		func() {
+			defer func() { _ = recover() }()
+			p.AfterTurn(ctx, req, out)
+		}()
+	}
+	return out, nil
 }

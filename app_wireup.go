@@ -679,7 +679,7 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 
 	// The one door from any surface into the kernel. Built here so every
 	// surface shares it and none can construct a request the others wouldn't.
-	port, err := uiport.New(a.Kernel)
+	port, err := uiport.New(a.Kernel, a.newPostTurnHooks()...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Fatal: %v\n", err)
 		os.Exit(1)
