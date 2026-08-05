@@ -14,6 +14,7 @@ import (
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/permission"
+	"github.com/darkcode/spill"
 	"github.com/darkcode/ui"
 )
 
@@ -53,6 +54,12 @@ type Registry struct {
 	emitter  *ui.EventEmitter    // optional event emitter for file_change events
 	breaker  *toolBreaker        // per-tool circuit breaker (self-healing runtime)
 	ckpt     *checkpoint.Manager // optional pre-mutation snapshotter
+	// spill offloads oversized tool results to disk and leaves a preview plus a
+	// retrievable handle in the context. nil = fall back to truncation. The
+	// registry owns this because it owns tool execution: what a tool result
+	// looks like once it reaches the model is a property of running the tool,
+	// not of whichever loop happened to call it.
+	spill *spill.Store
 }
 
 // NewRegistry creates an empty tool registry.
@@ -767,6 +774,30 @@ func (r *Registry) SetCheckpointer(m *checkpoint.Manager) {
 	r.mu.Lock()
 	r.ckpt = m
 	r.mu.Unlock()
+}
+
+// SetSpillStore installs the store used to offload oversized tool results.
+// Without one, results are truncated and the overflow is lost — see the spill
+// package for why that was the largest avoidable source of both token waste
+// and lost information in the agent.
+func (r *Registry) SetSpillStore(s *spill.Store) {
+	r.mu.Lock()
+	r.spill = s
+	r.mu.Unlock()
+}
+
+// ObserveResult returns the text for a tool result as it should appear in the
+// model's context: unchanged when small, and a head/tail preview carrying a
+// read_result handle when large.
+//
+// Every path that turns a tool result into a message goes through here, so the
+// ReAct loop and a sub-agent cannot disagree about how much of a result the
+// model gets to see.
+func (r *Registry) ObserveResult(tool, output string) string {
+	r.mu.RLock()
+	st := r.spill
+	r.mu.RUnlock()
+	return spill.Observe(st, tool, output, spill.DefaultThreshold)
 }
 
 // SetEventEmitter installs an emitter used to broadcast file_change events.

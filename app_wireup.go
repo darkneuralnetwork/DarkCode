@@ -28,6 +28,7 @@ import (
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/security"
 	"github.com/darkcode/server"
+	"github.com/darkcode/spill"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/tools/deterministic"
 	"github.com/darkcode/ui"
@@ -162,6 +163,19 @@ func (a *AppRunner) initTools(memDir string) {
 	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG()))
 
 	deterministic.RegisterAll(a.Registry)
+
+	// Oversized tool results are offloaded to disk rather than truncated away.
+	// A 200 KB file read used to reach the model as 4 KB with the remainder
+	// destroyed; now it arrives as a head/tail preview with a handle, and
+	// read_result pages through the rest. Failing to open the store is not
+	// fatal — without it the registry falls back to truncating, which is what
+	// happened before.
+	if st, err := spill.New(filepath.Join(memDir, "spill")); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: large tool results will be truncated rather than offloaded (%v)\n", err)
+	} else {
+		a.Registry.SetSpillStore(st)
+		tools.RegisterSpillTool(a.Registry, st)
+	}
 
 	// Register the KG re-sync tool and run an initial background sync so the
 	// graph holds typed symbol/import facts from boot. Async so a large

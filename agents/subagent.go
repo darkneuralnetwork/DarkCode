@@ -397,8 +397,10 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				toolName = "unknown_tool"
 			}
 			a.messages = append(a.messages, core.Message{
-				Role:       core.RoleTool,
-				Content:    content,
+				Role: core.RoleTool,
+				// Same rendering as the ReAct loop — a sub-agent used to see
+				// the untrimmed result while the loop saw 4 KB of it.
+				Content:    a.registry.ObserveResult(toolName, content),
 				ToolCallID: result.CallID,
 				Name:       toolName,
 			})

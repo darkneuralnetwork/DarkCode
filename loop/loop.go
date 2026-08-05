@@ -536,8 +536,11 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 				toolName = "unknown_tool"
 			}
 			messages = append(messages, core.Message{
-				Role:       core.RoleTool,
-				Content:    strutil.Truncate(obs, MaxObservationLen),
+				Role: core.RoleTool,
+				// Oversized results are offloaded, not truncated: the model
+				// gets a head/tail preview plus a read_result handle, so the
+				// remainder stays reachable instead of being discarded.
+				Content:    l.registry.ObserveResult(toolName, obs),
 				ToolCallID: r.CallID,
 				Name:       toolName,
 			})

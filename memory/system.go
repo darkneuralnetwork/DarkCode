@@ -29,6 +29,17 @@ type System struct {
 	// Short-Term Memory — active conversation window (in-memory only)
 	stm    []core.Message
 	stmMax int
+	// transcript holds every turn that has left the STM window, in order,
+	// whether it was pushed out by the size cap or replaced by a compaction
+	// briefing. The window is what the model is shown; this is what was said.
+	//
+	// Both paths used to just drop the overflow, so a long session silently
+	// lost its own beginning and neither the model, /log, nor the user could
+	// get it back. In memory only and not persisted: it is for answering
+	// questions within a session, not a durable record — episodic memory is
+	// that. Capped by transcriptMax so a very long session cannot grow
+	// without bound.
+	transcript []core.Message
 
 	// sessionEpoch marks the start of the current chat session. Episodic
 	// recall ignores conversation entries older than this so a "New Chat"
@@ -229,10 +240,49 @@ func (s *System) STMAdd(msg core.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stm = append(s.stm, msg)
-	// Trim to max size, keeping most recent
+	// Trim to max size, keeping most recent. What falls off the front is moved
+	// to the transcript rather than discarded — see the field comment.
 	if len(s.stm) > s.stmMax {
-		s.stm = s.stm[len(s.stm)-s.stmMax:]
+		drop := len(s.stm) - s.stmMax
+		s.transcript = append(s.transcript, s.stm[:drop]...)
+		s.stm = s.stm[drop:]
+		s.trimTranscriptLocked()
 	}
+}
+
+// transcriptMax bounds the retained history. Generous, because a message is
+// small and losing the start of a session is the failure this exists to
+// prevent, but finite so a days-long session cannot grow without bound.
+const transcriptMax = 2000
+
+// trimTranscriptLocked drops the oldest retained turns past the cap. Caller
+// holds s.mu.
+func (s *System) trimTranscriptLocked() {
+	if len(s.transcript) > transcriptMax {
+		s.transcript = s.transcript[len(s.transcript)-transcriptMax:]
+	}
+}
+
+// STMTranscript returns every turn that has left the active window, oldest
+// first. Use it to answer "what did we say earlier" after a compaction has
+// replaced those turns with a briefing.
+func (s *System) STMTranscript() []core.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]core.Message, len(s.transcript))
+	copy(out, s.transcript)
+	return out
+}
+
+// STMFullHistory returns the whole conversation as it was actually said:
+// everything that has left the window, followed by everything still in it.
+func (s *System) STMFullHistory() []core.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]core.Message, 0, len(s.transcript)+len(s.stm))
+	out = append(out, s.transcript...)
+	out = append(out, s.stm...)
+	return out
 }
 
 // STMGet returns the short-term memory messages.
@@ -249,6 +299,11 @@ func (s *System) STMClear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stm = s.stm[:0]
+	// The retained transcript goes with it. It exists so a compaction cannot
+	// lose the earlier part of THIS conversation; carrying it past a reset
+	// would let a new chat recall the previous one, which is the isolation
+	// StartNewSession and the session epoch exist to provide.
+	s.transcript = s.transcript[:0]
 }
 
 // STMTruncate drops all but the first n messages. A checkpoint rollback uses
@@ -325,6 +380,22 @@ func (s *System) STMCompress(briefing []core.Message, keepRecent int) {
 	if keepRecent > len(s.stm) {
 		keepRecent = len(s.stm)
 	}
+
+	// Flush the originals BEFORE replacing them. Compaction changes what the
+	// model is shown; it must not delete what was said. Only the turns leaving
+	// the window are recorded — the retained tail is still in stm and would
+	// otherwise be stored twice.
+	//
+	// This used to overwrite the buffer outright and the replaced turns were
+	// gone for good: from the model, from /log, and from any later question
+	// about what happened earlier in the session. Compaction fires mid-task,
+	// and an agent that summarised its own working memory and then needs a
+	// detail out of it had no way back. Read it with STMTranscript.
+	if drop := len(s.stm) - keepRecent; drop > 0 {
+		s.transcript = append(s.transcript, s.stm[:drop]...)
+		s.trimTranscriptLocked()
+	}
+
 	tail := s.stm[len(s.stm)-keepRecent:]
 	merged := make([]core.Message, 0, len(briefing)+keepRecent)
 	merged = append(merged, briefing...)

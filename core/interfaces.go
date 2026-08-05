@@ -189,6 +189,12 @@ type ToolRegistry interface {
 	LLMSchemas() interface{}
 	// LLMSchemasReadOnly returns only read-only tool schemas (Chat mode).
 	LLMSchemasReadOnly() interface{}
+
+	// ObserveResult renders a tool's output as it should appear in the model's
+	// context — whole when small, a preview with a retrieval handle when large.
+	// On the interface so every caller that builds a tool message agrees; they
+	// used to each truncate with their own constant and drop the remainder.
+	ObserveResult(tool, output string) string
 }
 
 // ============================================================================
