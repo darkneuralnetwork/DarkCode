@@ -582,6 +582,56 @@ over intact history can.
 
 ---
 
+## 6.1 Progress
+
+Each stage is one revertible commit, `make ci` green (race detector included).
+
+| Stage | Commit | State |
+|---|---|---|
+| 0 — Enforcement | `e6c37c1` | **done** — 6 boundaries in `.arch-baseline`, wired into `make ci` |
+| 1 — Delete dead weight | `dc1a31c` | **done** — net −49 lines; reviewer wired rather than deleted |
+| 2 — Request isolation | `7a3f2c2` | **done** — 4 shared flags moved to request context |
+| 3 — UI Manager | `99dd090` | **done** — 6 kernel entries → 1; path confinement armed |
+| 4 — LLM Manager | `a9a9c65` | **partial** — duplicate feature collapsed; 21 call sites remain |
+| 5 — Context re-tiering | `0a7e944` | **partial** — trigger fixed; offloading + non-destructive pending |
+| 6–8 | — | not started |
+
+### Boundary counts
+
+| Boundary | Start | Now |
+|---|---:|---:|
+| Kernel entry points | 6 | **0** |
+| LLM calls outside the model layer | 23 | **21** |
+| Memory writes outside the memory layer | 32 | 32 |
+| `orchestrator` → concrete impl imports | 12 | 12 |
+| Unwired kernel setters | 1 | **0** |
+| Raw HTTP clients outside `safeurl` | 0 | **0** |
+
+### Defects found and fixed while migrating
+
+Three were not the target of any stage; the migration surfaced them.
+
+1. **Overlapping requests shared their verb** — `requestLoop`, `requestToolsDisabled`,
+   `requestReadOnly` and `requestPlan` were single fields on the shared kernel.
+   Measured: A asks for `/loop`, B asks for no loop, A stops looping. On tool
+   scope, a Chat turn pinned read-only gained the mutating toolset because an
+   unrelated Build turn started after it. The existing depth counters fixed the
+   *restore*, never the live value. (Stage 2)
+2. **Path confinement was inert on the entire CLI** — neither CLI surface set
+   `core.WorkspaceKey`, and `confineWrite` returned `nil` when it was empty.
+   `POST /api/tools/execute` had the same hole from its own bare context, and
+   **wrote a file outside the workspace on a live binary**. THESIS.md §10 marks
+   that endpoint as "refused by path confinement `[RAN]`" — the check wrote to
+   `/etc`, which an unprivileged process cannot do whether or not the guard
+   exists, so it passed for the wrong reason. A unit test asserted the fail-open
+   as correct, commented "preserves CLI behavior". (Stage 3)
+3. **`Kernel.SetReviewer` had no non-test caller** — 173 deliberate lines wired
+   into the execute path, unreachable in a shipped binary for want of a config
+   key. `go vet` cannot see this: an exported method is "used" by definition.
+   `arch-check` gained a boundary for the class. (Stage 1)
+
+---
+
 ## 7. Migration plan
 
 Sized in **independently revertible commits**, because this repository has
