@@ -599,8 +599,8 @@ Each stage is one revertible commit, `make ci` green (race detector included).
 | 5d — Tool-result offloading | `e2bd18d` | **done** — verified live on a 208 KB file |
 | 5e — Conversational turns keep tools | `23156de` | **done** — no tool-less mode; read-only is per-call |
 | 5f — Content-hash file beliefs | `67c8c31`, `ba342d7` | **done** — catches uncommitted edits |
-| 6 — Memory Manager | — | not started (32 write sites) |
-| 7 — Data Source Manager | — | not started |
+| 6 — Memory Manager | `0931aef` | **done** — `recall` owns placement; 32 → 24 direct writes |
+| 7 — Data Source Manager | `2e124a0` | **partial** — caching landed; the read gateway needs the LLM Manager first |
 | 8 — Documentation | — | this file |
 
 ### The context stack, after Stage 5
@@ -620,10 +620,18 @@ Built as four layers rather than one lossy step (§5.0):
 |---|---:|---:|
 | Kernel entry points | 6 | **0** |
 | LLM calls outside the model layer | 23 | **21** |
-| Memory writes outside the memory layer | 32 | 32 |
+| Memory writes outside the memory layer | 32 | **24** |
 | `orchestrator` → concrete impl imports | 12 | 12 |
 | Unwired kernel setters | 1 | **0** |
 | Raw HTTP clients outside `safeurl` | 0 | **0** |
+
+The memory count measures *call shape*, not gateway coverage. The graph sync's
+ten writes route through the manager via an adapter while keeping their
+`AddNode`/`AddEdge` spelling — rewriting ten multi-line composite literals is
+churn with no behavioural payoff. Audit and learning records were removed from
+the boundary entirely: they are logs *about* the agent with exactly one
+possible destination, and a record with one destination has no placement to
+decide.
 
 ### Defects found and fixed while migrating
 
