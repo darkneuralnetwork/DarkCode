@@ -26,6 +26,19 @@ type System struct {
 	dataDir  string
 	embedder core.LLMClient
 
+	// embedCache memoises embeddings by exact text.
+	//
+	// There was no cache at all, and every call was a network round-trip. The
+	// same query was embedded two or three times per REQUEST: the cognition
+	// cascade embeds the goal for ConfidentRecall, the recall block embeds the
+	// identical goal again for HybridRetriever, and the plan gate embeds it a
+	// third time. Re-ingesting a file re-embedded every chunk it had already
+	// embedded.
+	//
+	// Exact-text keyed on purpose: a near-miss would return a vector for
+	// different words, which is a wrong answer rather than a slow one.
+	embedCache map[string][]float32
+
 	// Short-Term Memory — active conversation window (in-memory only)
 	stm    []core.Message
 	stmMax int
@@ -221,6 +234,10 @@ const embeddingTimeout = 5 * time.Second
 func (s *System) GetEmbedding(text string) ([]float32, error) {
 	s.mu.RLock()
 	client := s.embedder
+	if v, ok := s.embedCache[text]; ok {
+		s.mu.RUnlock()
+		return v, nil
+	}
 	s.mu.RUnlock()
 
 	if client == nil {
@@ -228,8 +245,31 @@ func (s *System) GetEmbedding(text string) ([]float32, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), embeddingTimeout)
 	defer cancel()
-	return client.CreateEmbedding(ctx, text)
+	vec, err := client.CreateEmbedding(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if s.embedCache == nil {
+		s.embedCache = make(map[string][]float32, embedCacheMax)
+	}
+	// Bounded by dropping everything rather than evicting one entry. Picking a
+	// victim needs recency bookkeeping on a hot path, and the access pattern
+	// here is bursty — one query embedded several times within a request, then
+	// never again — so a periodic clear costs a re-embed of whatever is still
+	// live and nothing else.
+	if len(s.embedCache) >= embedCacheMax {
+		s.embedCache = make(map[string][]float32, embedCacheMax)
+	}
+	s.embedCache[text] = vec
+	s.mu.Unlock()
+	return vec, nil
 }
+
+// embedCacheMax bounds the memo. Vectors are ~3 KB each at 768 dimensions, so
+// this is a few megabytes at worst.
+const embedCacheMax = 512
 
 // ============================================================================
 // SHORT-TERM MEMORY (STM) — in-memory only, rolling window
