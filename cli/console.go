@@ -32,11 +32,11 @@ import (
 	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
-	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/permission"
+	"github.com/darkcode/planwork"
 	"github.com/darkcode/project"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
@@ -653,47 +653,37 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// Parallel mode so a hanging/slow model can't linger for 300s.)
 	if c.activeProject != "" && c.projects != nil && c.kernel != nil && !c.kernel.SequentialMode() {
 		go func(projID, q, out string) {
-			// Wrap with retry/backoff (429/5xx) and bound the lifetime so a
-			// hanging model can't keep this goroutine alive for the full 300s
-			// HTTP timeout.
-			client := llm.WrapCloud(llm.NewClient(c.cfg.BaseURL, c.cfg.APIKey, c.cfg.Model), c.cfg.Provider, c.cfg.Model)
+			// One implementation, shared with the web UI. This used to be a
+			// second copy: two calls instead of one, against a cloud client
+			// built right here — which meant it skipped the router, the cost
+			// governor and token accounting, so a console session spent money
+			// the usage report never showed. See planwork.
+			//
+			// The model comes from RouteAux, the kernel's decision point for
+			// auxiliary calls, so this prefers a healthy local model exactly
+			// as the web path does.
+			client, model, ok := c.kernel.RouteAux("plan_amend", 0)
+			if !ok || client == nil {
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			temp := 0.0
 
 			oldPlan, _ := c.projects.GetPlan(projID)
-			planPrompt := fmt.Sprintf("Here is the current Implementation Plan:\n%s\n\nUser asked: %s\nAgent did: %s\n\nRewrite the implementation plan to reflect the new state. Output ONLY the raw markdown plan.", oldPlan, q, out)
-			llmReq1 := &core.CompletionRequest{
-				Messages: []core.Message{
-					{Role: "system", Content: "You are an AI architect. Keep the plan concise and action-oriented. Only output valid markdown."},
-					{Role: "user", Content: planPrompt},
-				},
-				Temperature: &temp,
-			}
-			pResp, err := client.ChatCompletion(ctx, llmReq1)
-			if err == nil && len(pResp.Choices) > 0 {
-				planText := pResp.Choices[0].Message.Content
-				c.projects.SetPlan(projID, planText)
+			oldWorkflow, _ := c.projects.GetWorkflow(projID)
+			amended := fmt.Sprintf("%s\n\n(the agent has just done this work: %s)", q, out)
+
+			plan, workflow := planwork.Amend(ctx, client, model, amended, oldPlan, oldWorkflow)
+			if plan != oldPlan {
+				c.projects.SetPlan(projID, plan)
 				if c.emitter != nil {
-					c.emitter.EmitPlanUpdated(projID, planText)
+					c.emitter.EmitPlanUpdated(projID, plan)
 				}
 			}
-
-			oldWf, _ := c.projects.GetWorkflow(projID)
-			wfPrompt := fmt.Sprintf("Here is the current Workflow Architecture:\n%s\n\nUser asked: %s\nAgent did: %s\n\nRewrite the workflow architecture to reflect the new state. Output ONLY the raw markdown.", oldWf, q, out)
-			llmReq2 := &core.CompletionRequest{
-				Messages: []core.Message{
-					{Role: "system", Content: "You are an AI architect. Keep the workflow architecture concise. Only output valid markdown."},
-					{Role: "user", Content: wfPrompt},
-				},
-				Temperature: &temp,
-			}
-			wResp, err := client.ChatCompletion(ctx, llmReq2)
-			if err == nil && len(wResp.Choices) > 0 {
-				wfText := wResp.Choices[0].Message.Content
-				c.projects.SetWorkflow(projID, wfText)
+			if workflow != oldWorkflow {
+				c.projects.SetWorkflow(projID, workflow)
 				if c.emitter != nil {
-					c.emitter.EmitWorkflowUpdated(projID, wfText)
+					c.emitter.EmitWorkflowUpdated(projID, workflow)
 				}
 			}
 		}(c.activeProject, origQuery, result)

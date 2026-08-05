@@ -4,7 +4,7 @@
 # Regenerate with: scripts/arch-check.sh --update
 
 # LLM calls outside the model layer (llm/, router/, provider/)
-llm-calls 23
+llm-calls 21
 # Memory mutations outside the memory layer (memory/, core/)
 memory-writes 32
 # Kernel entry points outside the UI manager
