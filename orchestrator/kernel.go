@@ -92,11 +92,6 @@ type Kernel struct {
 	pendingPlan *pendingPlanState
 	lastRunPlan *plan.Graph
 
-	// lastCompressedLen tracks the STM length at the most recent compression.
-	// Used to skip re-compressing the same window twice when two requests land
-	// while STM is between thresholds (see compressionMinGrowth). Guarded by mu.
-	lastCompressedLen int
-
 	// ctxEngine is the optional intelligent context-assembly engine
 	// ("Strategy 6b" — dedup + TF-IDF ranking + budget trimming), lazily
 	// constructed by getCtxEngine when cfg.UseCtxEngine is true. nil when

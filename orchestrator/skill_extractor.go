@@ -185,16 +185,6 @@ func keywordSet(s string) map[string]bool {
 	return out
 }
 
-// compressionMinHistory is the minimum STM length before the compressor is
-// invoked. Below this, the conversation is short enough that an LLM
-// summarization call costs more than it saves.
-const compressionMinHistory = 8
-
-// compressionMinGrowth is the minimum number of new messages since the last
-// compression before we compress again. Prevents re-compressing the same
-// window twice when two requests land while STM is between thresholds.
-const compressionMinGrowth = 4
-
 // compressionKeepRecent is how many of the most recent messages are kept
 // verbatim after compression (for conversational continuity: the compressed
 // briefing captures the gist, the recent tail preserves the active context).

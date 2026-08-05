@@ -211,24 +211,19 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Step 2: Compress context (if enabled and history is long enough to be
 	// worth an LLM call). Running compression on every request — including a
 	// trivial single-turn "what is 2+2" — adds latency and cost for no benefit,
-	// so we skip it until the STM window has accumulated meaningful history.
+	// so it runs only once the conversation genuinely crowds the window.
 	if k.cfg.CompressContext && k.compressor != nil {
 		stm := k.memory.STMGet()
-		// Compress when EITHER there's enough message-count growth (the
-		// original heuristic) OR the STM already exceeds ~60% of the primary
-		// client's window (Part 3 token-budget trigger). The token trigger
-		// catches a single giant turn that would overflow a small (local)
-		// window even at message #2 — the message-count rule alone never fired
-		// for it.
-		overTokenBudget := false
-		if win := k.primaryContextWindow(); win > 0 {
-			if compression.EstimateTokens(stm) > win*60/100 {
-				overTokenBudget = true
-			}
-		}
-		countGrown := len(stm) >= compressionMinHistory && len(stm)-k.lastCompressedLen >= compressionMinGrowth
-		if countGrown || (overTokenBudget && len(stm) >= 2) {
-			k.log("compress", "Compressing context")
+		// One trigger, and it is about tokens. This used to fire on a message
+		// COUNT as well — eight messages, grown by four — which is unrelated to
+		// how full the window is: eight short turns can be a few hundred tokens
+		// and it would still spend a model call summarising them. See
+		// compaction.go.
+		window := k.primaryContextWindow()
+		used := compression.EstimateTokens(stm)
+		if shouldCompact(len(stm), used, window) {
+			k.log("compress", fmt.Sprintf("Compacting context: %d tokens used of a %d window (threshold %d)",
+				used, window, compactionThreshold(window)))
 			snapshot, err := k.compressor.Compress(ctx, stm, userGoal)
 			if err == nil && snapshot != nil {
 				k.log("compress", fmt.Sprintf("Context compressed: %d→%d tokens (ratio: %.1f%%)",
@@ -239,7 +234,6 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 				}
 				briefing := compression.SnapshotToMessages(snapshot)
 				k.memory.STMCompress(briefing, compressionKeepRecent)
-				k.lastCompressedLen = len(k.memory.STMGet())
 			}
 		}
 	}
