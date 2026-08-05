@@ -9,6 +9,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/recall"
 )
 
 // storeEpisodic archives the task details in the episodic memory tier.
@@ -56,7 +57,7 @@ func (k *Kernel) storeEpisodic(goal string, output string, agentResults []*core.
 		Timestamp:      time.Now(),
 	}
 
-	_ = k.memory.EpisodicAdd(entry)
+	_ = k.remember(recall.Event{Entry: entry})
 }
 
 // recordOutcome is the single post-task promotion path (local-first upgrade
@@ -269,7 +270,7 @@ func fixFactConfidence(r Reflection) float64 {
 
 // pluralY returns "y"/"ies" for 1/non-1.
 func (k *Kernel) populateKnowledgeGraph(goal, output string, toolsUsed []string, agentsUsed []core.AgentRole, success bool, reflection Reflection) {
-	kg := k.memory.KG()
+	kg := k.graph()
 	if kg == nil {
 		return
 	}
@@ -470,7 +471,8 @@ func (k *Kernel) storeSemanticFacts(goal, output string, toolsUsed []string, suc
 		sb.WriteString("Result: " + summary)
 	}
 
-	_ = k.memory.SemanticAdd(key, sb.String(), "task", []string{outcome, "task"})
+	_ = k.remember(recall.Note{Key: key, Content: sb.String(), Category: "task",
+		Tags: recall.SortedTags([]string{outcome, "task"})})
 }
 
 // semanticKey produces a stable, filesystem/JSON-safe key from a goal string.

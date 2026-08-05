@@ -17,6 +17,7 @@ import (
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/plugin"
 	"github.com/darkcode/project"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/security"
 	"github.com/darkcode/server"
@@ -26,10 +27,13 @@ import (
 )
 
 type AppRunner struct {
-	Cfg          *config.Config
-	Registry     *tools.Registry
-	SourceMgr    *tools.SourceManager
-	MemSystem    *memory.System
+	Cfg       *config.Config
+	Registry  *tools.Registry
+	SourceMgr *tools.SourceManager
+	MemSystem *memory.System
+	// Recall is the single gateway for remembering a fact. Placement is its
+	// decision, not each caller's — see the recall package.
+	Recall       *recall.Manager
 	ProjectStore *project.Store
 	Emitter      *ui.EventEmitter
 	Router       *router.Router

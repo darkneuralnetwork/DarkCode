@@ -53,6 +53,13 @@ scan() {
                  if (line !~ /^\/\// && line !~ /^\*/ && line !~ /^\/\*/) print }'
 }
 
+# Audit().RecordAction and Learning().RecordFeedback are deliberately NOT in
+# the memory-writes pattern. They are logs ABOUT the agent — which tool ran at
+# what risk, whether a strategy worked — not facts about the world, and each
+# has exactly one possible destination. The gateway exists to decide placement
+# among five stores; a record with one destination has no placement to decide,
+# and routing it through a fact manager would only obscure that it is telemetry.
+#
 # Boundary definitions. Keep NAME, PATTERN and EXCLUDE aligned by index.
 NAMES=(
   llm-calls
@@ -63,21 +70,21 @@ NAMES=(
 )
 DESCS=(
   "LLM calls outside the model layer (llm/, router/, provider/)"
-  "Memory mutations outside the memory layer (memory/, core/)"
+  "Memory mutations outside the memory layer (memory/, core/, recall/)"
   "Kernel entry points outside the UI manager"
   "Concrete implementation packages imported by orchestrator"
   "HTTP clients constructed outside safeurl/"
 )
 PATTERNS=(
   '\.(ChatCompletion|ChatCompletionStream|CreateEmbedding)\('
-  '\.(EpisodicAdd|SemanticAdd|ProceduralAdd|Relate|RecordFeedback|RecordAction)\(|\.AddNode\(&core\.KGNode|\.AddEdge\(&core\.KGEdge'
+  '\.(EpisodicAdd|SemanticAdd|ProceduralAdd|Relate)\(|\.AddNode\(&core\.KGNode|\.AddEdge\(&core\.KGEdge'
   '(kernel|Kernel)\.Execute\('
   '"github.com/darkcode/(llm|memory|compression)"'
   'http\.DefaultClient|&http\.Client\{'
 )
 EXCLUDES=(
   '(^|/)(llm|router|provider)/'
-  '(^|/)(memory|core)/'
+  '(^|/)(memory|core|recall)/'
   ''
   '^\./(llm|memory|compression)/'
   '(^|/)safeurl/'

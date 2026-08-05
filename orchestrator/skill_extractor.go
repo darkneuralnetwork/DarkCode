@@ -8,6 +8,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/recall"
 )
 
 // skill_extractor.go — the learning loop.
@@ -58,7 +59,7 @@ func (k *Kernel) extractSkill(goal string, results []*core.SubAgentResult, succe
 		if len(steps) > len(existing.Steps) {
 			existing.Steps = steps // keep the richer trace
 		}
-		_ = k.memory.ProceduralAdd(existing)
+		_ = k.remember(recall.Procedure{Skill: existing})
 		return
 	}
 
@@ -72,7 +73,7 @@ func (k *Kernel) extractSkill(goal string, results []*core.SubAgentResult, succe
 		SuccessRate: 1.0,
 		Metadata:    map[string]string{"tools": strings.Join(toolsUsed, ",")},
 	}
-	_ = k.memory.ProceduralAdd(skill)
+	_ = k.remember(recall.Procedure{Skill: skill})
 	k.log("improve", fmt.Sprintf("Extracted skill: %s (%d steps)", skillName, len(steps)))
 }
 
@@ -159,7 +160,7 @@ func (k *Kernel) recallSkill(goal string) string {
 	// unhelpful skill's success rate can fall on the next outcome.
 	now := time.Now()
 	s.LastUsed = &now
-	_ = k.memory.ProceduralAdd(s)
+	_ = k.remember(recall.Procedure{Skill: s})
 	return b.String()
 }
 

@@ -5,8 +5,8 @@
 
 # LLM calls outside the model layer (llm/, router/, provider/)
 llm-calls 21
-# Memory mutations outside the memory layer (memory/, core/)
-memory-writes 32
+# Memory mutations outside the memory layer (memory/, core/, recall/)
+memory-writes 24
 # Kernel entry points outside the UI manager
 kernel-entry 0
 # Concrete implementation packages imported by orchestrator

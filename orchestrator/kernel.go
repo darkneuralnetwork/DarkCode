@@ -20,6 +20,7 @@ import (
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/permission"
 	"github.com/darkcode/plan"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/tools"
@@ -61,6 +62,11 @@ type Kernel struct {
 	// terminal approver based on the active UI mode, so switching surfaces
 	// never leaves a stale approver (the prior CLI→GUI permission bug).
 	modeApprover *permission.ModeAwareApprover
+
+	// recall is the gateway for remembering a fact: it owns placement and
+	// content-addressed identity, so the kernel states what it learned rather
+	// than choosing a store. Never nil in a kernel built by New.
+	recall *recall.Manager
 
 	// agenticLoop is the optional ReAct execution loop (looping technology).
 	// Non-nil always; whether it runs is decided per request — the loop, tool
@@ -245,6 +251,13 @@ type TaskLogEntry struct {
 // New creates the orchestration kernel with all layers wired together.
 func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System, comp *compression.Compressor, emitter *ui.EventEmitter) *Kernel {
 	errMgr := NewErrorManager()
+	// The memory gateway is built here rather than injected later, so it is
+	// never nil. An earlier version treated nil as "write the stores
+	// directly"; the code returned without writing at all, so every fact the
+	// kernel learned was silently dropped in any build that had not called
+	// SetRecall — which the tests caught immediately and a user would not have.
+	// A gateway that can be absent is a gateway that can be forgotten.
+	rec, _ := recall.New(mem)
 	factory := agents.NewAgentFactory(rtr, reg, emitter, errMgr)
 	executor := agents.NewConcurrentExecutor(factory, cfg.MaxConcurrent, emitter)
 	verifier := agents.NewVerificationPipeline(rtr, emitter, "")
@@ -265,6 +278,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		router:      rtr,
 		registry:    reg,
 		memory:      mem,
+		recall:      rec,
 		retriever:   memory.NewHybridRetriever(mem, mem.KG()),
 		compressor:  comp,
 		factory:     factory,
@@ -757,3 +771,40 @@ func (k *Kernel) Status() string {
 // Runs lists the recorded execution journals, most recent first, so a replay
 // view can offer something to open.
 func (k *Kernel) Runs() []RunSummary { return ListRuns(k.runsDir) }
+
+// SetRecall replaces the memory gateway. A nil argument is ignored rather than
+// clearing it: an absent gateway means facts go nowhere, and there is no
+// caller for whom that is the intent.
+func (k *Kernel) SetRecall(m *recall.Manager) {
+	if m == nil {
+		return
+	}
+	k.mu.Lock()
+	k.recall = m
+	k.mu.Unlock()
+}
+
+// remember routes a fact through the gateway. Bookkeeping must never fail the
+// work it describes, so the error is returned for callers that care and
+// ignorable by those that do not.
+func (k *Kernel) remember(f recall.Fact) error {
+	k.mu.Lock()
+	m := k.recall
+	k.mu.Unlock()
+	if m == nil {
+		return fmt.Errorf("orchestrator: no memory gateway")
+	}
+	return m.Remember(f)
+}
+
+// graph returns the knowledge graph to WRITE through: the recall-backed writer
+// when a manager is installed, else the store itself.
+func (k *Kernel) graph() core.KnowledgeGraphStore {
+	k.mu.Lock()
+	m := k.recall
+	k.mu.Unlock()
+	if w := recall.Graph(m); w != nil {
+		return w
+	}
+	return k.memory.KG()
+}

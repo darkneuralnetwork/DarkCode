@@ -24,6 +24,7 @@ import (
 	"github.com/darkcode/project"
 	"github.com/darkcode/provider"
 	"github.com/darkcode/provider/embedded"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/security"
@@ -138,6 +139,15 @@ func (a *AppRunner) initMemoryAndProjects() string {
 }
 
 func (a *AppRunner) initTools(memDir string) {
+	// The memory gateway comes first: every tool that remembers anything is
+	// handed it, so placement is one decision rather than one per caller.
+	rec, recErr := recall.New(a.MemSystem)
+	if recErr != nil {
+		fmt.Fprintf(os.Stderr, "Fatal: %v\n", recErr)
+		os.Exit(1)
+	}
+	a.Recall = rec
+
 	oldStore, err := memory.NewStore(filepath.Join(memDir, "memory.json"))
 	if err != nil {
 		oldStore = nil
@@ -158,9 +168,11 @@ func (a *AppRunner) initTools(memDir string) {
 		observability.Log().Info("shell commands run on "+backend.Name(), nil)
 	}
 	tools.RegisterBuiltinTools(a.Registry, oldStore, a.Router, a.Sandbox, backend)
-	tools.RegisterMemoryTool(a.Registry, tools.NewSemanticMemoryTool(oldStore, a.MemSystem))
+	memTool := tools.NewSemanticMemoryTool(oldStore, a.MemSystem)
+	memTool.Recall = rec
+	tools.RegisterMemoryTool(a.Registry, memTool)
 	tools.RegisterProjectTools(a.Registry, a.ProjectStore)
-	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG()))
+	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG(), rec))
 
 	deterministic.RegisterAll(a.Registry)
 
@@ -192,9 +204,12 @@ func (a *AppRunner) initTools(memDir string) {
 	// graph holds typed symbol/import facts from boot. Async so a large
 	// workspace never delays startup.
 	deterministicKG := a.MemSystem.KG()
+	if w := recall.Graph(rec); w != nil {
+		deterministicKG = w
+	}
 	a.Registry.Register(deterministic.NewKGSyncTool(deterministicKG))
 	cwd, _ := os.Getwd()
-	if kg, ok := deterministicKG.(*memory.KnowledgeGraph); ok {
+	if kg, ok := a.MemSystem.KG().(*memory.KnowledgeGraph); ok {
 		// The health daemon watches structure in the background so a cycle or
 		// a coupling trend is noticed when it appears, not when somebody
 		// happens to run a report. It holds itself to a share of one core, so
@@ -687,6 +702,10 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// cannot run at all. SetReviewer had no caller outside tests, so 173 lines
 	// wired into the execute path were unreachable in a shipped binary.
 	a.Kernel.SetReviewer(a.Cfg.Reviewer)
+
+	// Placement is one decision. Without this the kernel writes the stores
+	// directly, which is correct but is what made it thirty-two decisions.
+	a.Kernel.SetRecall(a.Recall)
 
 	// The one door from any surface into the kernel. Built here so every
 	// surface shares it and none can construct a request the others wouldn't.
