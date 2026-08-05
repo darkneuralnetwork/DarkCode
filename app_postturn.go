@@ -14,8 +14,15 @@ import (
 	"github.com/darkcode/uiport"
 )
 
+// sequentialReporter reports whether the agent is running one call at a time.
+// Satisfied by the kernel.
+type sequentialReporter interface{ SequentialMode() bool }
+
 // projectRefresh adapts planwork.Refresher to uiport.PostTurn.
-type projectRefresh struct{ r *planwork.Refresher }
+type projectRefresh struct {
+	r   *planwork.Refresher
+	seq sequentialReporter
+}
 
 // AfterTurn rewrites the active project's plan and workflow. Nothing happens
 // when the request named no project, which is the common case.
@@ -28,6 +35,14 @@ func (p projectRefresh) AfterTurn(ctx context.Context, req uiport.Request, outpu
 	if req.Tools == "off" || req.Tools == "readonly" {
 		return
 	}
+	// Sequential mode is the default for free-tier cloud models, where the
+	// budget is a small number of requests PER DAY. An extra call here runs
+	// alongside the user's next request and competes for that budget, and the
+	// 429 it earns looks like the agent refusing to work rather than like a
+	// plan refresh. The plan catches up on the next parallel turn.
+	if p.seq != nil && p.seq.SequentialMode() {
+		return
+	}
 	p.r.Refresh(ctx, req.Project, req.Query, output)
 }
 
@@ -37,7 +52,7 @@ func (p projectRefresh) AfterTurn(ctx context.Context, req uiport.Request, outpu
 func (a *AppRunner) newPostTurnHooks() []uiport.Option {
 	var opts []uiport.Option
 	if r := planwork.NewRefresher(a.ProjectStore, a.Kernel, a.Emitter); r != nil {
-		opts = append(opts, uiport.WithPostTurn(projectRefresh{r: r}))
+		opts = append(opts, uiport.WithPostTurn(projectRefresh{r: r, seq: a.Kernel}))
 	}
 	return opts
 }

@@ -32,8 +32,9 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 	return k.adjudicateCtx(ctx, userGoal, consensus), nil
 }
 
-// adjudicate settles a consensus round on structural evidence rather than on
-// the synthesiser's judgement.
+// adjudicateCtx settles a consensus round on structural evidence rather than on
+// the synthesiser's judgement, falling back to a debate round when the graph
+// cannot decide.
 //
 // Aggregating opinions cannot detect a confidently wrong contributor. The
 // graph can: each candidate's checkable claims — this symbol exists, it lives
@@ -42,12 +43,6 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 //
 // The synthesis keeps ties. It saw every contribution, so it is the right
 // default whenever the evidence does not actually distinguish the candidates.
-func (k *Kernel) adjudicate(consensus *core.ConsensusResult) string {
-	return k.adjudicateCtx(context.Background(), "", consensus)
-}
-
-// adjudicateCtx is adjudicate with the context and goal needed to fall back to
-// a debate round when the graph cannot decide.
 func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core.ConsensusResult) string {
 	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
 	if !ok || kg == nil || consensus == nil {
