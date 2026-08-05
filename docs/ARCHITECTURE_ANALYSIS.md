@@ -592,7 +592,7 @@ Each stage is one revertible commit, `make ci` green (race detector included).
 | 1 — Delete dead weight | `dc1a31c` | **done** — net −49 lines; reviewer wired rather than deleted |
 | 2 — Request isolation | `7a3f2c2` | **done** — 4 shared flags moved to request context |
 | 3 — UI Manager | `99dd090` | **done** — 6 kernel entries → 1; path confinement armed |
-| 4 — LLM Manager | `a9a9c65` | **partial** — duplicate feature collapsed; 21 call sites remain |
+| 4 — LLM Manager | `a9a9c65`, `d9d0211` | **done** — `modelport` holds the policy table; every call now bounded |
 | 5 — Context re-tiering | `0a7e944`, `e2bd18d` | **done** — trigger fixed, offloading added, retention added |
 | 5b — Surface parity | `0179179`, `3e8e94f`, `4519fa6` | **done** — four surfaces, one door, identical behaviour |
 | 5c — Adaptive concurrency | `4519fa6` | **done** — `auto` decides per wave from live signals |
@@ -624,6 +624,7 @@ Built as four layers rather than one lossy step (§5.0):
 | `orchestrator` → concrete impl imports | 12 | 12 |
 | Unwired kernel setters | 1 | **0** |
 | Raw HTTP clients outside `safeurl` | 0 | **0** |
+| **Model calls with no token ceiling** | **8** | **0** |
 
 The memory count measures *call shape*, not gateway coverage. The graph sync's
 ten writes route through the manager via an adapter while keeping their
