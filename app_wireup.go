@@ -49,7 +49,7 @@ func (a *AppRunner) WireUp() {
 
 func (a *AppRunner) initObservabilityAndSecurity() {
 	// 1. Boot Core Observability
-	observability.InitLogger(!a.Cfg.UIMode)
+	observability.InitLogger(!a.Cfg.UIMode, filepath.Join(defaultDarkcodeDir("logs"), "darkcode.log"))
 
 	// 2. Build the one process sandbox from config and report its status, so it
 	// is never a silent no-op. It's wired into the terminal tool in initTools.
