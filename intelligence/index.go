@@ -2,9 +2,9 @@ package intelligence
 
 import (
 	"context"
+	"github.com/darkcode/internal/repowalk"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // WorkspaceMetadata holds generic info about the project workspace.
@@ -62,7 +62,7 @@ func (p *ProjectIndex) ScanWorkspace() error {
 			return nil
 		}
 		lang := LanguageOf(path)
-		if lang == "" || strings.Contains(path, "/vendor/") || strings.Contains(path, "/node_modules/") {
+		if lang == "" || repowalk.SkipPath(path) {
 			return nil
 		}
 		data, rerr := os.ReadFile(path)

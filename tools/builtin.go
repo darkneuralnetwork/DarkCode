@@ -144,6 +144,11 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(gitTool.Schema()),
 		Handler:     gitTool.Execute,
 		Category:    "git",
+		// status, diff, log and show only read the repository; add, commit and
+		// stash change it. branch is excluded deliberately — bare `git branch`
+		// lists, but `git branch -D` deletes, and the extra-args field is
+		// model-supplied.
+		ReadOnlyWhen: readOnlyOperations("status", "diff", "log", "show"),
 	})
 
 	// Monitoring tool
@@ -153,6 +158,9 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 		Parameters:  MustParseSchema(monitorTool.Schema()),
 		Handler:     monitorTool.Execute,
 		Category:    "monitoring",
+		// Every monitoring action observes: it reports on the machine and
+		// changes nothing.
+		ReadOnly: true,
 	})
 
 	// PDF tool — manipulate PDF files: info, extract_text, merge, split,
@@ -176,6 +184,11 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 			`}`),
 		Handler:  pdfHandler,
 		Category: "pdf",
+		// info and extract_text observe; merge, split and rotate write new
+		// files. Flagged read-only outright this would let a Chat turn write;
+		// flagged otherwise — which is what shipped — a Chat turn could not
+		// read a PDF at all.
+		ReadOnlyWhen: readOnlyOperations("info", "extract_text"),
 	})
 
 	// Image tool — manipulate image files: info, resize, convert.
@@ -195,6 +208,8 @@ func RegisterBuiltinTools(registry *Registry, memoryStore interface{}, router co
 			`}`),
 		Handler:  imageHandler,
 		Category: "image",
+		// Same shape as pdf: info observes, resize and convert write.
+		ReadOnlyWhen: readOnlyOperations("info"),
 	})
 
 	// Memory tool (if memory store is provided)

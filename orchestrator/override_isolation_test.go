@@ -73,22 +73,38 @@ func TestOverlappingRequestsKeepTheirOwnToolScope(t *testing.T) {
 	}
 }
 
-// TestOverlappingRequestsKeepTheirOwnToolsDisabled covers General mode, the
-// third flag sharing the same field.
-func TestOverlappingRequestsKeepTheirOwnToolsDisabled(t *testing.T) {
+// TestToolsOffMeansReadOnlyNotToolless pins the replacement for General mode.
+//
+// "off" used to disable tools entirely. A turn in that mode could not search
+// the web, read a PDF, or look at a file — asked what was in a directory, the
+// agent answered that it could not see the files, because it had been given no
+// way to look. A mode that cannot check anything does not answer more cheaply,
+// it answers more confidently and less correctly.
+//
+// "off" now means the same as read-only: tools are offered, none of them can
+// change anything. The wire value is kept so an older client still works.
+func TestToolsOffMeansReadOnlyNotToolless(t *testing.T) {
 	deps := newTestKernel(t, nil)
 	k := deps.Kernel
 
 	ctxA, restoreA := k.ApplyRequestOverrides(context.Background(), "", "", "", "off", "")
 	defer restoreA()
+
+	if k.toolsDisabledForRequest(ctxA) {
+		t.Error("tools=off still disables tools outright — the turn cannot look anything up")
+	}
+	if !k.readOnlyForRequest(ctxA) {
+		t.Error("tools=off is not read-only, so a conversational turn could write files")
+	}
+
+	// And it is still isolated from a concurrent Build turn.
 	ctxB, restoreB := k.ApplyRequestOverrides(context.Background(), "", "", "", "on", "")
 	defer restoreB()
-
-	if !k.toolsDisabledForRequest(ctxA) {
-		t.Error("A is General mode (no tools) and was handed tools by B")
+	if !k.readOnlyForRequest(ctxA) {
+		t.Error("A was pinned read-only and lost it when B started")
 	}
-	if k.toolsDisabledForRequest(ctxB) {
-		t.Error("B asked for tools and had them taken away by A")
+	if k.readOnlyForRequest(ctxB) {
+		t.Error("B asked for the full toolset and was forced read-only by A")
 	}
 }
 
@@ -106,7 +122,7 @@ func TestRequestWithNoOverridesIsUnaffectedByOthers(t *testing.T) {
 	if k.loopEnabledForRequest(plain) {
 		t.Error("a request with no verb started looping because another request used /loop")
 	}
-	if k.toolsDisabledForRequest(plain) {
-		t.Error("a request with no verb lost its tools because another request was General mode")
+	if k.readOnlyForRequest(plain) {
+		t.Error("a request with no verb was pinned read-only by a concurrent chat turn")
 	}
 }

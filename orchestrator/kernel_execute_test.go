@@ -49,17 +49,22 @@ func (p *promptRecorder) sawPrompt(substr string) bool {
 	return false
 }
 
-func TestExecuteDispatchGeneralMode(t *testing.T) {
+// TestExecuteDispatchConversationalMode — a conversational turn keeps its
+// tools and skips the fan-out.
+//
+// This test used to assert the opposite: that the turn took a path with NO
+// tools at all. That was the wrong saving. The cost being avoided was the DAG
+// and its worker pipeline, not the ability to look something up, and a turn
+// that cannot check anything answers more confidently rather than more
+// cheaply. It stays a single call when nothing needs reading.
+func TestExecuteDispatchConversationalMode(t *testing.T) {
 	rec := &promptRecorder{}
 	client := &fakeLLMClient{name: "fake", respFunc: rec.respFunc}
 	deps := newTestKernel(t, client)
 
-	// chat_mode="general" disables tools for the request.
 	ctx, restore := deps.Kernel.ApplyRequestOverrides(context.Background(), "", "", "", "off", "")
 	defer restore()
 
-	// Concrete indicator ("implement") keeps it out of the clarification gate;
-	// general mode then takes the no-tools path before any trivial/DAG branch.
 	out, err := deps.Kernel.Execute(ctx, "explain how to implement HTTP caching")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -67,11 +72,13 @@ func TestExecuteDispatchGeneralMode(t *testing.T) {
 	if out == "" {
 		t.Fatal("expected a non-empty answer")
 	}
-	if !rec.sawPrompt("General (conversational) mode") {
-		t.Error("expected the general-mode (no-tools) path to be taken")
+	// The expensive part is what must not happen.
+	if rec.sawPrompt("Planning Engine") {
+		t.Error("a conversational turn decomposed into a task graph")
 	}
-	if rec.sawPrompt("Planning Engine") || rec.sawPrompt("Agentic Loop (ReAct)") {
-		t.Error("general mode must not enter the DAG or loop paths")
+	// And the turn must be read-only: no mutating tool may be offered.
+	if !deps.Kernel.readOnlyForRequest(ctx) {
+		t.Error("a conversational turn was not read-only, so it could write files")
 	}
 }
 

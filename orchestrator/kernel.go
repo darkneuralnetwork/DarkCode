@@ -488,12 +488,21 @@ func (k *Kernel) ApplyRequestOverrides(ctx context.Context, mode, safety, loop, 
 		}
 	}
 	if haveTools {
-		disabled, enabled, readOnly := true, false, true
+		enabled, readOnly := false, true
 		switch strings.ToLower(tools) {
-		case "off":
-			rs.toolsDisabled = &disabled
-		case "readonly", "read-only":
-			// Chat mode: tools enabled, but only read-only ones offered.
+		case "off", "readonly", "read-only":
+			// "off" used to mean NO tools at all — the General mode fast path.
+			// It is now the same as read-only, and the no-tools path is gone.
+			//
+			// A conversational turn still needs to look things up: search the
+			// web for something current, read a PDF the user is asking about,
+			// check what a file actually says. A mode that cannot check
+			// anything does not answer more cheaply, it answers more
+			// confidently and less correctly — which is the failure the
+			// acceptance gates and graph adjudication exist to prevent. The
+			// schema cost that justified it is already handled by relevance
+			// filtering, and read-only tools cannot change anything, so the
+			// safety boundary that mattered is kept.
 			rs.toolsDisabled = &enabled
 			rs.readOnly = &readOnly
 		case "on":

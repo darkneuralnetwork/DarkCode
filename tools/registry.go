@@ -43,6 +43,20 @@ type ToolEntry struct {
 	// fetches) and never mutates the filesystem/system. Chat mode offers only
 	// read-only tools so it can answer from the project without writing.
 	ReadOnly bool
+
+	// ReadOnlyWhen decides read-only-ness per CALL when a tool has both kinds
+	// of operation. nil means the static ReadOnly flag decides.
+	//
+	// A single flag cannot describe `pdf`: info and extract_text observe,
+	// while merge, split and rotate write new files. Flagged read-only it
+	// would let a Chat turn write; flagged otherwise — which is what shipped —
+	// a Chat turn cannot read a PDF at all, and the same was true of research
+	// and graph_query. That is how a "conversation" mode ends up unable to
+	// look anything up.
+	//
+	// The permission gate already classifies risk from the tool AND its
+	// arguments. This is the same idea for the read-only boundary.
+	ReadOnlyWhen func(args map[string]interface{}) bool
 }
 
 // Registry holds all registered tools. Thread-safe.
@@ -212,6 +226,20 @@ func (r *Registry) IsReadOnly(name string) bool {
 	return false
 }
 
+// readOnlyCall reports whether THIS invocation only observes. Falls back to
+// the static flag, so a tool without ReadOnlyWhen behaves exactly as before —
+// and a nil entry is not read-only, because the safe default for "I cannot
+// tell" is to refuse in a read-only request.
+func (e *ToolEntry) readOnlyCall(args map[string]interface{}) bool {
+	if e == nil {
+		return false
+	}
+	if e.ReadOnlyWhen != nil {
+		return e.ReadOnlyWhen(args)
+	}
+	return e.ReadOnly
+}
+
 // ToolDef / FunctionDef mirror the llm.ToolSchema but live here so the
 // registry package doesn't depend on the llm package (avoids import cycles).
 type ToolDef struct {
@@ -329,8 +357,8 @@ func (r *Registry) snapshot(tool string) {
 // sub-agent cannot switch anything and would waste turns looking for the
 // control. Telling it the truth — that its role has no write authority — is
 // what makes it stop trying.
-func readOnlyDeny(ctx context.Context, name string, entry *ToolEntry) *ToolResult {
-	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
+func readOnlyDeny(ctx context.Context, name string, entry *ToolEntry, args map[string]interface{}) *ToolResult {
+	if IsReadOnlyContext(ctx) && !entry.readOnlyCall(args) {
 		reason := core.ReadOnlyReason(ctx)
 		if reason == "" {
 			reason = "this is a read-only (Chat) request — switch to Build mode to modify files"
@@ -407,7 +435,7 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 	}
 
 	// Read-only policy + permission gate (shared with the direct-execute path).
-	if blocked := readOnlyDeny(ctx, call.Function.Name, entry); blocked != nil {
+	if blocked := readOnlyDeny(ctx, call.Function.Name, entry, args); blocked != nil {
 		result.Result = blocked
 		return result
 	}
@@ -706,7 +734,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 
 	// Read-only policy + permission gate (shared with the ReAct/DAG dispatch
 	// path) — the direct-execute surface must gate identically.
-	if blocked := readOnlyDeny(ctx, name, entry); blocked != nil {
+	if blocked := readOnlyDeny(ctx, name, entry, args); blocked != nil {
 		return blocked, nil
 	}
 	if denied := r.gateDeny(name, args); denied != nil {
@@ -811,4 +839,26 @@ func (r *Registry) SetEventEmitter(em *ui.EventEmitter) {
 // AllEntries returns all registered tool entries (for metadata queries).
 func (r *Registry) AllEntries() []*ToolEntry {
 	return r.List()
+}
+
+// readOnlyOperations builds a ReadOnlyWhen for tools that dispatch on a named
+// sub-command, where some sub-commands observe and others write. It reads
+// "operation" or "action", the two keys the built-in tools use.
+//
+// It answers false for an unrecognised or missing operation, so a new write
+// operation added later is refused in a read-only request until someone
+// deliberately lists it — the safe direction for a boundary nobody will
+// remember to revisit.
+func readOnlyOperations(observing ...string) func(map[string]interface{}) bool {
+	allowed := make(map[string]bool, len(observing))
+	for _, op := range observing {
+		allowed[op] = true
+	}
+	return func(args map[string]interface{}) bool {
+		op, _ := args["operation"].(string)
+		if op == "" {
+			op, _ = args["action"].(string)
+		}
+		return allowed[op]
+	}
 }

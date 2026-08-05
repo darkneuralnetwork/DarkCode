@@ -449,6 +449,22 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 			// actually met". It runs on every stop attempt rather than being
 			// skipped on the final iteration as it used to be — the old guard
 			// meant the last turn always declared itself done.
+			// A read-only turn that called no tools has nothing to verify. Its
+			// text IS the deliverable — there is no state change that could
+			// disagree with it — so self-evaluation is the model grading its
+			// own answer, for a call. Same reasoning as the acceptance skip
+			// above: evidence, not opinion, and here there is no evidence to
+			// have. This is what keeps a conversational question a single
+			// call now that such questions get tools instead of being denied
+			// them.
+			//
+			// Deliberately NOT extended to build turns. There, "answered
+			// without calling anything" is precisely the failure self-eval
+			// exists to catch.
+			if len(allToolCalls) == 0 && core.IsReadOnlyTools(ctx) {
+				completionVerified = true
+			}
+
 			if !completionVerified && corrections < maxCorrections {
 				done, reason, ran := l.evaluateGoalCompletion(ctx, client, modelName, goal, final)
 				switch {

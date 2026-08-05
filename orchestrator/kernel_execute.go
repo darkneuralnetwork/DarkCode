@@ -279,19 +279,20 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// this request (chat_mode=="general"), take a lightweight single-LLM-call
 	// path with NO tools offered. This is pure conversation: no DAG, no worker
 	// agents, no approval popups, no tool overhead. It is intentionally taken
-	// BEFORE the loop/DAG/consensus-trivial branches so General mode never
-	// offers tools even if the master loop toggle is on or consensus is set.
-	if k.toolsDisabledForRequest(ctx) {
-		k.log("plan", "General mode (tools disabled) — direct conversational path")
-		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
-	}
-
-	// Step 3.055: Cost guard — an obvious general question takes the single-call
-	// no-tools path instead of the worker+web_search pipeline (several LLM calls
-	// for a one-call answer), unless Loop mode or an active project wants tools.
+	// Step 3.055: Cost guard — an obvious general question goes to a single
+	// worker rather than the DAG, which would spend several calls to answer
+	// something worth one. Unless Loop mode or an active project wants more.
+	//
+	// It used to go to a path with NO tools, and that was the wrong saving.
+	// Asked "what is in this directory", the agent replied that it could not
+	// see the files — it had been given no way to look. A question being
+	// conversational says nothing about whether answering it needs the web, a
+	// PDF or a glance at the repo. The cost being avoided was the DAG, not the
+	// tools, so the tools stay and only the fan-out goes: one worker, read-only
+	// scope, model decides whether to call anything.
 	if !k.loopEnabledForRequest(ctx) && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
-		k.log("plan", "Obvious general question — direct conversational path (no tools)")
-		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
+		k.log("plan", "Obvious general question — read-only tools, no fan-out")
+		return k.executeChatReadOnly(ctx, userGoal, recallBlock)
 	}
 
 	// Step 3.5: Agentic Loop — optional ReAct execution. When enabled, delegate
