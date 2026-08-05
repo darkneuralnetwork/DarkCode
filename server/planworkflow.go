@@ -20,6 +20,7 @@ import (
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/planwork"
 )
@@ -155,6 +156,9 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 // specific reason (e.g. a clean quota message) instead of a generic error.
 func (s *Server) generatePlanWorkflow(ctx context.Context, client core.LLMClient, model, name, desc, ctxNote string) (plan, workflow string, genErr error) {
 	temp := 0.2
+	// Bound the reply — this plan and workflow generation ran with no ceiling. The
+	// number comes from the one policy table.
+	_, maxTok, _ := modelport.PolicyFor(modelport.PurposePlan)
 	sys := "You are an AI software architect. Output ONLY raw markdown, in TWO sections separated by a line containing exactly ===WORKFLOW===\n" +
 		"Section 1 = Implementation Plan: Goal Description, Proposed Changes, Verification Plan, and an Architecture section containing a ```mermaid\\ngraph TD``` whose node IDs are T1, T2, T3, ...\n" +
 		"Section 2 = Task Workflow: every step as \"- [ ] T<n>: <one-line approach>\" grouped under ## phase headings, with task IDs T1, T2, ... matching the mermaid node IDs."
@@ -165,6 +169,7 @@ func (s *Server) generatePlanWorkflow(ctx context.Context, client core.LLMClient
 			Model:       model,
 			Messages:    []core.Message{{Role: "system", Content: sys}, {Role: "user", Content: user}},
 			Temperature: &temp,
+			MaxTokens:   &maxTok,
 		})
 		if err != nil || len(resp.Choices) == 0 {
 			log.Printf("[server] plan/workflow call failed (attempt %d): %v", attempt, err)

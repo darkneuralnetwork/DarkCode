@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/modelport"
 )
 
 func contentStr(m core.Message) string {
@@ -60,8 +61,13 @@ func (s *IncrementalSummarizer) Summarize(ctx context.Context, msgs []core.Messa
 
 	// LLM fast path.
 	if s.llm != nil {
+		// Bound the summary — it ran with no ceiling, and a summary longer
+		// than what it summarises has failed. From the one policy table.
+		_, maxTok, temp := modelport.PolicyFor(modelport.PurposeCompress)
 		req := &core.CompletionRequest{
-			Model: s.llm.ModelInfo().ID,
+			Model:       s.llm.ModelInfo().ID,
+			MaxTokens:   &maxTok,
+			Temperature: &temp,
 			Messages: []core.Message{
 				{Role: core.RoleSystem, Content: "Summarize the following conversation block concisely, preserving key decisions, file paths, and outcomes. Output a compact briefing."},
 				{Role: core.RoleUser, Content: transcript},

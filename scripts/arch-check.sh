@@ -69,7 +69,7 @@ NAMES=(
   raw-http-clients
 )
 DESCS=(
-  "LLM calls outside the model layer (llm/, router/, provider/)"
+  "LLM calls outside the model layer (llm/, router/, provider/, modelport/)"
   "Memory mutations outside the memory layer (memory/, core/, recall/)"
   "Kernel entry points outside the UI manager"
   "Concrete implementation packages imported by orchestrator"
@@ -83,7 +83,7 @@ PATTERNS=(
   'http\.DefaultClient|&http\.Client\{'
 )
 EXCLUDES=(
-  '(^|/)(llm|router|provider)/'
+  '(^|/)(llm|router|provider|modelport)/'
   '(^|/)(memory|core|recall)/'
   ''
   '^\./(llm|memory|compression)/'
@@ -113,6 +113,31 @@ unwired_setters() {
   true
 }
 
+# unbounded_completions counts model calls that send no MaxTokens.
+#
+# This is the boundary that actually costs money. Eight completion sites sent
+# no ceiling, so their limit was whatever the provider defaults to — usually
+# the rest of the context window — and they included the ReAct loop's main
+# call, every sub-agent worker turn, every conversational answer, and the
+# permission judge that decides whether a dangerous tool runs.
+#
+# A line count cannot see this: the ceiling is a field in a request built
+# several lines away. So each call site is checked against its surrounding
+# request instead.
+unbounded_completions() {
+  grep -rn --include='*.go' -E '\.(ChatCompletion|ChatCompletionStream)\(' . 2>/dev/null \
+    | grep -v '_test\.go:' \
+    | grep -vE '(^|/)(llm|router|provider|modelport)/' \
+    | cut -d: -f1,2 \
+    | while IFS=: read -r file line; do
+        start=$(( line > 22 ? line - 22 : 1 ))
+        if ! sed -n "${start},$((line + 12))p" "$file" 2>/dev/null | grep -q 'MaxTokens'; then
+          echo "$file:$line: model call with no token ceiling"
+        fi
+      done
+  true
+}
+
 declare -A CURRENT
 for i in "${!NAMES[@]}"; do
   out="$(scan "${PATTERNS[$i]}" "${EXCLUDES[$i]}")"
@@ -128,6 +153,18 @@ for i in "${!NAMES[@]}"; do
     echo
   fi
 done
+
+# Seventh boundary, computed by inspecting each call's request.
+unbounded_out="$(unbounded_completions)"
+unbounded_count="$(printf '%s' "$unbounded_out" | grep -c . || true)"
+CURRENT["unbounded-completions"]="$unbounded_count"
+NAMES+=(unbounded-completions)
+DESCS+=("Model calls that send no MaxTokens")
+if [ "$MODE" = "list" ]; then
+  echo "── unbounded-completions ($unbounded_count) — ${DESCS[-1]}"
+  [ "$unbounded_count" -gt 0 ] && printf '%s\n' "$unbounded_out" | sed 's/^/   /'
+  echo
+fi
 
 # Sixth boundary, computed differently (call-graph, not a line count).
 unwired_out="$(unwired_setters)"

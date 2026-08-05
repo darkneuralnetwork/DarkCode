@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/modelport"
 )
 
 // amendSystemPrompt asks for both documents in ONE response, split by a stable
@@ -58,6 +59,9 @@ func Amend(ctx context.Context, client core.LLMClient, model, query, oldPlan, ol
 	}
 
 	temp := 0.2
+	// Bound the reply — this plan and workflow rewrite ran with no ceiling. The
+	// number comes from the one policy table.
+	_, maxTok, _ := modelport.PolicyFor(modelport.PurposePlan)
 	user := fmt.Sprintf("Current Implementation Plan:\n%s\n\nCurrent Task Workflow:\n%s\n\nThe user just requested: %s",
 		oldPlan, oldWorkflow, query)
 
@@ -68,6 +72,7 @@ func Amend(ctx context.Context, client core.LLMClient, model, query, oldPlan, ol
 			{Role: core.RoleUser, Content: user},
 		},
 		Temperature: &temp,
+		MaxTokens:   &maxTok,
 	})
 	if err != nil || resp == nil || len(resp.Choices) == 0 {
 		return plan, workflow

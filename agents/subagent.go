@@ -12,6 +12,7 @@ import (
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
@@ -209,6 +210,11 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 
 		for attempt := 0; attempt < 2; attempt++ {
 			temp := 0.7
+			// Bound the reply. This ran on every worker turn with no ceiling,
+			// so the limit was whatever the provider defaults to — usually the
+			// rest of the context window. The number comes from the one policy
+			// table rather than being invented here again.
+			_, maxTok, _ := modelport.PolicyFor(modelport.PurposeExecute)
 			var schemas []llm.ToolSchema
 			if offerTools {
 				// Scoped by role: a research or critic agent is never even
@@ -224,6 +230,7 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				Model:       modelName,
 				Messages:    a.messages,
 				Temperature: &temp,
+				MaxTokens:   &maxTok,
 				Tools:       schemas, // nil once the tool budget is spent → forces a final answer
 			}
 

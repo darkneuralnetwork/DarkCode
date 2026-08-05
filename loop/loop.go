@@ -32,6 +32,7 @@ import (
 	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/observability"
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
@@ -333,11 +334,16 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		// before dispatch (Part 3 contract). Prevents the "context window
 		// exceeded" fatal on long local-model loops.
 		messages = compression.FitClient(messages, client, 0, len(schemas))
+		// Bound the reply. The loop's main call ran every iteration with no
+		// ceiling, so the limit was whatever the provider defaults to. The
+		// number comes from the one policy table rather than a constant here.
+		_, maxTok, _ := modelport.PolicyFor(modelport.PurposeExecute)
 		req := &core.CompletionRequest{
 			Model:       modelName,
 			Messages:    messages,
 			Tools:       schemas,
 			Temperature: &temp,
+			MaxTokens:   &maxTok,
 		}
 
 		resp, err := client.ChatCompletionStream(ctx, req, &core.StreamCallbacks{

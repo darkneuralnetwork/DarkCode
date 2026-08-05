@@ -3,7 +3,7 @@
 # the migration removes violations. A boundary at 0 is enforced.
 # Regenerate with: scripts/arch-check.sh --update
 
-# LLM calls outside the model layer (llm/, router/, provider/)
+# LLM calls outside the model layer (llm/, router/, provider/, modelport/)
 llm-calls 21
 # Memory mutations outside the memory layer (memory/, core/, recall/)
 memory-writes 24
@@ -13,5 +13,7 @@ kernel-entry 0
 orchestrator-impl-imports 12
 # HTTP clients constructed outside safeurl/
 raw-http-clients 0
+# Model calls that send no MaxTokens
+unbounded-completions 0
 # Exported Kernel setters that nothing outside tests calls
 unwired-kernel-setters 0

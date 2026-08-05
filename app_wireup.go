@@ -17,6 +17,7 @@ import (
 	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/observability"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/permission"
@@ -731,9 +732,17 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+			// An approval verdict is a closed question. It ran unbounded and
+			// at the model's default temperature, so the call that decides
+			// whether a dangerous tool runs could return an essay and could
+			// return a different answer to the same question twice. Classify
+			// is deterministic and short by policy.
+			_, maxTok, temp := modelport.PolicyFor(modelport.PurposeClassify)
 			resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-				Model:    model,
-				Messages: []core.Message{{Role: core.RoleUser, Content: permission.JudgePrompt(req)}},
+				Model:       model,
+				Messages:    []core.Message{{Role: core.RoleUser, Content: permission.JudgePrompt(req)}},
+				MaxTokens:   &maxTok,
+				Temperature: &temp,
 			})
 			if err != nil || resp == nil || len(resp.Choices) == 0 {
 				return false

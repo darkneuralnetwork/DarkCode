@@ -9,6 +9,7 @@ import (
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/router"
 	"github.com/darkcode/ui"
 )
@@ -425,10 +426,14 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 	messages = compression.FitClient(messages, client, k.cfg.ContextLength, 0)
 
 	temp := 0.7
+	// Bound the reply. This answered every conversational turn with no
+	// ceiling. The number comes from the one policy table.
+	_, maxTok, _ := modelport.PolicyFor(modelport.PurposeConverse)
 	req := &llm.CompletionRequest{
 		Model:       modelName,
 		Messages:    messages,
 		Temperature: &temp,
+		MaxTokens:   &maxTok,
 		// Deliberately NO Tools field — General mode is tool-free.
 	}
 
