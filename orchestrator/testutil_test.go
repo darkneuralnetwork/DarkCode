@@ -176,3 +176,13 @@ func waitGroupTimeout(t *testing.T, wg *sync.WaitGroup, d time.Duration) {
 		t.Fatal("timed out waiting for goroutines to finish")
 	}
 }
+
+// mustOverride adapts ApplyRequestOverrides for the tests that only assert on
+// shared router/gate state (mode, safety, brain). Those settings still live on
+// the router and gate, so the returned context carries nothing they need and
+// discarding it is correct. Tests about the per-request flags must NOT use
+// this — they need the context. See override_isolation_test.go.
+func mustOverride(k *Kernel, mode, safety, loop, tools, brain string) func() {
+	_, restore := k.ApplyRequestOverrides(context.Background(), mode, safety, loop, tools, brain)
+	return restore
+}

@@ -187,7 +187,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Checked BEFORE the cognition cascade so a cached answer can never
 	// swallow an "approve", and only in tool-enabled modes (General/Chat
 	// requests pass through untouched — the pending plan stays pending).
-	if !k.toolsDisabledForRequest() && !k.readOnlyForRequest() {
+	if !k.toolsDisabledForRequest(ctx) && !k.readOnlyForRequest(ctx) {
 		if out, handled, err := k.handlePendingPlan(ctx, userGoal); handled {
 			return out, err
 		}
@@ -260,7 +260,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	k.mu.Lock()
 	hasProjectGuidance := k.projectPlan != "" || k.projectWorkflow != ""
 	k.mu.Unlock()
-	if !k.toolsDisabledForRequest() &&
+	if !k.toolsDisabledForRequest(ctx) &&
 		classifyGoalIntent(userGoal, k.memory.STMGet(), hasProjectGuidance) == intentVagueAction {
 		k.log("plan", "Request has no actionable subject — requesting clarification")
 		clarification := "I can help, but your request doesn't name anything to act on. Tell me what you'd like me to work on — the goal or subject, plus any constraints or examples."
@@ -276,7 +276,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// model can read/search the project and web to answer, but can never write
 	// files or run commands. Output goes to the reply. This is what makes Chat
 	// "answer, don't build" while still seeing the project.
-	if k.readOnlyForRequest() {
+	if k.readOnlyForRequest(ctx) {
 		k.log("plan", "Chat mode (read-only tools) — answer without writing")
 		return k.executeChatReadOnly(ctx, userGoal, recallBlock)
 	}
@@ -287,7 +287,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// agents, no approval popups, no tool overhead. It is intentionally taken
 	// BEFORE the loop/DAG/consensus-trivial branches so General mode never
 	// offers tools even if the master loop toggle is on or consensus is set.
-	if k.toolsDisabledForRequest() {
+	if k.toolsDisabledForRequest(ctx) {
 		k.log("plan", "General mode (tools disabled) — direct conversational path")
 		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
 	}
@@ -295,7 +295,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Step 3.055: Cost guard — an obvious general question takes the single-call
 	// no-tools path instead of the worker+web_search pipeline (several LLM calls
 	// for a one-call answer), unless Loop mode or an active project wants tools.
-	if !k.loopEnabledForRequest() && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
+	if !k.loopEnabledForRequest(ctx) && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
 		k.log("plan", "Obvious general question — direct conversational path (no tools)")
 		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
 	}
@@ -305,7 +305,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// consensus mode is on with multiple models, a synthesis round follows,
 	// grounded in the loop's tool trace so reviewers can't claim the agent
 	// lacked tool access.
-	if k.loopEnabledForRequest() && k.agenticLoop != nil {
+	if k.loopEnabledForRequest(ctx) && k.agenticLoop != nil {
 		k.log("loop", "Agentic loop (ReAct) enabled — running Sense-Think-Act cycle")
 		stm := k.memory.STMGet()
 		var history []core.Message
@@ -343,7 +343,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 			}
 		}
 
-		if contract == nil && k.shouldPlanForLoop(userGoal, complexity, hasProjectGuidance) {
+		if contract == nil && k.shouldPlanForLoop(ctx, userGoal, complexity, hasProjectGuidance) {
 			depth := decidePlanDepth(userGoal, complexity, hasProjectGuidance, k.planDepthCfg())
 			if g, perr := k.deepPlan(ctx, k.injectRecall(userGoal, recallBlock), depth); perr == nil {
 				g.Goal = userGoal

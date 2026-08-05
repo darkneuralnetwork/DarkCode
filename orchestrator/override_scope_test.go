@@ -21,7 +21,7 @@ func TestOneVerbAffectsOneMessage(t *testing.T) {
 	deps := newTestKernel(t, client)
 	base := deps.Router.GetMode()
 
-	restore := deps.Kernel.ApplyRequestOverrides("consensus", "", "", "", "")
+	restore := mustOverride(deps.Kernel, "consensus", "", "", "", "")
 	if got := deps.Router.GetMode(); got != core.RouteConsensus {
 		t.Fatalf("mode during the request = %v, want consensus", got)
 	}
@@ -42,8 +42,8 @@ func TestOverlappingVerbsDoNotStickTheRouter(t *testing.T) {
 	deps := newTestKernel(t, client)
 	base := deps.Router.GetMode()
 
-	restoreA := deps.Kernel.ApplyRequestOverrides("consensus", "", "", "", "")
-	restoreB := deps.Kernel.ApplyRequestOverrides("consensus", "", "", "", "")
+	restoreA := mustOverride(deps.Kernel, "consensus", "", "", "", "")
+	restoreB := mustOverride(deps.Kernel, "consensus", "", "", "", "")
 	restoreA()
 	restoreB()
 
@@ -68,7 +68,7 @@ func TestConcurrentOverridesAlwaysReturnToBase(t *testing.T) {
 		}
 		go func() {
 			defer wg.Done()
-			restore := deps.Kernel.ApplyRequestOverrides(mode, "", "", "", "")
+			restore := mustOverride(deps.Kernel, mode, "", "", "", "")
 			restore()
 		}()
 	}
@@ -87,8 +87,8 @@ func TestOverlappingSafetyOverridesDoNotStick(t *testing.T) {
 	deps := newTestKernel(t, client)
 	base := deps.Kernel.Gate().Level()
 
-	a := deps.Kernel.ApplyRequestOverrides("", "relaxed", "", "", "")
-	b := deps.Kernel.ApplyRequestOverrides("", "relaxed", "", "", "")
+	a := mustOverride(deps.Kernel, "", "relaxed", "", "", "")
+	b := mustOverride(deps.Kernel, "", "relaxed", "", "", "")
 	a()
 	b()
 
@@ -105,9 +105,9 @@ func TestNestedOverridesRestoreInAnyOrder(t *testing.T) {
 	deps := newTestKernel(t, client)
 	base := deps.Router.GetMode()
 
-	a := deps.Kernel.ApplyRequestOverrides("consensus", "", "", "", "")
-	b := deps.Kernel.ApplyRequestOverrides("escalation", "", "", "", "")
-	c := deps.Kernel.ApplyRequestOverrides("consensus", "", "", "", "")
+	a := mustOverride(deps.Kernel, "consensus", "", "", "", "")
+	b := mustOverride(deps.Kernel, "escalation", "", "", "", "")
+	c := mustOverride(deps.Kernel, "consensus", "", "", "", "")
 
 	b() // finishes first
 	c()

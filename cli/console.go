@@ -563,10 +563,13 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	st := c.strategyForMessage(resolvedQuery)
 	loopOverride, toolsOverride := st.Loop, st.Tools
 	modeOverride, planOverride := st.Mode, st.Plan
-	restoreOverrides := c.kernel.ApplyRequestOverrides(modeOverride, "", loopOverride, toolsOverride, c.brain)
+	// The verb decisions ride on reqCtx rather than on the kernel, so a second
+	// request starting mid-flight cannot change what this one is doing.
+	// Execute must receive the returned context — passing the original would
+	// silently drop every override.
+	reqCtx, restoreOverrides := c.kernel.ApplyRequestOverrides(reqCtx, modeOverride, "", loopOverride, toolsOverride, c.brain)
 	defer restoreOverrides()
-	restorePlan := c.kernel.ApplyPlanOverride(planOverride)
-	defer restorePlan()
+	reqCtx = c.kernel.WithPlanOverride(reqCtx, planOverride)
 
 	result, err := c.kernel.Execute(reqCtx, resolvedQuery)
 	close(done)

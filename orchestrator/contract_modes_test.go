@@ -30,14 +30,14 @@ func TestAcceptanceGateHoldsInEveryRoutingMode(t *testing.T) {
 				"GOAL_STATUS: DONE",
 			}}
 			deps := newTestKernelWithMode(t, mode, client)
-			restore := deps.Kernel.ApplyRequestOverrides("", "", "on", "on", "")
+			ctx, restore := deps.Kernel.ApplyRequestOverrides(context.Background(), "", "", "on", "on", "")
 			defer restore()
 
-			if !deps.Kernel.loopEnabledForRequest() {
+			if !deps.Kernel.loopEnabledForRequest(ctx) {
 				t.Fatal("loop mode did not take effect")
 			}
 
-			out, err := deps.Kernel.Execute(context.Background(), "explain how the retry layer works")
+			out, err := deps.Kernel.Execute(ctx, "explain how the retry layer works")
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
 			}

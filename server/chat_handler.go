@@ -124,12 +124,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			req.Mode = verbStrategy.Mode
 		}
 	}
-	restoreOverrides := s.kernel.ApplyRequestOverrides(req.Mode, req.Safety, loopOverride, toolsOverride, req.Brain)
-	defer restoreOverrides()
-	if verbFound {
-		restorePlan := s.kernel.ApplyPlanOverride(verbStrategy.Plan)
-		defer restorePlan()
-	}
+	// The overrides are applied further down, once ctx exists: the loop, tool
+	// scope and planning decisions now ride on the request's own context so a
+	// second chat turn cannot change what this one is doing mid-flight.
 
 	// If an active project is specified, prepend its long-lived context to
 	// the query so the agent operates with project knowledge in scope.
@@ -195,6 +192,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx = context.WithValue(ctx, core.WorkspaceKey, ws)
 	ctx = context.WithValue(ctx, core.ProjectKey, req.Project)
+
+	// Per-request routing-mode / safety-level / loop / tool-scope overrides.
+	// Mode and safety still mutate the live router and gate under a depth
+	// counter; loop, tool scope and planning ride on ctx, so two overlapping
+	// chat turns no longer overwrite each other's verb. Execute below must be
+	// handed THIS ctx — the earlier one would carry none of it.
+	//
+	// We deliberately do NOT mutate s.cfg here: the override is per-request,
+	// so /api/status and /api/config keep reflecting the configured state.
+	ctx, restoreOverrides := s.kernel.ApplyRequestOverrides(ctx, req.Mode, req.Safety, loopOverride, toolsOverride, req.Brain)
+	defer restoreOverrides()
+	if verbFound {
+		ctx = s.kernel.WithPlanOverride(ctx, verbStrategy.Plan)
+	}
 
 	// Inject the active project's implementation plan + workflow architecture
 	// so the kernel's planner follows the plan. The plan/workflow are amended

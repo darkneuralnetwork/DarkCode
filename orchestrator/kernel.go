@@ -63,21 +63,11 @@ type Kernel struct {
 	modeApprover *permission.ModeAwareApprover
 
 	// agenticLoop is the optional ReAct execution loop (looping technology).
-	// Non-nil always; whether it runs is decided per request, see requestLoop.
+	// Non-nil always; whether it runs is decided per request — the loop, tool
+	// scope, read-only and planning overrides all live on the request's
+	// context now, not here. See request_state.go for why.
 	agenticLoop *loop.ReActLoop
 
-	// requestLoop is a per-request override of the agentic-loop decision.
-	// nil ⇒ the loop does not run. The web chat sets this from
-	// chat_mode=="loop" and the CLI from the /loop verb, so iteration is
-	// always an explicit per-message choice. Guarded by mu.
-	requestLoop *bool
-	// requestPlan forces (or forbids) the planning phase for one request.
-	// It is what separates /graph from /loop: both iterate, but /graph always
-	// decomposes into a task graph first so there are per-task acceptance
-	// criteria to prove, while /loop plans only when the goal is complex
-	// enough to be worth a planner call. Without this the two verbs selected
-	// identical behaviour and /graph was a synonym.
-	requestPlan *bool
 	// reviewerOn gates the post-acceptance reviewer. Off by default: an extra
 	// model call on every successful run is a real cost for advice nobody
 	// asked for, and it can never change the outcome. See reviewer.go.
@@ -86,19 +76,6 @@ type Kernel struct {
 	// fires when models disagree AND the graph cannot check them, but that is
 	// still two extra calls on a metered tier. See debate.go.
 	debateOn bool
-
-	// requestToolsDisabled is a per-request override of tool access. nil ⇒
-	// tools enabled (the default). The web chat sets this from
-	// chat_mode=="general" so General mode is a fast pure-conversation path
-	// with NO tools offered to the LLM (no DAG, no worker agents, no approval
-	// popups); project/auto/loop leave it nil (tools on). Guarded by mu.
-	requestToolsDisabled *bool
-
-	// requestReadOnly is a per-request override for Chat mode: only read-only
-	// tools (read/list/search/web) are offered and any mutating tool is
-	// refused, so Chat can answer from the project without writing. nil ⇒ not
-	// read-only. Set from chat_mode=="general"/"chat". Guarded by mu.
-	requestReadOnly *bool
 
 	// projectPlan/projectWorkflow hold the active project's plan + workflow for
 	// the current request, set via SetProjectContext and injected into the goal
@@ -441,21 +418,29 @@ func (k *Kernel) softenBeliefsAfterRollback(changes []checkpoint.Change) {
 }
 
 // ApplyRequestOverrides applies per-request routing/safety/loop/tool overrides
-// to the live router, gate, and kernel flags, returning a restore func to defer.
-// Empty strings leave a setting unchanged; loop is "on"/"off"/"", tools is
-// "off"/""/"on". Lets the mode/safety/chat_mode fields of POST /api/chat apply
-// for a single request.
-func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) func() {
+// and returns the context the request must execute under, plus a restore func
+// to defer. Empty strings leave a setting unchanged; loop is "on"/"off"/"",
+// tools is "off"/"readonly"/"on". Lets the mode/safety/chat_mode fields of
+// POST /api/chat apply for a single request.
+//
+// The returned context carries the loop/tools/read-only decisions. Those used
+// to be written to fields on the shared Kernel, which meant two overlapping
+// requests fought over one field and the earlier one finished under the later
+// one's settings — see request_state.go. Callers MUST pass the returned
+// context to Execute; passing the original silently restores the old bug.
+//
+// Mode, safety and brain still mutate shared router/gate state under a depth
+// counter, because a request does not own those objects.
+func (k *Kernel) ApplyRequestOverrides(ctx context.Context, mode, safety, loop, tools, brain string) (context.Context, func()) {
 	var oldMode core.RoutingMode
 	var oldLevel permission.Level
-	var oldReqLoop *bool
-	var oldToolsDisabled *bool
-	var oldReadOnly *bool
 	var oldForceLocal *bool
 	haveMode := mode != ""
 	haveSafety := safety != ""
 	haveLoop := loop != ""
 	haveTools := tools != ""
+
+	rs := &requestState{}
 	// Brain selector (per-request): "local" pins to the local model (offline),
 	// "cloud" allows cloud routing, "auto"/"" leave the configured default. Only
 	// local/cloud actually change the router's force-local flag.
@@ -495,39 +480,37 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 		k.overrideMu.Unlock()
 		k.gate.SetLevel(permission.LevelFromString(safety))
 	}
-	if haveLoop || haveTools {
-		k.mu.Lock()
-		if haveLoop {
-			oldReqLoop = k.requestLoop
-			switch strings.ToLower(loop) {
-			case "on":
-				on := true
-				k.requestLoop = &on
-			case "off":
-				off := false
-				k.requestLoop = &off
-			}
+	// The per-request half. No lock and no saved "old" value: these go into the
+	// request's own context, so there is nothing shared to protect or restore.
+	if haveLoop {
+		switch strings.ToLower(loop) {
+		case "on":
+			on := true
+			rs.loop = &on
+		case "off":
+			off := false
+			rs.loop = &off
 		}
-		if haveTools {
-			oldToolsDisabled = k.requestToolsDisabled
-			oldReadOnly = k.requestReadOnly
-			disabled, enabled, readOnly := true, false, true
-			switch strings.ToLower(tools) {
-			case "off":
-				k.requestToolsDisabled = &disabled
-				k.requestReadOnly = nil
-			case "readonly", "read-only":
-				// Chat mode: tools enabled, but only read-only ones offered.
-				k.requestToolsDisabled = &enabled
-				k.requestReadOnly = &readOnly
-			case "on":
-				k.requestToolsDisabled = &enabled
-				k.requestReadOnly = nil
-			}
-		}
-		k.mu.Unlock()
 	}
-	return func() {
+	if haveTools {
+		disabled, enabled, readOnly := true, false, true
+		switch strings.ToLower(tools) {
+		case "off":
+			rs.toolsDisabled = &disabled
+		case "readonly", "read-only":
+			// Chat mode: tools enabled, but only read-only ones offered.
+			rs.toolsDisabled = &enabled
+			rs.readOnly = &readOnly
+		case "on":
+			rs.toolsDisabled = &enabled
+		}
+	}
+	if haveLoop || haveTools {
+		ctx = withRequestState(ctx, rs)
+	} else if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx, func() {
 		if haveMode && k.router != nil {
 			k.overrideMu.Lock()
 			k.modeDepth--
@@ -555,57 +538,8 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 				k.router.SetForceLocal(*oldForceLocal)
 			}
 		}
-		if haveLoop || haveTools {
-			k.mu.Lock()
-			if haveLoop {
-				k.requestLoop = oldReqLoop
-			}
-			if haveTools {
-				k.requestToolsDisabled = oldToolsDisabled
-				k.requestReadOnly = oldReadOnly
-			}
-			k.mu.Unlock()
-		}
+		// loop/tools need no restore: they never left this request's context.
 	}
-}
-
-// loopEnabledForRequest reports whether the ReAct loop should run for the
-// current request. Iteration is a per-request decision — the /loop verb or the
-// Loop chat mode — so with no override the answer is no.
-//
-// This used to fall back to a master `agenticOn` toggle, described as
-// "preserving the CLI behaviour where the loop runs iff the user enabled it in
-// Settings". That setting was removed when strategy moved to verbs, but the
-// field stayed: never assigned, so the fallback was a constant false wearing
-// the costume of a user preference. Mutex-safe.
-func (k *Kernel) loopEnabledForRequest() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.requestLoop != nil {
-		return *k.requestLoop
-	}
-	return false
-}
-
-// toolsDisabledForRequest reports whether tool access is disabled for the
-// current request (General mode fast path). When true, Execute takes a
-// lightweight single-call path with NO tools offered to the LLM — no DAG,
-// no worker agents, no approval popups. Mutex-safe.
-func (k *Kernel) toolsDisabledForRequest() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.requestToolsDisabled != nil {
-		return *k.requestToolsDisabled
-	}
-	return false
-}
-
-// readOnlyForRequest reports whether this is a Chat (read-only) request: only
-// read-only tools are offered and mutating tools are refused. Mutex-safe.
-func (k *Kernel) readOnlyForRequest() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.requestReadOnly != nil && *k.requestReadOnly
 }
 
 // ReloadModels re-wires the model router with the latest config so that models
@@ -819,32 +753,3 @@ func (k *Kernel) Status() string {
 // Runs lists the recorded execution journals, most recent first, so a replay
 // view can offer something to open.
 func (k *Kernel) Runs() []RunSummary { return ListRuns(k.runsDir) }
-
-// ApplyPlanOverride forces the planning phase on ("always") or off ("never")
-// for one request, returning a restore func to defer. "" leaves the adaptive
-// decision alone.
-func (k *Kernel) ApplyPlanOverride(mode string) func() {
-	if mode != "always" && mode != "never" {
-		return func() {}
-	}
-	k.mu.Lock()
-	prev := k.requestPlan
-	v := mode == "always"
-	k.requestPlan = &v
-	k.mu.Unlock()
-	return func() {
-		k.mu.Lock()
-		k.requestPlan = prev
-		k.mu.Unlock()
-	}
-}
-
-// planForced reports the per-request planning override, if any.
-func (k *Kernel) planForced() (force bool, set bool) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.requestPlan == nil {
-		return false, false
-	}
-	return *k.requestPlan, true
-}
