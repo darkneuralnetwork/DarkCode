@@ -593,8 +593,22 @@ Each stage is one revertible commit, `make ci` green (race detector included).
 | 2 — Request isolation | `7a3f2c2` | **done** — 4 shared flags moved to request context |
 | 3 — UI Manager | `99dd090` | **done** — 6 kernel entries → 1; path confinement armed |
 | 4 — LLM Manager | `a9a9c65` | **partial** — duplicate feature collapsed; 21 call sites remain |
-| 5 — Context re-tiering | `0a7e944` | **partial** — trigger fixed; offloading + non-destructive pending |
-| 6–8 | — | not started |
+| 5 — Context re-tiering | `0a7e944`, `e2bd18d` | **done** — trigger fixed, offloading added, retention added |
+| 5b — Surface parity | `0179179`, `3e8e94f` | **done** — post-turn work shared by all five surfaces |
+| 6 — Memory Manager | — | not started (32 write sites) |
+| 7 — Data Source Manager | — | not started |
+| 8 — Documentation | — | this file |
+
+### The context stack, after Stage 5
+
+Built as four layers rather than one lossy step (§5.0):
+
+| Layer | Mechanism | State |
+|---|---|---|
+| 1 — Retrieval | RRF over vector + token overlap + graph | already strong; unchanged |
+| 2 — **Offloading** | `spill`: full result to disk, head/tail preview, `read_result` handle | **added** — was absent |
+| 3 — Selection | dedup, TF-IDF rank, importance pinning, `FitToWindow` | kept |
+| 4 — Compaction | LLM briefing at window−reserve, **non-destructive** | re-tiered + made recoverable |
 
 ### Boundary counts
 

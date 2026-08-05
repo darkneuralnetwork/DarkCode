@@ -25,3 +25,10 @@ coverage.out
 # Working notes and drafts kept beside the source but not part of it
 *_NOTES.md
 *_DRAFT.md
+
+# Agent state written beside the source when memory_dir/projects_dir are left at
+# their cwd-relative defaults: memory stores, the knowledge graph, spilled tool
+# results, checkpoints. This was excluded via .git/info/exclude, which is local
+# and does not travel — so a fresh clone would leave all of it untracked in the
+# working tree, and one `git add -A` would publish a session's conversation.
+/.darkcode/
