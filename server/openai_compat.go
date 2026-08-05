@@ -8,15 +8,14 @@ package server
 // chat uses, so behaviour, memory and permissions are identical.
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/darkcode/core"
 	"github.com/darkcode/metrics"
+	"github.com/darkcode/uiport"
 )
 
 // compatModelID is the model name reported to OpenAI-compatible clients.
@@ -68,8 +67,11 @@ func (s *Server) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.Default.RecordTurn()
-	ctx := context.WithValue(r.Context(), core.WorkspaceKey, s.ActiveWorkspace())
-	answer, err := s.kernel.Execute(ctx, prompt)
+	answer, err := s.port.Execute(r.Context(), uiport.Request{
+		Query:     prompt,
+		Surface:   uiport.SurfaceAPI,
+		Workspace: s.ActiveWorkspace(),
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

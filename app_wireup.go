@@ -31,6 +31,7 @@ import (
 	"github.com/darkcode/tools"
 	"github.com/darkcode/tools/deterministic"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 )
 
 func (a *AppRunner) WireUp() {
@@ -662,6 +663,15 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// wired into the execute path were unreachable in a shipped binary.
 	a.Kernel.SetReviewer(a.Cfg.Reviewer)
 
+	// The one door from any surface into the kernel. Built here so every
+	// surface shares it and none can construct a request the others wouldn't.
+	port, err := uiport.New(a.Kernel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal: %v\n", err)
+		os.Exit(1)
+	}
+	a.Port = port
+
 	gate := a.Kernel.Gate()
 	gate.SetDenyRules(a.Cfg.DenyRules)
 	gate.SetAllowedTools(a.Policy.Tools.AllowOnly)
@@ -731,7 +741,7 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	modeApprover := permission.NewModeAwareApprover(serverApprover)
 	gate.SetApprover(modeApprover.Approve)
 	a.Kernel.SetModeApprover(modeApprover)
-	a.Server = server.NewServer(a.Cfg, a.Registry, a.MemSystem, a.Emitter, a.Kernel, serverApprover, a.ProjectStore, a.SourceMgr)
+	a.Server = server.NewServer(a.Cfg, a.Registry, a.MemSystem, a.Emitter, a.Kernel, a.Port, serverApprover, a.ProjectStore, a.SourceMgr)
 }
 
 // localProviderID names the built-in provider that serves models running on

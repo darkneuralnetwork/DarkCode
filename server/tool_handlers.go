@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/darkcode/core"
 )
 
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +56,12 @@ func (s *Server) handleToolExecute(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
+
+	// Direct tool execution still has to say which workspace it is confined
+	// to. This handler built a bare context, and confineWrite used to permit
+	// everything when the workspace was empty, so this endpoint could write
+	// anywhere on the filesystem — verified against a live binary.
+	ctx = context.WithValue(ctx, core.WorkspaceKey, s.ActiveWorkspace())
 
 	result, err := s.registry.Execute(ctx, req.Tool, req.Args)
 	if err != nil {

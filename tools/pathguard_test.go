@@ -16,9 +16,21 @@ func withWorkspace(ws string) context.Context {
 func TestConfineWrite(t *testing.T) {
 	ws := t.TempDir()
 
-	// No workspace in context → always allowed (preserves CLI behavior).
-	if err := confineWrite(context.Background(), "/etc/passwd"); err != nil {
-		t.Errorf("no-workspace confineWrite should be a no-op, got %v", err)
+	// INVERTED. This assertion used to require the opposite — that a request
+	// with no workspace permits any write — under the comment "preserves CLI
+	// behavior". It encoded the bug: no CLI surface ever set a workspace, so
+	// what it preserved was the absence of confinement everywhere but the GUI.
+	// Measured on a live binary before this change, POST /api/tools/execute
+	// wrote a file outside the workspace and reported success.
+	//
+	// The target below is deliberately NOT /etc/passwd. The original check used
+	// exactly that, and an unprivileged process cannot write it whether or not
+	// the guard exists — so that assertion passed for the wrong reason and
+	// could never have caught this. Only a writable path tests the guard.
+	writable := filepath.Join(t.TempDir(), "reachable.txt")
+	if err := confineWrite(context.Background(), writable); err == nil {
+		t.Error("confineWrite permitted a write with no workspace on the request — " +
+			"a guard whose default is to permit is not a guard")
 	}
 
 	ctx := withWorkspace(ws)

@@ -16,7 +16,7 @@ import (
 // a mock LLM client and router, which is out of scope for a handler-level
 // test (see orchestrator's own dispatch tests for kernel-level coverage).
 func newTestServer(cfg *config.Config) *Server {
-	return NewServer(cfg, nil, nil, nil, nil, nil, nil, nil)
+	return NewServer(cfg, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func postChat(s *Server, body string) *httptest.ResponseRecorder {

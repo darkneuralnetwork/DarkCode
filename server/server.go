@@ -27,15 +27,19 @@ import (
 	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 )
 
 // Server is the HTTP server that serves the web UI and API.
 type Server struct {
-	cfg         *config.Config
-	registry    *tools.Registry
-	memSystem   *memory.System
-	emitter     *ui.EventEmitter
-	kernel      *orchestrator.Kernel
+	cfg       *config.Config
+	registry  *tools.Registry
+	memSystem *memory.System
+	emitter   *ui.EventEmitter
+	kernel    *orchestrator.Kernel
+	// port is the one door into the kernel, shared with the CLI and ACP
+	// surfaces so every request is assembled the same way.
+	port        *uiport.Manager
 	approver    *permission.ServerApprover
 	projects    *project.Store
 	sources     *tools.SourceManager
@@ -89,13 +93,14 @@ type Server struct {
 }
 
 // NewServer creates a new HTTP server.
-func NewServer(cfg *config.Config, registry *tools.Registry, memSystem *memory.System, emitter *ui.EventEmitter, kernel *orchestrator.Kernel, approver *permission.ServerApprover, projects *project.Store, sources *tools.SourceManager) *Server {
+func NewServer(cfg *config.Config, registry *tools.Registry, memSystem *memory.System, emitter *ui.EventEmitter, kernel *orchestrator.Kernel, port *uiport.Manager, approver *permission.ServerApprover, projects *project.Store, sources *tools.SourceManager) *Server {
 	s := &Server{
 		cfg:         cfg,
 		registry:    registry,
 		memSystem:   memSystem,
 		emitter:     emitter,
 		kernel:      kernel,
+		port:        port,
 		approver:    approver,
 		projects:    projects,
 		sources:     sources,

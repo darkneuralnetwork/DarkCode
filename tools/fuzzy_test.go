@@ -75,7 +75,9 @@ func TestPatchAppliesFuzzyMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := (&FileTool{}).PatchFile(context.Background(), map[string]interface{}{
+	// A workspace is required now: confineWrite fails closed without one, so a
+	// bare context is no longer a shape any real caller produces.
+	res := (&FileTool{}).PatchFile(withWorkspace(dir), map[string]interface{}{
 		"path":       path,
 		"old_string": "println(\"old\")",
 		"new_string": "    println(\"new\")",

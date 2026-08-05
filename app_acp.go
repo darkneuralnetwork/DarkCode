@@ -6,8 +6,8 @@ import (
 	"os"
 
 	"github.com/darkcode/acp"
-	"github.com/darkcode/core"
 	"github.com/darkcode/permission"
+	"github.com/darkcode/uiport"
 )
 
 // acpExecutor adapts the orchestration kernel to the ACP agent's Executor
@@ -15,10 +15,22 @@ import (
 type acpExecutor struct{ runner *AppRunner }
 
 func (e acpExecutor) Execute(ctx context.Context, cwd, prompt string) (string, error) {
-	if cwd != "" {
-		ctx = context.WithValue(ctx, core.WorkspaceKey, cwd)
+	// The editor names the session's working directory. When it doesn't, fall
+	// back to ours rather than running unconfined: uiport refuses a request
+	// with no workspace, so the failure reaches the editor instead of becoming
+	// an agent that can write anywhere.
+	if cwd == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("acp: no session cwd and the working directory is unreadable: %w", err)
+		}
+		cwd = wd
 	}
-	return e.runner.Kernel.Execute(ctx, prompt)
+	return e.runner.Port.Execute(ctx, uiport.Request{
+		Query:     prompt,
+		Surface:   uiport.SurfaceACP,
+		Workspace: cwd,
+	})
 }
 
 // RunACP serves the Agent Client Protocol on stdio until the editor

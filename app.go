@@ -24,6 +24,7 @@ import (
 	"github.com/darkcode/server"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 )
 
 type AppRunner struct {
@@ -36,6 +37,10 @@ type AppRunner struct {
 	Router       *router.Router
 	Compressor   *compression.Compressor
 	Kernel       *orchestrator.Kernel
+	// Port is the single way a surface reaches the kernel. Every surface
+	// goes through it so none can decide for itself whether a request
+	// carries a workspace — see uiport for what that omission cost.
+	Port         *uiport.Manager
 	Recorder     *tools.ChangeRecorder
 	Checkpoints  *checkpoint.Manager
 	LSP          *intelligence.LSPClient
@@ -94,7 +99,23 @@ func (a *AppRunner) Execute() {
 		if a.Cfg.UIMode {
 			a.Emitter.EmitTaskUpdate("kernel", "observe", a.Query)
 		}
-		result, err := a.Kernel.Execute(ctx, a.Query)
+		// Headless is the least supervised surface — it auto-approves every
+		// prompt above — so it is the one that can least afford to run without
+		// path confinement. It used to call the kernel with a bare context and
+		// no workspace, which is exactly the state in which confineWrite
+		// permits every path.
+		cwd, err := os.Getwd()
+		if err != nil {
+			a.MemSystem.Shutdown()
+			fmt.Fprintf(os.Stderr, "Error: cannot determine the working directory: %v\n", err)
+			os.Exit(1)
+		}
+		result, err := a.Port.Execute(ctx, uiport.Request{
+			Query:     a.Query,
+			Surface:   uiport.SurfaceHeadless,
+			Workspace: cwd,
+			Project:   a.globalActiveProject,
+		})
 		if err != nil {
 			a.MemSystem.Shutdown()
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

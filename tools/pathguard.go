@@ -17,12 +17,27 @@ import (
 // prompt-injection payload would attempt. The check operates on the already
 // resolved (expandPath'd) target.
 //
-// When no workspace is active (e.g. plain CLI use with no project) it is a
-// no-op, preserving the pre-existing unconfined behavior.
+// When no workspace is on the request it FAILS CLOSED.
+//
+// It used to return nil there — "nothing to confine to, so allow" — and a test
+// asserted that as correct with the comment "preserves CLI behavior". It
+// preserved more than that. Neither CLI surface ever set core.WorkspaceKey, so
+// confinement was inert for every interactive and headless session, and POST
+// /api/tools/execute built its own bare context and wrote outside the
+// workspace on a live binary. The control was documented as working; the check
+// that "verified" it wrote to /etc, which an unprivileged process cannot do
+// whether or not any confinement exists — so the test could not tell the guard
+// apart from file permissions.
+//
+// Every path now reaches a tool through uiport, which refuses a request with no
+// workspace, so an empty one here means a caller that skipped the front door.
+// That is precisely the case not to trust. A guard whose default is to permit
+// is not a guard.
 func confineWrite(ctx context.Context, resolved string) error {
 	ws := CurrentWorkspace(ctx)
 	if ws == "" {
-		return nil
+		return fmt.Errorf("refusing to write %q: this request carries no active workspace, "+
+			"so path confinement cannot be enforced", resolved)
 	}
 	wsAbs, err := filepath.Abs(ws)
 	if err != nil {

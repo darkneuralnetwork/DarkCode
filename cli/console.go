@@ -41,6 +41,7 @@ import (
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 	"github.com/darkcode/verb"
 )
 
@@ -48,8 +49,14 @@ var ErrSwitchToGUI = fmt.Errorf("switch to gui")
 
 // Console is the orchestrator-backed interactive terminal.
 type Console struct {
-	cfg           *config.Config
-	kernel        *orchestrator.Kernel
+	cfg    *config.Config
+	kernel *orchestrator.Kernel
+	// port is the one door into the kernel. The console used to call
+	// kernel.Execute directly with a context that never carried a workspace,
+	// which left path confinement inert for the whole interactive CLI.
+	port *uiport.Manager
+	// workspace is the directory this console is confined to: the process cwd.
+	workspace     string
 	mem           *memory.System
 	registry      *tools.Registry
 	emitter       *ui.EventEmitter
@@ -105,10 +112,20 @@ type activityEntry struct {
 }
 
 // NewConsole creates an orchestrator-backed console.
-func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.System, registry *tools.Registry, emitter *ui.EventEmitter, recorder *tools.ChangeRecorder, sources *tools.SourceManager, projects *project.Store, activeProject string) *Console {
+func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, port *uiport.Manager, mem *memory.System, registry *tools.Registry, emitter *ui.EventEmitter, recorder *tools.ChangeRecorder, sources *tools.SourceManager, projects *project.Store, activeProject string) *Console {
+	// The console is confined to the directory it was started in. Resolved
+	// once here rather than per query so every turn in a session agrees.
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot resolve the working directory (%v); "+
+			"tool calls that write files will be refused\n", err)
+	}
+
 	c := &Console{
 		cfg:           cfg,
 		kernel:        kernel,
+		port:          port,
+		workspace:     wd,
 		mem:           mem,
 		registry:      registry,
 		emitter:       emitter,
@@ -123,18 +140,18 @@ func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.Sys
 
 	c.ckpt = kernel.Checkpoints()
 
-	rl, err := readline.NewEx(&readline.Config{
+	rl, rlErr := readline.NewEx(&readline.Config{
 		Prompt:          ">>> ",
 		HistoryFile:     filepath.Join(os.TempDir(), "darkcode_history"),
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
 		AutoComplete:    c.buildCompleter(),
 	})
-	if err == nil {
+	if rlErr == nil {
 		c.rl = rl
 	} else {
 		// Fallback in case of error (should be rare)
-		fmt.Fprintf(os.Stderr, "warning: readline init failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: readline init failed: %v\n", rlErr)
 	}
 
 	// Install the interactive terminal approval prompt for dangerous tool
@@ -561,17 +578,22 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// the web UI uses — the console reads the same table and the same rung
 	// chooser, so "what will this do" has one answer rather than three.
 	st := c.strategyForMessage(resolvedQuery)
-	loopOverride, toolsOverride := st.Loop, st.Tools
-	modeOverride, planOverride := st.Mode, st.Plan
-	// The verb decisions ride on reqCtx rather than on the kernel, so a second
-	// request starting mid-flight cannot change what this one is doing.
-	// Execute must receive the returned context — passing the original would
-	// silently drop every override.
-	reqCtx, restoreOverrides := c.kernel.ApplyRequestOverrides(reqCtx, modeOverride, "", loopOverride, toolsOverride, c.brain)
-	defer restoreOverrides()
-	reqCtx = c.kernel.WithPlanOverride(reqCtx, planOverride)
 
-	result, err := c.kernel.Execute(reqCtx, resolvedQuery)
+	// One door. The console used to build the request itself and call
+	// kernel.Execute directly, and what it built never carried a workspace —
+	// so path confinement, which permits everything when the workspace is
+	// empty, was inert for every interactive session.
+	result, err := c.port.Execute(reqCtx, uiport.Request{
+		Query:     resolvedQuery,
+		Surface:   uiport.SurfaceCLI,
+		Workspace: c.workspace,
+		Project:   c.activeProject,
+		Mode:      st.Mode,
+		Brain:     c.brain,
+		Loop:      st.Loop,
+		Tools:     st.Tools,
+		Plan:      st.Plan,
+	})
 	close(done)
 	fmt.Print("\r" + ansiClearLine + "\r") // clear spinner
 

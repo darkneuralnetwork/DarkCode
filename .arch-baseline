@@ -8,7 +8,7 @@ llm-calls 23
 # Memory mutations outside the memory layer (memory/, core/)
 memory-writes 32
 # Kernel entry points outside the UI manager
-kernel-entry 6
+kernel-entry 0
 # Concrete implementation packages imported by orchestrator
 orchestrator-impl-imports 12
 # HTTP clients constructed outside safeurl/
