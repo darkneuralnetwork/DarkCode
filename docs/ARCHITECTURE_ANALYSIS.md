@@ -594,7 +594,8 @@ Each stage is one revertible commit, `make ci` green (race detector included).
 | 3 — UI Manager | `99dd090` | **done** — 6 kernel entries → 1; path confinement armed |
 | 4 — LLM Manager | `a9a9c65` | **partial** — duplicate feature collapsed; 21 call sites remain |
 | 5 — Context re-tiering | `0a7e944`, `e2bd18d` | **done** — trigger fixed, offloading added, retention added |
-| 5b — Surface parity | `0179179`, `3e8e94f` | **done** — post-turn work shared by all five surfaces |
+| 5b — Surface parity | `0179179`, `3e8e94f`, `4519fa6` | **done** — four surfaces, one door, identical behaviour |
+| 5c — Adaptive concurrency | `4519fa6` | **done** — `auto` decides per wave from live signals |
 | 6 — Memory Manager | — | not started (32 write sites) |
 | 7 — Data Source Manager | — | not started |
 | 8 — Documentation | — | this file |
@@ -643,6 +644,71 @@ Three were not the target of any stage; the migration surfaced them.
    into the execute path, unreachable in a shipped binary for want of a config
    key. `go vet` cannot see this: an exported method is "used" by definition.
    `arch-check` gained a boundary for the class. (Stage 1)
+
+---
+
+## 6.2 Where model debate belongs — decided
+
+Asked directly: should the debate mechanism move into the LLM Manager?
+
+**No.** It belongs in a component of its own, beside the Orchestrator rather
+than inside it, and beside the LLM Manager rather than inside that either.
+
+The reasoning, from the actual call chain:
+
+```
+1. router.Consensus         fan out to N models, synthesise   → model concern
+2. kernel.adjudicateCtx     verify claims against the graph   → EVIDENCE concern
+3. kernel.resolveByDebate   models critique each other once   → model concern
+```
+
+Steps 2 and 3 are **one job with two methods**: given N candidate answers,
+which is right — first by checking, then, only if checking is silent, by
+argument. Splitting them across two managers would split one decision.
+
+Putting that job in the LLM Manager fails on step 2. Adjudication's *primary*
+method is knowledge-graph verification, so the LLM Manager would have to import
+memory — precisely what the target architecture forbids ("The LLM Manager
+should never know about orchestration or memory systems"). Debate is the
+*fallback*, not the mechanism; siting the whole thing by its fallback would put
+the cheap, correct path (checking) behind the expensive one.
+
+Leaving it in the Orchestrator fails for the other reason: the Orchestrator is
+meant to coordinate, not implement, and 375 lines of adjudication is part of
+why the kernel is a god object.
+
+**Proposed shape** — the next extraction:
+
+```go
+package adjudicate
+
+// Evidence answers "does this claim survive checking" — satisfied by the
+// knowledge graph, reached through the Data Source Manager.
+type Evidence interface {
+    Verify(ctx context.Context, claims []string) (survived, total int)
+}
+
+// Debater runs one grounded exchange — satisfied by the LLM Manager.
+type Debater interface {
+    Critique(ctx context.Context, goal string, a, b Position) (string, string)
+    Settle(ctx context.Context, goal string, a, b Position, critA, critB string) string
+}
+
+// Verdict picks a winner from candidates: evidence first, debate only when
+// the evidence does not distinguish them, synthesis on a tie.
+func Verdict(ctx context.Context, goal string, c *core.ConsensusResult,
+    ev Evidence, d Debater) Result
+```
+
+It takes candidates from the LLM Manager and evidence from the Data Source
+Manager and returns a verdict. Neither manager learns about the other, and the
+Orchestrator calls it rather than containing it.
+
+**Not done in this pass**, deliberately: it is a 375-line move, it is gated off
+by default so it carries no user-visible urgency, and it wants the Data Source
+Manager (Stage 7) to exist first so `Evidence` has a real home instead of
+reaching into `memory` directly. Doing it late in a long session is how the two
+reverts in this repository's history happened.
 
 ---
 
