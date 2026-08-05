@@ -2,10 +2,14 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/darkcode/core"
 	"github.com/darkcode/spill"
 )
 
@@ -108,5 +112,46 @@ func TestReadResultRejectsMissingID(t *testing.T) {
 	entry, _ := r.Get("read_result")
 	if res := entry.Handler(context.Background(), map[string]interface{}{}); res.Success {
 		t.Error("read_result accepted a call with no id")
+	}
+}
+
+// TestBothDispatchPathsRecordFileObservations — the ReAct path and the direct
+// /api/tools/execute path must agree. A belief formed on one that the other
+// cannot invalidate is worse than no belief, and the permission gate already
+// had to learn this lesson separately.
+func TestBothDispatchPathsRecordFileObservations(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seen.go")
+	if err := os.WriteFile(path, []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, viaDispatchAll := range []bool{false, true} {
+		name := "Execute"
+		if viaDispatchAll {
+			name = "DispatchAll"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := NewRegistry()
+			RegisterBuiltinTools(r, nil, nil, nil, nil)
+			var got []string
+			r.SetFileObserver(func(p, content string) { got = append(got, p) })
+
+			args := map[string]interface{}{"path": path}
+			if viaDispatchAll {
+				raw, _ := json.Marshal(args)
+				r.DispatchAll(context.Background(), []core.ToolCall{{
+					ID: "1", Type: "function",
+					Function: core.FunctionCall{Name: "read_file", Arguments: string(raw)},
+				}})
+			} else {
+				if _, err := r.Execute(context.Background(), "read_file", args); err != nil {
+					t.Fatalf("Execute: %v", err)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("%s recorded %d observations, want 1", name, len(got))
+			}
+		})
 	}
 }

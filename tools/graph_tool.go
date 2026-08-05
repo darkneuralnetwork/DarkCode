@@ -83,7 +83,7 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]interface{}) *T
 
 	case "stale":
 		matches := t.KG.StaleFiles(t.Workspace)
-		result, headline = matches, fmt.Sprintf("%d file(s) indexed at an older commit than HEAD", len(matches))
+		result, headline = matches, fmt.Sprintf("%d file(s) changed since the agent last read them", len(matches))
 
 	case "blast_radius":
 		files := stringList(args["files"])

@@ -256,18 +256,30 @@ func (k *Kernel) verifyOutput(ctx context.Context, goal, output string, complexi
 	return output
 }
 
-// generalModeNoToolsPrompt is the shared "no tools available" system prompt
-// for General mode, used by both the single-model path and the consensus
-// fan-out path below — previously duplicated with slightly different wording
-// in each place.
-const generalModeNoToolsPrompt = "You are DarkCode in General (conversational) mode. Answer the user directly and helpfully. " +
-	"You do NOT have access to any tools in this mode — you cannot create, read, or modify files, run terminal " +
-	"commands, or perform any real-world action. Never claim an action was completed or output a shell command as " +
-	"if it executed. If the task requires creating files, running commands, or other real actions, tell the user " +
-	"to switch to Project, Auto, or Loop mode."
+// degradedNoToolsPrompt is used ONLY when the tool-capable path could not run
+// — the loop failed to reach a model, usually a transport error or an
+// exhausted quota. It is a degraded answer, not a mode.
+//
+// It used to be the General-mode prompt, and it told the model to say the user
+// should "switch to Project, Auto, or Loop mode". That advice was wrong twice
+// over. General mode no longer exists — a conversational turn gets read-only
+// tools — and when this prompt is reached the cause is a failed model call, so
+// switching modes does nothing. Observed live: asked what was in a directory,
+// the agent answered "I cannot see files. Please switch to a different mode."
+// while holding a working list_files tool, because the loop had 429'd and this
+// fallback spoke as though the tools were absent by design.
+//
+// So it now says what is actually true: the tools could not be reached this
+// turn, and retrying is the useful advice.
+const degradedNoToolsPrompt = "You are DarkCode. Your tools are temporarily unreachable for this turn — a " +
+	"model or network call failed, which is usually a rate limit or an exhausted quota. Answer from what you " +
+	"already know, and be explicit that you could not inspect the project this turn. Never claim you performed " +
+	"an action, and never output a shell command as if it ran. If the answer needs the repository, the web, or a " +
+	"file, say so and suggest retrying in a moment — switching modes will not help."
 
-// executeDirectNoTools is the General-mode fast path: a single LLM call with no
-// tools offered (pure conversation). Still participates in consensus when
+// executeDirectNoTools is the degraded fallback: a single LLM call with no
+// tools, taken only when the tool-capable path could not run. Still
+// participates in consensus when
 // multiple models are registered, since that's a text-only refinement.
 
 // chatContextRecentMax bounds how many recent messages are sent verbatim in
@@ -316,7 +328,13 @@ func (k *Kernel) executeChatReadOnly(ctx context.Context, goal string, recallBlo
 
 	loopRes, err := k.agenticLoop.Run(roCtx, k.injectRecall(goal, recallBlock), history)
 	if err != nil {
-		k.log("chat", "read-only loop failed ("+err.Error()+") — falling back to plain answer")
+		// Say so, loudly. This degrades to an answer with no tools, and a
+		// degraded answer the user cannot tell apart from a normal one is
+		// worse than an error: it looks like the agent chose not to look.
+		k.log("chat", "read-only loop failed ("+err.Error()+") — answering without tools")
+		if k.emitter != nil {
+			k.emitter.EmitError("tools unreachable this turn (" + err.Error() + ") — answering from prior knowledge only")
+		}
 		return k.executeDirectNoTools(ctx, goal, recallBlock)
 	}
 	output := annotateUncited(loopRes.Output, recallBlock)
@@ -349,7 +367,7 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 	// offers tools, so it cannot accidentally execute anything.
 	if k.router.GetMode() == core.RouteConsensus && k.router.ModelCount() > 1 {
 		k.log("consensus", "Running multi-model consensus (General mode, no tools)")
-		output, err := k.runConsensus(ctx, goal, generalModeNoToolsPrompt)
+		output, err := k.runConsensus(ctx, goal, degradedNoToolsPrompt)
 		if err == nil {
 			k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
 			k.recordOutcome(goal, output, nil, true, "general-consensus", 0, recallBlock)
@@ -370,7 +388,7 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 
 	stm := k.memory.STMGet()
 
-	sysContent := generalModeNoToolsPrompt
+	sysContent := degradedNoToolsPrompt
 
 	if recallBlock != "" {
 		sysContent += "\n\n## Relevant Past Context\n" + recallBlock

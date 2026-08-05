@@ -772,6 +772,11 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	} else {
 		r.breaker.recordFailure(name)
 	}
+	// Both dispatch surfaces must record what was seen, for the same reason
+	// both must gate identically: a file read through /api/tools/execute is
+	// still a file the agent has looked at, and a belief formed on one path
+	// that the other cannot invalidate is worse than no belief.
+	r.noteFileObservation(ctx, name, args, result)
 	return result, nil
 }
 
