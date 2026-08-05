@@ -177,6 +177,17 @@ func (a *AppRunner) initTools(memDir string) {
 		tools.RegisterSpillTool(a.Registry, st)
 	}
 
+	// What the agent reads and writes is what it knows the state of. Recording
+	// the content hash per file is what lets the graph answer "which of my
+	// beliefs are about a version of this file that no longer exists" exactly,
+	// including for edits the agent made itself and has not committed.
+	if ws, err := os.Getwd(); err == nil {
+		mem := a.MemSystem
+		a.Registry.SetFileObserver(func(path, content string) {
+			mem.ObserveFile(ws, path, content)
+		})
+	}
+
 	// Register the KG re-sync tool and run an initial background sync so the
 	// graph holds typed symbol/import facts from boot. Async so a large
 	// workspace never delays startup.

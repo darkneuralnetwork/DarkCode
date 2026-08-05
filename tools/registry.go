@@ -74,6 +74,10 @@ type Registry struct {
 	// looks like once it reaches the model is a property of running the tool,
 	// not of whichever loop happened to call it.
 	spill *spill.Store
+	// observeFile records what the agent has seen of a file so the knowledge
+	// graph knows which of its beliefs are about a version that no longer
+	// exists. nil = not recording. See memory.System.ObserveFile.
+	observeFile func(path, content string)
 }
 
 // NewRegistry creates an empty tool registry.
@@ -488,6 +492,7 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 	// Record what changed (files, commands, git ops) for the activity log
 	// and the inline after-query summary.
 	r.recordChange(ctx, call.Function.Name, args, res, beforePath, beforeContent, beforeExists, started)
+	r.noteFileObservation(ctx, call.Function.Name, args, res)
 
 	return result
 }
@@ -802,6 +807,46 @@ func (r *Registry) SetCheckpointer(m *checkpoint.Manager) {
 	r.mu.Lock()
 	r.ckpt = m
 	r.mu.Unlock()
+}
+
+// SetFileObserver installs the hook that records file contents the agent has
+// seen. Called for reads AND writes: an agent that edits a file and does not
+// update what it believes about it is wrong about the thing it just changed.
+func (r *Registry) SetFileObserver(fn func(path, content string)) {
+	r.mu.Lock()
+	r.observeFile = fn
+	r.mu.Unlock()
+}
+
+// noteFileObservation reports a file's current contents to the observer. It
+// runs after a successful file tool call, reading from disk rather than from
+// the tool's output, because read_file returns numbered lines and write_file
+// returns a byte count — neither is the file.
+func (r *Registry) noteFileObservation(ctx context.Context, tool string, args map[string]interface{}, res *ToolResult) {
+	switch tool {
+	case "read_file", "write_file", "patch", "replace_file_content":
+	default:
+		return
+	}
+	if res == nil || !res.Success {
+		return
+	}
+	r.mu.RLock()
+	observe := r.observeFile
+	r.mu.RUnlock()
+	if observe == nil {
+		return
+	}
+	path, _ := args["path"].(string)
+	if path == "" {
+		return
+	}
+	path = expandPath(ctx, path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	observe(path, string(data))
 }
 
 // SetSpillStore installs the store used to offload oversized tool results.
