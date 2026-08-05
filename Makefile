@@ -56,6 +56,14 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 		git --no-pager diff -- go.mod go.sum; exit 1; \
 	fi
 
+.PHONY: arch-check
+arch-check: ## Fail if a layering boundary regressed (see .arch-baseline)
+	@scripts/arch-check.sh
+
+.PHONY: arch-list
+arch-list: ## Show every site that currently crosses a layering boundary
+	@scripts/arch-check.sh --list
+
 .PHONY: bench
 bench: build ## Run the benchmark suite against the built binary
 	$(GO) run ./bench/cmd/benchrun -tasks bench/tasks -agent ./$(BINARY) -json bench-report.json
@@ -67,7 +75,7 @@ sbom: build ## Write the bill of materials read back out of the built binary
 	@echo "wrote SBOM.txt"
 
 .PHONY: ci
-ci: fmt-check vet build test-race ## The full gate CI enforces
+ci: fmt-check vet arch-check build test-race ## The full gate CI enforces
 
 .PHONY: clean
 clean: ## Remove build artifacts

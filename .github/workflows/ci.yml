@@ -29,6 +29,14 @@ jobs:
       - name: go vet
         run: make vet
 
+      # Layering boundaries. Every one of these rules was held by convention
+      # until now — httpx's own comment claimed a CI grep enforced it and none
+      # existed, while 23 LLM call sites and 32 memory writes accumulated
+      # outside their owning layers. .arch-baseline is a set of ceilings: a
+      # count may fall, never rise. See docs/ARCHITECTURE_ANALYSIS.md.
+      - name: Architecture boundaries
+        run: make arch-check
+
       - name: Build
         run: make build
 
