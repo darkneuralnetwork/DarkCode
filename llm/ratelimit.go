@@ -287,3 +287,20 @@ func (c *RateLimitedClient) ProviderID() string {
 
 // Unwrap exposes the underlying client for introspection.
 func (c *RateLimitedClient) Unwrap() core.LLMClient { return c.inner }
+
+// Pressure reports what the limiter currently knows about this model's budget:
+// the effective requests-per-minute cap (0 = unlimited) and whether a 429 has
+// been observed recently enough to still be shaping behaviour.
+//
+// It exists so the concurrency decider can tell the difference between "this
+// machine could run four of these at once" and "this key allows twenty
+// requests a day". Fanning out against a budget like that does not go faster;
+// it converts one slow answer into four rejections.
+func (c *RateLimitedClient) Pressure() (effectiveRPM int, throttled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	rpm := c.effectiveRPMLocked()
+	// adaptiveRPM is only ever set by observing a real 429, and it decays back
+	// up once the provider stops rejecting, so its presence is the signal.
+	return rpm, c.adaptiveRPM > 0 || c.nowFn().Before(c.holdUntil)
+}

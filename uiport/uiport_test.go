@@ -57,7 +57,7 @@ func TestEveryRequestCarriesAWorkspace(t *testing.T) {
 	m, fe := newManager(t)
 
 	if _, err := m.Execute(context.Background(), Request{
-		Query: "do a thing", Surface: SurfaceHeadless, Workspace: t.TempDir(),
+		Query: "do a thing", Surface: SurfaceACP, Workspace: t.TempDir(),
 	}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -173,7 +173,7 @@ func (r *recordingPostTurn) AfterTurn(ctx context.Context, req Request, out stri
 // a project's plan updated when you asked from the browser and silently did not
 // when you asked from the terminal.
 func TestPostTurnRunsForEverySurface(t *testing.T) {
-	for _, surface := range []Surface{SurfaceCLI, SurfaceHeadless, SurfaceGUI, SurfaceACP, SurfaceAPI} {
+	for _, surface := range []Surface{SurfaceCLI, SurfaceGUI, SurfaceACP, SurfaceAPI} {
 		t.Run(string(surface), func(t *testing.T) {
 			rec := &recordingPostTurn{}
 			m, err := New(&fakeEngine{out: "done"}, WithPostTurn(rec))

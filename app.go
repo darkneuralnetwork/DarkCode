@@ -10,13 +10,11 @@ import (
 	"time"
 
 	"github.com/darkcode/checkpoint"
-	"github.com/darkcode/cli"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/intelligence"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/orchestrator"
-	"github.com/darkcode/permission"
 	"github.com/darkcode/plugin"
 	"github.com/darkcode/project"
 	"github.com/darkcode/router"
@@ -56,7 +54,6 @@ type AppRunner struct {
 	Sandbox      *security.Sandbox
 
 	StatusOnly bool
-	Query      string
 	PortFlag   string
 	BindAddr   string
 	GuiFlag    bool
@@ -70,10 +67,9 @@ type AppRunner struct {
 	shutdownOnce sync.Once
 }
 
-func NewAppRunner(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) *AppRunner {
+func NewAppRunner(cfg *config.Config, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) *AppRunner {
 	return &AppRunner{
 		Cfg:        cfg,
-		Query:      query,
 		StatusOnly: statusOnly,
 		PortFlag:   portFlag,
 		GuiFlag:    guiFlag,
@@ -91,44 +87,6 @@ func (a *AppRunner) Execute() {
 		}
 		fmt.Println("\n" + a.MemSystem.Summary())
 		os.Exit(0)
-	}
-
-	if a.Query != "" {
-		ctx := context.Background()
-		a.Kernel.Gate().SetApprover(permission.AutoApprover())
-		if a.Cfg.UIMode {
-			a.Emitter.EmitTaskUpdate("kernel", "observe", a.Query)
-		}
-		// Headless is the least supervised surface — it auto-approves every
-		// prompt above — so it is the one that can least afford to run without
-		// path confinement. It used to call the kernel with a bare context and
-		// no workspace, which is exactly the state in which confineWrite
-		// permits every path.
-		cwd, err := os.Getwd()
-		if err != nil {
-			a.MemSystem.Shutdown()
-			fmt.Fprintf(os.Stderr, "Error: cannot determine the working directory: %v\n", err)
-			os.Exit(1)
-		}
-		result, err := a.Port.Execute(ctx, uiport.Request{
-			Query:     a.Query,
-			Surface:   uiport.SurfaceHeadless,
-			Workspace: cwd,
-			Project:   a.globalActiveProject,
-		})
-		if err != nil {
-			a.MemSystem.Shutdown()
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if changes := a.Recorder.All(); len(changes) > 0 {
-			cli.PrintChanges(os.Stderr, changes)
-		}
-		if !a.Cfg.UIMode {
-			fmt.Println(result)
-		}
-		a.MemSystem.Shutdown()
-		return
 	}
 
 	a.mode = "cli"

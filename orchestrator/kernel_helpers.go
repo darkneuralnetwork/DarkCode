@@ -44,10 +44,6 @@ func (k *Kernel) isTrivial(goal string, complexity int) bool {
 	return true
 }
 
-func (k *Kernel) resolveSequential() bool {
-	return k.cfg.MaxConcurrent <= 1
-}
-
 // RouteAux is the single decision point for auxiliary LLM calls (loop
 // self-eval, context rewrite, plan amend). It prefers a local tier only when
 // UseLocalForAux is on, a local model is loaded, and promptTokens fits its

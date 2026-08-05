@@ -203,14 +203,16 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			})
 		}
 
-		// Execute all ready tasks concurrently (or serially, in Sequential mode).
+		// Decide the parallelism for THIS wave from what is true now — how
+		// much independent work there is, whether the model is local, and
+		// whether the provider has recently said no — and push it into the
+		// executor. It used to read a fixed number that never reached the
+		// executor at all. See orchestrator/concurrency.go.
+		decision := k.resolveConcurrency(len(configs))
 		if k.emitter != nil && len(configs) > 1 {
-			mode := "parallel"
-			if k.resolveSequential() {
-				mode = "sequential"
-			}
 			k.emitter.EmitTaskUpdate("executor", "running",
-				fmt.Sprintf("Running %d tasks in %s", len(configs), mode))
+				fmt.Sprintf("Running %d tasks, %d at a time (%s)",
+					len(configs), decision.Limit, decision.Reason))
 		}
 
 		results := k.executor.ExecuteAll(ctx, configs)

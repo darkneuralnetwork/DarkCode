@@ -41,12 +41,17 @@ import (
 // can differ by surface without another entry point being added to do it.
 type Surface string
 
+// A surface exists here only if a human is on the other end of it. The
+// headless `-q` path was removed: it was a fourth implementation of "run one
+// turn", it auto-approved every permission prompt, and scripting is better
+// served by the OpenAI-compatible /v1 endpoint, which any client already
+// speaks and which sits behind the same CSRF, content-type and rate-limit
+// middleware as the rest of the server.
 const (
-	SurfaceCLI      Surface = "cli"      // interactive console
-	SurfaceHeadless Surface = "headless" // darkcode -q, the least supervised path
-	SurfaceGUI      Surface = "gui"      // web chat
-	SurfaceACP      Surface = "acp"      // editor, over Agent Client Protocol
-	SurfaceAPI      Surface = "api"      // OpenAI-compatible endpoint
+	SurfaceCLI Surface = "cli" // interactive console
+	SurfaceGUI Surface = "gui" // web chat
+	SurfaceACP Surface = "acp" // editor, over Agent Client Protocol
+	SurfaceAPI Surface = "api" // OpenAI-compatible endpoint
 )
 
 // Engine is the part of the orchestration kernel a surface may reach. It is an
