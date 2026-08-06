@@ -621,10 +621,11 @@ Built as four layers rather than one lossy step (§5.0):
 | Kernel entry points | 6 | **0** |
 | LLM calls outside the model layer | 23 | **21** |
 | Memory writes outside the memory layer | 32 | **24** |
-| `orchestrator` → concrete impl imports | 12 | 12 |
+| `orchestrator` → concrete impl imports | 12 | **10** |
 | Unwired kernel setters | 1 | **0** |
 | Raw HTTP clients outside `safeurl` | 0 | **0** |
 | **Model calls with no token ceiling** | **8** | **0** |
+| Manager packages nothing constructs | 1 | **0** |
 
 The memory count measures *call shape*, not gateway coverage. The graph sync's
 ten writes route through the manager via an adapter while keeping their
