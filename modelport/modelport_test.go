@@ -344,3 +344,104 @@ func TestNoModelAnywhereIsAnError(t *testing.T) {
 		t.Error("a call with no model anywhere reported success")
 	}
 }
+
+// overflowClient fails the first call with a context overflow, then succeeds.
+type overflowClient struct {
+	calls    int
+	window   int
+	gotSizes []int // estimated tokens per dispatch
+}
+
+func (o *overflowClient) ChatCompletion(ctx context.Context, req *core.CompletionRequest) (*core.CompletionResponse, error) {
+	o.calls++
+	o.gotSizes = append(o.gotSizes, core.EstimateTokens(messagesText(req.Messages)))
+	if o.calls == 1 {
+		return nil, core.ErrContextTooLong
+	}
+	return &core.CompletionResponse{Choices: []core.ChatChoice{{
+		Message: core.ResponseMessage{Role: "assistant", Content: "recovered"},
+	}}}, nil
+}
+func (o *overflowClient) ChatCompletionStream(ctx context.Context, req *core.CompletionRequest, cb *core.StreamCallbacks) (*core.CompletionResponse, error) {
+	return o.ChatCompletion(ctx, req)
+}
+func (o *overflowClient) CreateEmbedding(context.Context, string) ([]float32, error) { return nil, nil }
+func (o *overflowClient) ModelInfo() core.ModelMetadata {
+	return core.ModelMetadata{Context: o.window}
+}
+func (o *overflowClient) Ping(context.Context) error { return nil }
+func (o *overflowClient) Close() error               { return nil }
+
+type oneClientRouter struct{ c core.LLMClient }
+
+func (r *oneClientRouter) Route(core.ModelTier, int, string) (core.LLMClient, string, error) {
+	return r.c, "m", nil
+}
+
+// TestContextOverflowIsRetriedOnce — the fit uses a token ESTIMATE, and
+// estimates drift from the model's real tokenizer. Aborting on that loses a
+// whole task for a counting error.
+func TestContextOverflowIsRetriedOnce(t *testing.T) {
+	oc := &overflowClient{window: 8000}
+	m, _ := New(&oneClientRouter{c: oc})
+
+	big := make([]core.Message, 0, 60)
+	for i := 0; i < 60; i++ {
+		big = append(big, core.Message{Role: core.RoleUser, Content: strings.Repeat("word ", 200)})
+	}
+
+	ans, err := m.Complete(context.Background(), Ask{Purpose: PurposeExecute, Messages: big})
+	if err != nil {
+		t.Fatalf("an overflow was not recovered: %v", err)
+	}
+	if ans.Text != "recovered" {
+		t.Errorf("output = %q", ans.Text)
+	}
+	if oc.calls != 2 {
+		t.Errorf("dispatched %d times, want 2 (one overflow, one retry)", oc.calls)
+	}
+	if len(oc.gotSizes) == 2 && oc.gotSizes[1] >= oc.gotSizes[0] {
+		t.Errorf("the retry sent %d tokens after %d — shrinking did nothing, so the "+
+			"retry can only fail the same way", oc.gotSizes[1], oc.gotSizes[0])
+	}
+}
+
+// alwaysOverflow never recovers.
+type alwaysOverflow struct{ calls int }
+
+func (a *alwaysOverflow) ChatCompletion(context.Context, *core.CompletionRequest) (*core.CompletionResponse, error) {
+	a.calls++
+	return nil, core.ErrContextTooLong
+}
+func (a *alwaysOverflow) ChatCompletionStream(ctx context.Context, r *core.CompletionRequest, cb *core.StreamCallbacks) (*core.CompletionResponse, error) {
+	return a.ChatCompletion(ctx, r)
+}
+func (a *alwaysOverflow) CreateEmbedding(context.Context, string) ([]float32, error) {
+	return nil, nil
+}
+func (a *alwaysOverflow) ModelInfo() core.ModelMetadata { return core.ModelMetadata{Context: 8000} }
+func (a *alwaysOverflow) Ping(context.Context) error    { return nil }
+func (a *alwaysOverflow) Close() error                  { return nil }
+
+// TestOverflowIsRetriedOnceNotForever — a second overflow is not tokenizer
+// drift, it is a prompt that genuinely does not fit.
+func TestOverflowIsRetriedOnceNotForever(t *testing.T) {
+	ao := &alwaysOverflow{}
+	m, _ := New(&oneClientRouter{c: ao})
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposeExecute, Messages: msgs}); err == nil {
+		t.Error("a prompt that never fits reported success")
+	}
+	if ao.calls > 2 {
+		t.Errorf("dispatched %d times — the retry is not bounded", ao.calls)
+	}
+}
+
+// TestOtherErrorsAreNotRetried — retrying an auth failure spends a second call
+// to be told the same thing.
+func TestOtherErrorsAreNotRetried(t *testing.T) {
+	c := &fakeClient{err: errors.New("401 unauthorized"), window: 8000}
+	m, _ := New(&oneClientRouter{c: c})
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposeExecute, Messages: msgs}); err == nil {
+		t.Fatal("expected the error to surface")
+	}
+}

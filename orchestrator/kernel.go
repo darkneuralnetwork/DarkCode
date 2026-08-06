@@ -18,6 +18,7 @@ import (
 	"github.com/darkcode/loop"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/permission"
 	"github.com/darkcode/plan"
 	"github.com/darkcode/recall"
@@ -62,6 +63,11 @@ type Kernel struct {
 	// terminal approver based on the active UI mode, so switching surfaces
 	// never leaves a stale approver (the prior CLI→GUI permission bug).
 	modeApprover *permission.ModeAwareApprover
+
+	// models is the gateway for reaching a model: it picks the tier for a
+	// purpose, applies the ceiling and temperature, and fits the prompt to the
+	// window of whatever it chose. Never nil in a kernel built by New.
+	models *modelport.Manager
 
 	// recall is the gateway for remembering a fact: it owns placement and
 	// content-addressed identity, so the kernel states what it learned rather
@@ -258,6 +264,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 	// SetRecall — which the tests caught immediately and a user would not have.
 	// A gateway that can be absent is a gateway that can be forgotten.
 	rec, _ := recall.New(mem)
+	models, _ := modelport.New(rtr)
 	factory := agents.NewAgentFactory(rtr, reg, emitter, errMgr)
 	executor := agents.NewConcurrentExecutor(factory, cfg.MaxConcurrent, emitter)
 	verifier := agents.NewVerificationPipeline(rtr, emitter, "")
@@ -279,6 +286,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		registry:    reg,
 		memory:      mem,
 		recall:      rec,
+		models:      models,
 		retriever:   memory.NewHybridRetriever(mem, mem.KG()),
 		compressor:  comp,
 		factory:     factory,
@@ -807,4 +815,13 @@ func (k *Kernel) graph() core.KnowledgeGraphStore {
 		return w
 	}
 	return k.memory.KG()
+}
+
+// PreferLocalForAux mirrors the config's use_local_for_aux onto the model
+// manager, so auxiliary work runs on a local model when one is healthy. This
+// is the setting RouteAux used to read; the ladder in modelport reads it now.
+func (k *Kernel) PreferLocalForAux(on bool) {
+	if k.models != nil {
+		k.models.PreferLocal(on)
+	}
 }

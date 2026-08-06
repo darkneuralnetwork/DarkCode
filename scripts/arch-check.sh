@@ -138,6 +138,21 @@ unbounded_completions() {
   true
 }
 
+# unwired_managers lists manager packages whose constructor nothing outside
+# tests calls. A manager with tests and no caller is a feature switch with no
+# way to reach it — the reviewer shipped exactly that way, and modelport was
+# built the same way in this very migration: a full package, well tested, and
+# New() had no non-test caller, so only its policy table was reachable.
+unwired_managers() {
+  for pkg in modelport recall uiport spill planwork concurrency; do
+    [ -d "$pkg" ] || continue
+    grep -qE "^func New\\(" "$pkg"/*.go 2>/dev/null || continue
+    n=$(grep -rn --include='*.go' "$pkg\\.New(" . 2>/dev/null | grep -v '_test\.go:' | grep -vc "^\\./$pkg/")
+    [ "$n" -eq 0 ] && echo "$pkg: New() has no non-test caller — the manager is unreachable"
+  done
+  true
+}
+
 declare -A CURRENT
 for i in "${!NAMES[@]}"; do
   out="$(scan "${PATTERNS[$i]}" "${EXCLUDES[$i]}")"
@@ -153,6 +168,18 @@ for i in "${!NAMES[@]}"; do
     echo
   fi
 done
+
+# Eighth boundary: a manager nobody builds.
+unwiredmgr_out="$(unwired_managers)"
+unwiredmgr_count="$(printf '%s' "$unwiredmgr_out" | grep -c . || true)"
+CURRENT["unwired-managers"]="$unwiredmgr_count"
+NAMES+=(unwired-managers)
+DESCS+=("Manager packages whose constructor nothing calls")
+if [ "$MODE" = "list" ]; then
+  echo "── unwired-managers ($unwiredmgr_count) — ${DESCS[-1]}"
+  [ "$unwiredmgr_count" -gt 0 ] && printf '%s\n' "$unwiredmgr_out" | sed 's/^/   /'
+  echo
+fi
 
 # Seventh boundary, computed by inspecting each call's request.
 unbounded_out="$(unbounded_completions)"
@@ -224,6 +251,18 @@ while read -r name limit; do
     echo "ok    $name: $cur (at baseline)"
   fi
 done < "$BASELINE_FILE"
+
+# A boundary that is computed but absent from the baseline is never checked,
+# because the loop above iterates the baseline. That is the same defect these
+# boundaries exist to catch, in the checker itself: it happened while adding
+# unwired-managers, which silently did nothing until this guard was written.
+for name in "${NAMES[@]}"; do
+  if ! grep -qE "^${name} " "$BASELINE_FILE"; then
+    echo "FAIL  ${name}: computed but missing from $BASELINE_FILE, so it is never checked"
+    echo "      Run: scripts/arch-check.sh --update"
+    fail=1
+  fi
+done
 
 if [ "$fail" -ne 0 ]; then
   echo

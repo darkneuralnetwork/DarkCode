@@ -4,15 +4,17 @@
 # Regenerate with: scripts/arch-check.sh --update
 
 # LLM calls outside the model layer (llm/, router/, provider/, modelport/)
-llm-calls 21
+llm-calls 20
 # Memory mutations outside the memory layer (memory/, core/, recall/)
 memory-writes 24
 # Kernel entry points outside the UI manager
 kernel-entry 0
 # Concrete implementation packages imported by orchestrator
-orchestrator-impl-imports 12
+orchestrator-impl-imports 10
 # HTTP clients constructed outside safeurl/
 raw-http-clients 0
+# Manager packages whose constructor nothing calls
+unwired-managers 0
 # Model calls that send no MaxTokens
 unbounded-completions 0
 # Exported Kernel setters that nothing outside tests calls

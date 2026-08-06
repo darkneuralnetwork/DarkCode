@@ -708,6 +708,11 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// directly, which is correct but is what made it thirty-two decisions.
 	a.Kernel.SetRecall(a.Recall)
 
+	// The auxiliary ladder in modelport reads this: with it on, summarising and
+	// classifying prefer a healthy local model before any metered one. It is
+	// the setting RouteAux used to consult.
+	a.Kernel.PreferLocalForAux(a.Cfg.UseLocalForAux)
+
 	// The one door from any surface into the kernel. Built here so every
 	// surface shares it and none can construct a request the others wouldn't.
 	port, err := uiport.New(a.Kernel, a.newPostTurnHooks()...)

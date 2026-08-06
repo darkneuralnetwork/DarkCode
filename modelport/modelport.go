@@ -32,9 +32,11 @@ package modelport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 )
 
@@ -251,20 +253,23 @@ func (m *Manager) Complete(ctx context.Context, ask Ask) (*Answer, error) {
 		return nil, err
 	}
 
+	// Fit to the window of the model actually chosen. Every caller used to do
+	// this itself, which means every caller had to remember — and the one that
+	// forgets overflows. Doing it here makes "never sent more than it can
+	// take" a property of the manager rather than of each call site, and it is
+	// more accurate besides: the fit happens after routing, against the model
+	// that will really answer, not the one the caller guessed.
+	messages := compression.FitClient(ask.Messages, client, 0, len(ask.Tools))
+
 	req := &core.CompletionRequest{
 		Model:       model,
-		Messages:    ask.Messages,
+		Messages:    messages,
 		Temperature: &temp,
 		MaxTokens:   &maxTokens,
 		Tools:       ask.Tools,
 	}
 
-	var resp *core.CompletionResponse
-	if ask.Stream != nil {
-		resp, err = client.ChatCompletionStream(ctx, req, ask.Stream)
-	} else {
-		resp, err = client.ChatCompletion(ctx, req)
-	}
+	resp, err := m.send(ctx, client, req, ask)
 	if err != nil {
 		return nil, err
 	}
@@ -279,6 +284,50 @@ func (m *Manager) Complete(ctx context.Context, ask Ask) (*Answer, error) {
 		ToolCalls: choice.Message.ToolCalls,
 		Raw:       resp,
 	}, nil
+}
+
+// overflowRefitFraction is how much of what was ACTUALLY SENT a retry is
+// squeezed into.
+//
+// Deliberately relative to the prompt, not to the window. Refitting to a
+// fraction of the window is a no-op whenever the estimate already fit — which
+// is exactly the case this recovers from, because the provider only disagreed
+// after we decided the prompt fit. A retry that sends the same bytes can only
+// fail the same way; a test caught this doing precisely that.
+const overflowRefitFraction = 75
+
+// send dispatches, and retries once on a context overflow.
+//
+// The fit above uses a token ESTIMATE, and estimates drift from the model's
+// real tokenizer. When the provider disagrees, shrinking hard and trying the
+// same call again recovers the turn; aborting loses the whole task for a
+// counting error. Retried once only — a second overflow is not drift, it is a
+// prompt that genuinely does not fit.
+func (m *Manager) send(ctx context.Context, client core.LLMClient, req *core.CompletionRequest, ask Ask) (*core.CompletionResponse, error) {
+	dispatch := func() (*core.CompletionResponse, error) {
+		if ask.Stream != nil {
+			return client.ChatCompletionStream(ctx, req, ask.Stream)
+		}
+		return client.ChatCompletion(ctx, req)
+	}
+
+	resp, err := dispatch()
+	if err == nil || !errors.Is(err, core.ErrContextTooLong) {
+		return resp, err
+	}
+
+	sent := core.EstimateTokens(messagesText(req.Messages))
+	target := sent * overflowRefitFraction / 100
+	// Never shrink past the model's own window either, in case the estimate
+	// was wrong in the other direction.
+	if w := client.ModelInfo().Context; w > 0 && target > w*overflowRefitFraction/100 {
+		target = w * overflowRefitFraction / 100
+	}
+	if target <= 0 {
+		return nil, err
+	}
+	req.Messages = compression.FitToWindow(req.Messages, target, 0)
+	return dispatch()
 }
 
 // route climbs the purpose's tier preference and returns the first model that

@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
-	"github.com/darkcode/llm"
 	"github.com/darkcode/modelport"
 	"github.com/darkcode/router"
 	"github.com/darkcode/ui"
@@ -382,7 +380,7 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 
 	// Single-model path: route to the coding tier and call with NO tools.
 	complexity := router.AssessComplexity(goal)
-	client, modelName, err := k.router.Route(core.ModelTierCoding, complexity, goal)
+	client, _, err := k.router.Route(core.ModelTierCoding, complexity, goal)
 	if err != nil {
 		return "", fmt.Errorf("general mode: model routing failed: %w", err)
 	}
@@ -420,39 +418,29 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		messages = append(messages, convo...)
 	}
 
-	// Hard context-fit guarantee before dispatch (Part 3 contract): even when
-	// the opt-in ctxengine didn't run, fit to the receiving client's effective
-	// window so a long general-mode turn never overflows a local model.
-	messages = compression.FitClient(messages, client, k.cfg.ContextLength, 0)
-
-	temp := 0.7
-	// Bound the reply. This answered every conversational turn with no
-	// ceiling. The number comes from the one policy table.
-	_, maxTok, _ := modelport.PolicyFor(modelport.PurposeConverse)
-	req := &llm.CompletionRequest{
-		Model:       modelName,
-		Messages:    messages,
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-		// Deliberately NO Tools field — General mode is tool-free.
-	}
-
-	resp, err := client.ChatCompletionStream(ctx, req, &llm.StreamCallbacks{
-		OnContent: func(chunk string) {
-			if k.emitter != nil {
-				k.emitter.Emit(core.EventTaskUpdate, chunk,
-					ui.WithTaskID("general"), ui.WithStatus("streaming"))
-			}
+	// One call through the model manager. It picks the tier for the purpose,
+	// applies the ceiling and temperature from the one policy table, and fits
+	// the prompt to the window of the model it actually chose — which is why
+	// the explicit FitClient that used to sit here is gone. Deliberately no
+	// Tools: this path answers without acting.
+	ans, err := k.models.Complete(ctx, modelport.Ask{
+		Purpose:  modelport.PurposeConverse,
+		Messages: messages,
+		Goal:     goal,
+		Stream: &core.StreamCallbacks{
+			OnContent: func(chunk string) {
+				if k.emitter != nil {
+					k.emitter.Emit(core.EventTaskUpdate, chunk,
+						ui.WithTaskID("general"), ui.WithStatus("streaming"))
+				}
+			},
 		},
 	})
 	if err != nil {
 		k.storeEpisodic(goal, "", nil, false, recallBlock, nil)
 		return "", err
 	}
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("general mode: empty response")
-	}
-	output := resp.Choices[0].Message.Content
+	output := ans.Text
 
 	k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: output})
 	k.recordOutcome(goal, output, nil, true, "general", 0, recallBlock)
