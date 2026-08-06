@@ -293,6 +293,37 @@ money on a model, with no route through any gateway.
 
 Detailed in §5. `CompressContext` defaults to `true` (`config/config.go:339`).
 
+### P6b — Retrieval scores by either/or and sums incomparable units — **HIGH** [RAN]
+
+THESIS.md §3.3 states retrieval "uses **reciprocal-rank fusion** across three
+signals", and §6 credits a Phase-1 commit with replacing an either/or scorer
+with it. Neither is true of the code that ships. `memory/retrieval.go` does:
+
+```go
+if usedVec { score = cosineSimilarity(queryVec, e.Vector) }
+else       { score = overlapScore(qTokens, tokenize(text)) }   // EITHER/OR
+score += recencyBonus(e.Timestamp, now, 30*24*time.Hour, 0.15) // 0–0.15
+score += kgBoostFromMatches(qKGMatches, e.TaskGoal)            // added to a cosine
+```
+
+Both defects are the ones rank fusion exists to prevent:
+
+1. **Either/or, not both.** An entry with no vector is scored on token overlap
+   and competes directly against cosine-scored entries. Which wins depends on
+   which signal happened to be available, not on relevance.
+2. **Incomparable units summed.** A recency bonus in [0, 0.15] and a graph
+   boost are added to a cosine. Nothing makes those share a scale.
+
+The fix exists but is not merged. `func fuse()` — genuine reciprocal-rank
+fusion — lives on an unmerged local branch, which is where the four commits
+THESIS.md §6 "Phase 1 — Hardening" audits actually are. That branch is also
+~8,000 lines *behind* `main`, so it cannot be merged as-is: the fusion work
+needs re-applying on top.
+
+This is the most consequential THESIS.md inaccuracy found. The others are
+documentation drift; this one is a live quality defect in the retriever the
+product's differentiator depends on.
+
 ### P7 — Redundant abstractions — **MEDIUM** [RAN]
 
 - **Three overlapping context-assembly systems**: `compression.Compressor`
@@ -516,7 +547,7 @@ BEFORE: STM ──► LLM summarize ──► overwrite STM ──► fit ──
 
 AFTER:  STM (intact, never mutated)
           │
-          ├─ retrieve: rank by relevance to *this* query (RRF + TF-IDF)
+          ├─ retrieve: rank by relevance to *this* query
           ├─ pin: always-keep messages (importance scoring)
           ├─ dedup: exact + near-duplicate
           ├─ select: fill the budget with highest-value items
@@ -609,7 +640,7 @@ Built as four layers rather than one lossy step (§5.0):
 
 | Layer | Mechanism | State |
 |---|---|---|
-| 1 — Retrieval | RRF over vector + token overlap + graph | already strong; unchanged |
+| 1 — Retrieval | hybrid scorer over vector + token overlap + graph | usable; **see P6b** |
 | 2 — **Offloading** | `spill`: full result to disk, head/tail preview, `read_result` handle | **added** — was absent |
 | 3 — Selection | dedup, TF-IDF rank, importance pinning, `FitToWindow` | kept |
 | 4 — Compaction | LLM briefing at window−reserve, **non-destructive** | re-tiered + made recoverable |
@@ -965,7 +996,7 @@ three of its six components are closer than they look:
 
 - **Tool Manager: already built.** `tools.Registry` needs enforcement, not work.
 - **The retrieval machinery to replace compression: already built and good.**
-  RRF fusion, TF-IDF ranking, importance scoring, deterministic budget fitting.
+  hybrid recall, TF-IDF ranking, importance scoring, deterministic budget fitting.
   They just have a summarization layer sitting on top of them.
 - **The interfaces to decouple the kernel: already written** in
   `core/interfaces.go`, and ignored by the kernel that needed them.
