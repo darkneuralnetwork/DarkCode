@@ -3,15 +3,17 @@ package modelport
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/darkcode/core"
 )
 
 type fakeClient struct {
-	got   *core.CompletionRequest
-	reply string
-	err   error
+	got    *core.CompletionRequest
+	reply  string
+	err    error
+	window int
 }
 
 func (f *fakeClient) ChatCompletion(ctx context.Context, req *core.CompletionRequest) (*core.CompletionResponse, error) {
@@ -29,7 +31,7 @@ func (f *fakeClient) ChatCompletionStream(ctx context.Context, req *core.Complet
 func (f *fakeClient) CreateEmbedding(context.Context, string) ([]float32, error) {
 	return []float32{1, 2, 3}, nil
 }
-func (f *fakeClient) ModelInfo() core.ModelMetadata { return core.ModelMetadata{} }
+func (f *fakeClient) ModelInfo() core.ModelMetadata { return core.ModelMetadata{Context: f.window} }
 func (f *fakeClient) Ping(context.Context) error    { return nil }
 func (f *fakeClient) Close() error                  { return nil }
 
@@ -97,6 +99,8 @@ func TestUnknownPurposeIsBoundedNotUnlimited(t *testing.T) {
 // TestPurposeDecidesTheTier — the whole point of naming a purpose instead of a
 // model is that routing lives in one table.
 func TestPurposeDecidesTheTier(t *testing.T) {
+	// With local preference off, an auxiliary purpose falls through its local
+	// rungs to the cloud tier at the end of its ladder.
 	cases := map[Purpose]core.ModelTier{
 		PurposePlan:       core.ModelTierReasoning,
 		PurposeExecute:    core.ModelTierCoding,
@@ -216,5 +220,127 @@ func TestEmbedUsesTheFastTier(t *testing.T) {
 	}
 	if r.gotTier != core.ModelTierFast {
 		t.Errorf("Embed routed to %v, want the fast tier", r.gotTier)
+	}
+}
+
+// ── the auxiliary ladder ─────────────────────────────────────────────────────
+
+// ladderRouter records every tier asked for and serves only the ones listed.
+type ladderRouter struct {
+	available map[core.ModelTier]int // tier -> context window
+	asked     []core.ModelTier
+	client    *fakeClient
+}
+
+func (r *ladderRouter) Route(tier core.ModelTier, complexity int, desc string) (core.LLMClient, string, error) {
+	r.asked = append(r.asked, tier)
+	w, ok := r.available[tier]
+	if !ok {
+		return nil, "", errors.New("no model at this tier")
+	}
+	c := &fakeClient{reply: "ok", window: w}
+	r.client = c
+	return c, string(tier), nil
+}
+
+// TestAuxiliaryWorkPrefersLocal is the regression this ladder exists for.
+//
+// The kernel had a second routing policy — RouteAux — that sent auxiliary work
+// to a local model, free, before falling back to cloud. A single tier per
+// purpose could not express it, so routing compress to ModelTierFast would
+// have quietly moved that work onto a metered model: a boundary count
+// improving while the tool got more expensive.
+func TestAuxiliaryWorkPrefersLocal(t *testing.T) {
+	r := &ladderRouter{available: map[core.ModelTier]int{
+		core.ModelTierMediumLocal: 32000,
+		core.ModelTierFast:        128000,
+	}}
+	m, _ := New(r)
+	m.PreferLocal(true)
+
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposeCompress, Messages: msgs}); err != nil {
+		t.Fatal(err)
+	}
+	if r.asked[0] != core.ModelTierMediumLocal {
+		t.Errorf("compress asked for %v first, want the local tier", r.asked[0])
+	}
+}
+
+// TestTheUsersWorkIsNeverDemotedToLocal — a worse plan costs more than the
+// tokens it saved.
+func TestTheUsersWorkIsNeverDemotedToLocal(t *testing.T) {
+	for _, p := range []Purpose{PurposePlan, PurposeExecute, PurposeConverse, PurposeSynthesize, PurposeAdjudicate} {
+		if IsAuxiliary(p) {
+			t.Errorf("%s is on the auxiliary ladder — it would run on a small local model", p)
+		}
+		for _, tier := range TiersFor(p) {
+			if isLocal(tier) {
+				t.Errorf("%s may route to the local tier %v", p, tier)
+			}
+		}
+	}
+}
+
+// TestLocalIsSkippedWhenThePromptWouldOverflow — the check that made
+// local-first safe. A big prompt on a small local model does not save money,
+// it fails, and then the work is done twice.
+func TestLocalIsSkippedWhenThePromptWouldOverflow(t *testing.T) {
+	r := &ladderRouter{available: map[core.ModelTier]int{
+		core.ModelTierMediumLocal: 100, // tiny window
+		core.ModelTierFast:        128000,
+	}}
+	m, _ := New(r)
+	m.PreferLocal(true)
+
+	big := []core.Message{{Role: core.RoleUser, Content: strings.Repeat("word ", 5000)}}
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposeCompress, Messages: big}); err != nil {
+		t.Fatal(err)
+	}
+	last := r.asked[len(r.asked)-1]
+	if isLocal(last) {
+		t.Errorf("a prompt too big for the local window was sent to %v anyway", last)
+	}
+}
+
+// TestPreferLocalOffHonoursTheSetting — running locally anyway would be the
+// manager overriding a choice the user made.
+func TestPreferLocalOffHonoursTheSetting(t *testing.T) {
+	r := &ladderRouter{available: map[core.ModelTier]int{
+		core.ModelTierMediumLocal: 32000,
+		core.ModelTierFast:        128000,
+	}}
+	m, _ := New(r)
+	m.PreferLocal(false)
+
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposeCompress, Messages: msgs}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range r.asked {
+		if isLocal(tier) {
+			t.Errorf("local tier %v was tried with the preference off", tier)
+		}
+	}
+}
+
+// TestLadderFallsThroughToCloud — a machine with no local model must still work.
+func TestLadderFallsThroughToCloud(t *testing.T) {
+	r := &ladderRouter{available: map[core.ModelTier]int{core.ModelTierFast: 128000}}
+	m, _ := New(r)
+	m.PreferLocal(true)
+
+	ans, err := m.Complete(context.Background(), Ask{Purpose: PurposeClassify, Messages: msgs})
+	if err != nil {
+		t.Fatalf("no local model available and the call failed: %v", err)
+	}
+	if ans.Model != string(core.ModelTierFast) {
+		t.Errorf("landed on %q, want the cloud fallback", ans.Model)
+	}
+}
+
+func TestNoModelAnywhereIsAnError(t *testing.T) {
+	r := &ladderRouter{available: map[core.ModelTier]int{}}
+	m, _ := New(r)
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposePlan, Messages: msgs}); err == nil {
+		t.Error("a call with no model anywhere reported success")
 	}
 }

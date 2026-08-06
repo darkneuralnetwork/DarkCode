@@ -33,6 +33,7 @@ package modelport
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/darkcode/core"
 )
@@ -70,9 +71,19 @@ const (
 	PurposeAdjudicate Purpose = "adjudicate"
 )
 
-// policy is the tier and limits for a purpose.
+// policy is the tier preference and limits for a purpose.
+//
+// tiers is ORDERED, and that ordering is where local-first lives. The kernel
+// had a second routing policy for this — RouteAux, which tried a medium-local
+// then a tiny-local model before falling back to cloud, so auxiliary work ran
+// free. A single tier per purpose could not express it, and routing compress
+// or classify to ModelTierFast would have moved that work off local models
+// onto metered ones: a boundary count improving while the tool got more
+// expensive. Absorbing it here leaves one routing decision instead of two, and
+// extends local-first from the three sites that used RouteAux to every
+// auxiliary call.
 type policy struct {
-	tier      core.ModelTier
+	tiers     []core.ModelTier
 	maxTokens int
 	temp      float64
 }
@@ -80,21 +91,39 @@ type policy struct {
 // policies is the whole routing table, in one place, readable at a glance.
 // That readability IS the feature: the previous spread of temperatures was
 // impossible to review because no two of them were in the same file.
+// aux is the tier order for work the user did not ask for: summarising,
+// classifying, reviewing. It runs on whatever is cheapest that can do the job,
+// and a local model is free.
+var aux = []core.ModelTier{core.ModelTierMediumLocal, core.ModelTierTinyLocal, core.ModelTierFast}
+
 var policies = map[Purpose]policy{
-	PurposePlan:       {core.ModelTierReasoning, 6000, 0.2},
-	PurposeExecute:    {core.ModelTierCoding, 4000, 0.3},
-	PurposeConverse:   {core.ModelTierCoding, 2000, 0.7},
-	PurposeSynthesize: {core.ModelTierReasoning, 2000, 0.5},
-	PurposeCompress:   {core.ModelTierFast, 1200, 0.1},
-	PurposeClassify:   {core.ModelTierFast, 256, 0.0},
-	PurposeReview:     {core.ModelTierCritic, 1500, 0.3},
-	PurposeAdjudicate: {core.ModelTierReasoning, 1000, 0.2},
+	// The user's work. Never demoted to a local model to save money — a worse
+	// plan costs more than the tokens it saved.
+	PurposePlan:       {[]core.ModelTier{core.ModelTierReasoning}, 6000, 0.2},
+	PurposeExecute:    {[]core.ModelTier{core.ModelTierCoding}, 4000, 0.3},
+	PurposeConverse:   {[]core.ModelTier{core.ModelTierCoding}, 2000, 0.7},
+	PurposeSynthesize: {[]core.ModelTier{core.ModelTierReasoning}, 2000, 0.5},
+
+	// Adjudication decides which of two models was right. A weaker model
+	// settling that is worse than either candidate, so it is not auxiliary
+	// however cheap it looks.
+	PurposeAdjudicate: {[]core.ModelTier{core.ModelTierReasoning}, 1000, 0.2},
+
+	// Work about the work. Local first: summarising and answering a closed
+	// question are what small models are good at, and they are free.
+	PurposeCompress: {aux, 1200, 0.1},
+	PurposeClassify: {aux, 256, 0.0},
+
+	// Review wants the critic model when there is one, but it is still
+	// advisory, so it degrades to the auxiliary ladder rather than to the
+	// primary.
+	PurposeReview: {append([]core.ModelTier{core.ModelTierCritic}, aux...), 1500, 0.3},
 }
 
 // defaultPolicy is used for an unknown purpose. Deliberately bounded rather
 // than unlimited: an unrecognised purpose is a bug, and the safe failure is a
 // short answer, not an expensive one.
-var defaultPolicy = policy{core.ModelTierCoding, 2000, 0.3}
+var defaultPolicy = policy{[]core.ModelTier{core.ModelTierCoding}, 2000, 0.3}
 
 // Ask is one request to a model.
 //
@@ -145,7 +174,15 @@ type Router interface {
 // Manager routes model calls.
 type Manager struct {
 	router Router
+	// preferLocal mirrors the config's use_local_for_aux. When false, local
+	// rungs are skipped and auxiliary work goes to the cloud tier — the user
+	// asked for that, and silently running it locally anyway would be the
+	// manager overriding a setting.
+	preferLocal bool
 }
+
+// PreferLocal enables the local rungs of the auxiliary ladder.
+func (m *Manager) PreferLocal(on bool) { m.preferLocal = on }
 
 // New returns a Manager over r. A nil router is refused rather than producing
 // a manager whose every call fails at the point of use.
@@ -159,11 +196,33 @@ func New(r Router) (*Manager, error) {
 // PolicyFor exposes the tier and limits a purpose resolves to, for telemetry
 // and for tests that assert the table rather than re-deriving it.
 func PolicyFor(p Purpose) (tier core.ModelTier, maxTokens int, temperature float64) {
-	pol, ok := policies[p]
-	if !ok {
-		pol = defaultPolicy
+	pol := policyFor(p)
+	return pol.tiers[0], pol.maxTokens, pol.temp
+}
+
+// TiersFor exposes the ordered tier preference, so telemetry can say which
+// ladder a call climbed rather than only where it landed.
+func TiersFor(p Purpose) []core.ModelTier {
+	return append([]core.ModelTier(nil), policyFor(p).tiers...)
+}
+
+func policyFor(p Purpose) policy {
+	if pol, ok := policies[p]; ok && len(pol.tiers) > 0 {
+		return pol
 	}
-	return pol.tier, pol.maxTokens, pol.temp
+	return defaultPolicy
+}
+
+// IsAuxiliary reports whether a purpose is work ABOUT the work rather than the
+// work itself. Auxiliary calls prefer a local model.
+func IsAuxiliary(p Purpose) bool {
+	tiers := policyFor(p).tiers
+	for _, t := range tiers {
+		if t == core.ModelTierMediumLocal || t == core.ModelTierTinyLocal {
+			return true
+		}
+	}
+	return false
 }
 
 // Complete runs one model call.
@@ -178,7 +237,8 @@ func (m *Manager) Complete(ctx context.Context, ask Ask) (*Answer, error) {
 		return nil, fmt.Errorf("modelport: %s call with no messages", ask.Purpose)
 	}
 
-	tier, maxTokens, temp := PolicyFor(ask.Purpose)
+	pol := policyFor(ask.Purpose)
+	maxTokens, temp := pol.maxTokens, pol.temp
 	if ask.MaxTokens > 0 {
 		maxTokens = ask.MaxTokens
 	}
@@ -186,12 +246,9 @@ func (m *Manager) Complete(ctx context.Context, ask Ask) (*Answer, error) {
 		temp = *ask.Temperature
 	}
 
-	client, model, err := m.router.Route(tier, ask.Complexity, ask.Goal)
+	client, model, err := m.route(pol, ask)
 	if err != nil {
-		return nil, fmt.Errorf("modelport: routing %s: %w", ask.Purpose, err)
-	}
-	if client == nil {
-		return nil, fmt.Errorf("modelport: no model available for %s", ask.Purpose)
+		return nil, err
 	}
 
 	req := &core.CompletionRequest{
@@ -222,6 +279,52 @@ func (m *Manager) Complete(ctx context.Context, ask Ask) (*Answer, error) {
 		ToolCalls: choice.Message.ToolCalls,
 		Raw:       resp,
 	}, nil
+}
+
+// route climbs the purpose's tier preference and returns the first model that
+// can take the call.
+//
+// A local tier is skipped when the prompt does not fit its window. That check
+// is what made local-first safe in the policy this replaced: a big auxiliary
+// prompt sent to a small local model does not save money, it overflows and
+// fails, and then the work is done twice.
+func (m *Manager) route(pol policy, ask Ask) (core.LLMClient, string, error) {
+	promptTokens := core.EstimateTokens(messagesText(ask.Messages))
+
+	var lastErr error
+	for _, tier := range pol.tiers {
+		if isLocal(tier) && !m.preferLocal {
+			continue // the user asked for cloud; honour it
+		}
+		c, model, err := m.router.Route(tier, ask.Complexity, ask.Goal)
+		if err != nil || c == nil {
+			lastErr = err
+			continue
+		}
+		if isLocal(tier) {
+			if w := c.ModelInfo().Context; w > 0 && promptTokens > w {
+				continue // would overflow; try the next rung
+			}
+		}
+		return c, model, nil
+	}
+	if lastErr != nil {
+		return nil, "", fmt.Errorf("modelport: routing %s: %w", ask.Purpose, lastErr)
+	}
+	return nil, "", fmt.Errorf("modelport: no model available for %s", ask.Purpose)
+}
+
+func isLocal(t core.ModelTier) bool {
+	return t == core.ModelTierMediumLocal || t == core.ModelTierTinyLocal || t == core.ModelTierLocal
+}
+
+func messagesText(msgs []core.Message) string {
+	var b strings.Builder
+	for _, msg := range msgs {
+		b.WriteString(msg.ContentString())
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // Embed produces a vector. Routed to the fast tier: embedding on a reasoning
