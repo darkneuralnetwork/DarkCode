@@ -32,3 +32,21 @@ coverage.out
 # and does not travel — so a fresh clone would leave all of it untracked in the
 # working tree, and one `git add -A` would publish a session's conversation.
 /.darkcode/
+
+# Working notes, drafts and comparison material kept beside the source but not
+# part of it. These are untracked AND were not ignored, so a single `git add -A`
+# would publish them — and some carry a vendor name in the filename, which this
+# project deliberately keeps out of its history.
+DARKCODE_VS_HERMES_AGENT.md
+THESIS.md
+HANDOFF_PROMPT.md
+NEXT_SESSION_PROMPT.md
+project_detail.md
+detail_*.md
+*_prompt.md
+multi_debate.txt
+/mywebssssite/
+
+# Stray, unreferenced asset dir (the embedded web assets live in server/web/).
+# Left untracked and unignored, so a blanket add would sweep it in.
+/ui/html/
