@@ -38,7 +38,11 @@ func TestNothingBypassesTheGuardedDialer(t *testing.T) {
 		}
 		if info.IsDir() {
 			switch info.Name() {
-			case ".git", "node_modules", "vendor", "testdata":
+			// .claude holds nested agent git worktrees — full checkouts of other
+			// branches. Walking them reports every branch's clients as offenders
+			// in this branch's tree, so a stale worktree fails the check with no
+			// code change here. Skip it like the other non-source trees.
+			case ".git", ".claude", "node_modules", "vendor", "testdata":
 				return filepath.SkipDir
 			}
 			return nil

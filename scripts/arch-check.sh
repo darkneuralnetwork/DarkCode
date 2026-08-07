@@ -39,13 +39,17 @@ esac
 # scan PATTERN EXCLUDE_DIRS_REGEX
 #
 # Greps non-test Go files for PATTERN, skipping packages matched by
-# EXCLUDE_DIRS_REGEX, and strips comment lines. The comment strip matters: a
+# EXCLUDE_DIRS_REGEX, and strips comment lines. --exclude-dir='.claude' keeps
+# nested agent git worktrees (.claude/worktrees/*) out of every count: those are
+# full checkouts of other branches, so scanning them multiplied each boundary by
+# the number of worktrees present and failed the check with zero code change.
+# The comment strip matters: a
 # comment mentioning http.DefaultClient is documentation, not a construction,
 # and counting it produces a false violation (this exact false positive was hit
 # while writing these baselines).
 scan() {
   local pattern="$1" exclude="$2"
-  grep -rn --include='*.go' -E "$pattern" . 2>/dev/null \
+  grep -rn --include='*.go' --exclude-dir='.claude' -E "$pattern" . 2>/dev/null \
     | grep -v '_test\.go:' \
     | { [ -n "$exclude" ] && grep -vE "$exclude" || cat; } \
     | awk -F: '{ line=$0; sub(/^[^:]*:[0-9]+:/, "", line);
@@ -103,7 +107,7 @@ unwired_setters() {
     | sed -E 's/^func \(k \*Kernel\) //; s/\($//' | sort -u \
   | while read -r m; do
       [ -z "$m" ] && continue
-      callers=$(grep -rn --include='*.go' "\.$m(" . 2>/dev/null \
+      callers=$(grep -rn --include='*.go' --exclude-dir='.claude' "\.$m(" . 2>/dev/null \
         | grep -v '_test\.go:' \
         | grep -v "^\./orchestrator/.*func (k \*Kernel) $m" \
         | grep -vE "^\./orchestrator/[a-z_]+\.go:[0-9]+:func " \
@@ -125,7 +129,7 @@ unwired_setters() {
 # several lines away. So each call site is checked against its surrounding
 # request instead.
 unbounded_completions() {
-  grep -rn --include='*.go' -E '\.(ChatCompletion|ChatCompletionStream)\(' . 2>/dev/null \
+  grep -rn --include='*.go' --exclude-dir='.claude' -E '\.(ChatCompletion|ChatCompletionStream)\(' . 2>/dev/null \
     | grep -v '_test\.go:' \
     | grep -vE '(^|/)(llm|router|provider|modelport)/' \
     | cut -d: -f1,2 \
@@ -147,7 +151,7 @@ unwired_managers() {
   for pkg in modelport recall uiport spill planwork concurrency; do
     [ -d "$pkg" ] || continue
     grep -qE "^func New\\(" "$pkg"/*.go 2>/dev/null || continue
-    n=$(grep -rn --include='*.go' "$pkg\\.New(" . 2>/dev/null | grep -v '_test\.go:' | grep -vc "^\\./$pkg/")
+    n=$(grep -rn --include='*.go' --exclude-dir='.claude' "$pkg\\.New(" . 2>/dev/null | grep -v '_test\.go:' | grep -vc "^\\./$pkg/")
     [ "$n" -eq 0 ] && echo "$pkg: New() has no non-test caller — the manager is unreachable"
   done
   true
