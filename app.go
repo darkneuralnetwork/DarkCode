@@ -12,6 +12,7 @@ import (
 	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
+	"github.com/darkcode/core"
 	"github.com/darkcode/intelligence"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/orchestrator"
@@ -38,6 +39,10 @@ type AppRunner struct {
 	Emitter      *ui.EventEmitter
 	Router       *router.Router
 	Compressor   *compression.Compressor
+	// createClient builds an LLM client from a model config (handling the
+	// embedded provider). It is the wiring layer's factory, persisted here so
+	// the kernel's live model-reload can reuse it without importing llm.
+	createClient func(config.ModelConfig) core.LLMClient
 	Kernel       *orchestrator.Kernel
 	// Port is the single way a surface reaches the kernel. Every surface
 	// goes through it so none can decide for itself whether a request

@@ -10,7 +10,7 @@ memory-writes 24
 # Kernel entry points outside the UI manager
 kernel-entry 0
 # Concrete implementation packages imported by orchestrator
-orchestrator-impl-imports 10
+orchestrator-impl-imports 9
 # HTTP clients constructed outside safeurl/
 raw-http-clients 0
 # Manager packages whose constructor nothing calls

@@ -14,7 +14,6 @@ import (
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
 	"github.com/darkcode/internal/strutil"
-	"github.com/darkcode/llm"
 	"github.com/darkcode/loop"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
@@ -40,11 +39,15 @@ type Kernel struct {
 	memory     *memory.System
 	retriever  *memory.HybridRetriever // ranked recall over episodic+semantic+KG
 	compressor *compression.Compressor
-	factory    *agents.AgentFactory
-	executor   *agents.ConcurrentExecutor
-	emitter    *ui.EventEmitter
-	verifier   *agents.VerificationPipeline
-	agentBus   *agents.AgentBus
+	// newClient builds an LLM client from a model config. Injected by the
+	// wiring layer (SetClientFactory) so live model reload can construct clients
+	// without the orchestrator importing the llm package.
+	newClient func(config.ModelConfig) core.LLMClient
+	factory   *agents.AgentFactory
+	executor  *agents.ConcurrentExecutor
+	emitter   *ui.EventEmitter
+	verifier  *agents.VerificationPipeline
+	agentBus  *agents.AgentBus
 
 	// permission gate — enforces user approval for dangerous tool calls.
 	// The registry consults it before executing any tool.
@@ -348,16 +351,13 @@ func (k *Kernel) SetChangeRecorder(rec *tools.ChangeRecorder) {
 	}
 }
 
-// newConfiguredClient builds an LLM client from a model config, applying the
-// provider, the credential pool, and the reasoning effort. Shared by every
-// registration site here so a model reloaded from the GUI gets the same
-// treatment as one wired at startup.
-func newConfiguredClient(mc config.ModelConfig) *llm.Client {
-	c := llm.NewClient(mc.BaseURL, mc.APIKey, mc.Model)
-	c.SetProvider(mc.Provider)
-	c.Keys = llm.NewKeyPool(append([]string{mc.APIKey}, mc.APIKeys...)...)
-	c.Effort = mc.ReasoningEffort
-	return c
+// SetClientFactory installs the wiring layer's LLM-client builder so live model
+// reload (ReloadModels) can construct clients without the orchestrator
+// importing llm. The factory handles every provider, including embedded — which
+// the old in-kernel builder did not, so a reloaded embedded model now keeps its
+// embedded client instead of silently degrading to a plain HTTP one.
+func (k *Kernel) SetClientFactory(fn func(config.ModelConfig) core.LLMClient) {
+	k.newClient = fn
 }
 
 // SetCheckpoints installs the workspace snapshotter, both on the tool registry
@@ -575,13 +575,21 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// effect immediately (not just at startup).
 	k.router.SetMode(parseRoutingModeLocal(cfg.RoutingMode))
 
+	// Without a client factory there is nothing to build a client with. The
+	// wiring layer always sets one; a kernel constructed in a test without it
+	// simply cannot reload models, which is not something a test does.
+	if k.newClient == nil {
+		k.log("model", "model reload skipped: no client factory wired")
+		return
+	}
+
 	// Register all models from the config map. RegisterModel dedups by name
 	// (upsert), so the primary — which also appears in cfg.Models — is not
 	// duplicated in the router's allModels slice. The tier map keeps the last
 	// writer per tier (used by Route/escalation); the allModels slice keeps
 	// every registered model (used by consensus fan-out).
 	for _, mc := range cfg.Models {
-		client := newConfiguredClient(mc)
+		client := k.newClient(mc)
 		k.router.RegisterModel(modelTierFromString(mc.Tier), client, mc.Model)
 		// Set the consensus role from config (empty = default "general").
 		k.router.SetModelRole(mc.Model, mc.Role)
@@ -591,7 +599,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// consensus, coding otherwise). This ensures the primary wins its tier
 	// slot for Route/escalation, and MarkPrimary below flags it as the
 	// consensus synthesizer.
-	primaryClient := newConfiguredClient(config.ModelConfig{
+	primaryClient := k.newClient(config.ModelConfig{
 		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model})
 	tier := primaryTierForMode(k.router.GetMode())
 	k.router.RegisterModel(tier, primaryClient, cfg.Model)
@@ -605,7 +613,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 		compModel := cfg.Model
 		if cfg.CompressorModel != "" {
 			if mc, ok := cfg.Models[cfg.CompressorModel]; ok {
-				compClient = newConfiguredClient(mc)
+				compClient = k.newClient(mc)
 				compModel = mc.Model
 			}
 		}

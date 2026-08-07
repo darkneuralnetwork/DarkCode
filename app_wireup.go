@@ -366,6 +366,9 @@ func (a *AppRunner) initRouterAndModels() {
 		c.Effort = mc.ReasoningEffort
 		return c
 	}
+	// Persist it so the kernel's live model-reload (ReloadModels) can build
+	// clients through the same factory instead of importing llm itself.
+	a.createClient = createClient
 
 	for _, mc := range a.Cfg.Models {
 		t := core.ParseModelTier(mc.Tier)
@@ -646,6 +649,9 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	orchCfg.UseLocalForAux = a.Cfg.UseLocalForAux
 
 	a.Kernel = orchestrator.New(orchCfg, a.Router, a.Registry, a.MemSystem, a.Compressor, a.Emitter)
+	// Hand the kernel the client factory so ReloadModels can rebuild clients on
+	// a live config change without the orchestrator importing llm.
+	a.Kernel.SetClientFactory(a.createClient)
 	a.Recorder = tools.NewChangeRecorder()
 	a.Kernel.SetChangeRecorder(a.Recorder)
 
