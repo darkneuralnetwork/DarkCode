@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Refuses a commit message carrying AI attribution. $1 is the message file.
+exec "$(git rev-parse --show-toplevel)/scripts/leak-check.sh" --commit-msg "$1"

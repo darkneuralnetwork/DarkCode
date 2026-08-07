@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Last check before anything leaves the machine: scans the range being pushed
+# and the branch name. The CI job re-runs the same rules so --no-verify or a
+# missing hook cannot slip a leak past review.
+exec "$(git rev-parse --show-toplevel)/scripts/leak-check.sh" --push

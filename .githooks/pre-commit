@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Convenience layer for the leak guard — fails fast before a commit is made.
+# The guarantee is the CI job (leak-guard); this only saves a round-trip.
+# Install with: make hooks   (sets core.hooksPath to .githooks)
+exec "$(git rev-parse --show-toplevel)/scripts/leak-check.sh" --staged

@@ -54,6 +54,21 @@ jobs:
       - name: SBOM
         run: make sbom && cat SBOM.txt
 
+  leak-guard:
+    # The guarantee behind the local git hooks. A commit made with --no-verify,
+    # or on a machine with no hook installed, still cannot merge: this re-runs
+    # the SAME scripts/leak-check.sh rules the hooks call. fetch-depth 0 so the
+    # range scan and the origin/main base are both available.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prove every guard rule fires
+        run: scripts/leak-check.sh --self-test
+      - name: Scan branch, files, paths and secrets
+        run: scripts/leak-check.sh --ci origin/${{ github.base_ref || 'main' }}
+
   build-matrix:
     # Prove the single binary cross-compiles for the platforms we ship.
     runs-on: ubuntu-latest
