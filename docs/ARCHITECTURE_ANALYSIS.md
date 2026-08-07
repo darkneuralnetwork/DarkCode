@@ -664,7 +664,7 @@ Built as four layers rather than one lossy step (§5.0):
 | Kernel entry points | 6 | **0** |
 | LLM calls outside the model layer | 23 | **21** |
 | Memory writes outside the memory layer | 32 | **24** |
-| `orchestrator` → concrete impl imports | 12 | **10** |
+| `orchestrator` → concrete impl imports | 12 | **7** (llm + compression removed; memory is the datasource keystone) |
 | Unwired kernel setters | 1 | **0** |
 | Raw HTTP clients outside `safeurl` | 0 | **0** |
 | **Model calls with no token ceiling** | **8** | **0** |
@@ -781,11 +781,27 @@ adding it anywhere further would double-iterate:
 
 ### 6.1.2 What this pass did NOT do, and the bar to revisit
 
-- **The §1 manager refactor** (Data Source Manager read gateway, adjudication
-  extraction, migrating the 20 LLM sites and 24 memory writes). Multi-day,
-  behaviour-changing, and the highest-risk work; `orchestrator-impl-imports` is
-  still 10. Left for a dedicated branch so the low-risk fixes above can be
-  reviewed on their own. Revisit when a session can be spent on §1 alone.
+- **The §1 manager refactor — started, not finished.** Two of the three
+  concrete `orchestrator` imports are gone: `llm` (client construction injected
+  as a factory) and `compression` (held by a five-method `contextCompressor`
+  interface). `orchestrator-impl-imports` ratcheted **10 → 7**, each removal its
+  own reverted-and-verified commit. What remains is the hard core:
+  - **`memory` (the Data Source Manager, §1.1).** Seven import lines across
+    cascade, plan_gate, reflection, skill_extractor, consensus, memory_recorder
+    and kernel. The field `memory *memory.System` can become `core.MemoryStore`
+    once two methods (`SessionEpoch`, `STMTruncate`) are added to that interface,
+    but the retriever type and **13 package-level `memory.Foo()` calls**
+    (`SmalltalkReply`, `AnswerFromGraph`, `GraphAnswer`, `RecallAnswer`,
+    `GoalSimilarity`, `FormatRecall`, …) are the read gateway itself — they must
+    move behind a `datasource.Manager`, not just be reimported. This is the
+    3–4-day keystone and is genuinely behaviour-adjacent (retrieval, the cache
+    rungs), so it wants its own branch and its own verification, not a tail
+    appended here.
+  - **Adjudication extraction (§1.2)**, **the 20 LLM-site migration to
+    `modelport.Complete` (§1.3)** — which also unblocks deleting the loop's
+    duplicate overflow ladder — and **the 24 memory writes (§1.4)** are
+    untouched. Revisit when a session can be spent on the datasource keystone
+    alone.
 - **The §6 UI conformance audit** (map the 19 events to renderers, three-surface
   parity, stale copy, live verification on a non-12345 port). Needs the running
   binary and real telemetry; not started this pass.
