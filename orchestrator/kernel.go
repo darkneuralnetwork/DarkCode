@@ -9,7 +9,6 @@ import (
 
 	"github.com/darkcode/agents"
 	"github.com/darkcode/checkpoint"
-	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
@@ -31,6 +30,18 @@ import (
 // DAGs, delegates to sub-agents, routes models, enforces safety, and stores
 // episodic memory. Trivial tasks are answered directly without decomposition.
 
+// contextCompressor is the slice of compression.Compressor the kernel uses, named
+// here so the orchestrator states context compaction as a capability rather than
+// importing the concrete package for it. EstimateTokens and SnapshotToMessages
+// are method forms of the two package helpers, added for exactly this seam.
+type contextCompressor interface {
+	Compress(ctx context.Context, messages []core.Message, goal string) (*core.ContextSnapshot, error)
+	SetClient(client core.LLMClient, model string)
+	Summarize(ctx context.Context, text, focus string) (string, error)
+	EstimateTokens(messages []core.Message) int
+	SnapshotToMessages(snapshot *core.ContextSnapshot) []core.Message
+}
+
 // Kernel is the orchestration core — Layer 1.
 type Kernel struct {
 	cfg        Config
@@ -38,7 +49,7 @@ type Kernel struct {
 	registry   *tools.Registry
 	memory     *memory.System
 	retriever  *memory.HybridRetriever // ranked recall over episodic+semantic+KG
-	compressor *compression.Compressor
+	compressor contextCompressor
 	// newClient builds an LLM client from a model config. Injected by the
 	// wiring layer (SetClientFactory) so live model reload can construct clients
 	// without the orchestrator importing the llm package.
@@ -258,7 +269,7 @@ type TaskLogEntry struct {
 }
 
 // New creates the orchestration kernel with all layers wired together.
-func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System, comp *compression.Compressor, emitter *ui.EventEmitter) *Kernel {
+func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System, comp contextCompressor, emitter *ui.EventEmitter) *Kernel {
 	errMgr := NewErrorManager()
 	// The memory gateway is built here rather than injected later, so it is
 	// never nil. An earlier version treated nil as "write the stores

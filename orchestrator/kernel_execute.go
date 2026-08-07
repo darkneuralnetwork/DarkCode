@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/loop"
@@ -220,7 +219,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// and it would still spend a model call summarising them. See
 		// compaction.go.
 		window := k.primaryContextWindow()
-		used := compression.EstimateTokens(stm)
+		used := k.compressor.EstimateTokens(stm)
 		if shouldCompact(len(stm), used, window) {
 			k.log("compress", fmt.Sprintf("Compacting context: %d tokens used of a %d window (threshold %d)",
 				used, window, compactionThreshold(window)))
@@ -232,7 +231,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 				if k.emitter != nil {
 					k.emitter.EmitCompression(snapshot.OriginalTokens, snapshot.CompressedTokens)
 				}
-				briefing := compression.SnapshotToMessages(snapshot)
+				briefing := k.compressor.SnapshotToMessages(snapshot)
 				k.memory.STMCompress(briefing, compressionKeepRecent)
 			}
 		}

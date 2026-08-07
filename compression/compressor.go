@@ -605,6 +605,20 @@ Rules:
 - Do NOT invent facts not present in the source text.
 - Output only the markdown briefing.`
 
+// EstimateTokens and SnapshotToMessages are also exposed as methods so a caller
+// holding the compressor through an interface (the orchestrator does, to avoid
+// importing this package for a concrete type) can reach the two package-level
+// helpers without naming the package. They add no behaviour — each forwards to
+// the function of the same name.
+func (c *Compressor) EstimateTokens(messages []core.Message) int {
+	return EstimateTokens(messages)
+}
+
+// SnapshotToMessages forwards to the package function; see EstimateTokens.
+func (c *Compressor) SnapshotToMessages(snapshot *core.ContextSnapshot) []core.Message {
+	return SnapshotToMessages(snapshot)
+}
+
 // SnapshotToMessages converts a ContextSnapshot back into a compact
 // system message that can be injected into a new conversation.
 func SnapshotToMessages(snapshot *core.ContextSnapshot) []core.Message {
