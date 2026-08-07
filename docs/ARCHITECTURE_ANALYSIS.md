@@ -293,7 +293,19 @@ money on a model, with no route through any gateway.
 
 Detailed in §5. `CompressContext` defaults to `true` (`config/config.go:339`).
 
-### P6b — Retrieval scores by either/or and sums incomparable units — **HIGH** [RAN]
+### P6b — Retrieval scores by either/or and sums incomparable units — **FIXED** [RAN]
+
+> **Resolved.** The fusion was re-applied on top of `main` (commit *"rank
+> retrieval by fusion instead of summing incomparable units"*). `memory/retrieval.go`
+> now scores every entry on all three signals and combines vector, keyword and
+> KG by reciprocal rank (k=60); recency is a small additive tie-breaker, not
+> part of the ranked base. Determinism is fixed too — every rank list and the
+> final order break ties on entry ID, so recall no longer reshuffles between two
+> identical queries (which had been breaking the answer cache). Proven by
+> `TestMixedScaleRankingIsFixed` (reproduces the old order inline, shows fuse
+> corrects it) and `TestRecallIsDeterministic`, plus the repo's first
+> benchmarks (`BenchmarkFuse`, `BenchmarkRecall`). The original text is kept
+> below for the record.
 
 THESIS.md §3.3 states retrieval "uses **reciprocal-rank fusion** across three
 signals", and §6 credits a Phase-1 commit with replacing an either/or scorer
@@ -640,7 +652,7 @@ Built as four layers rather than one lossy step (§5.0):
 
 | Layer | Mechanism | State |
 |---|---|---|
-| 1 — Retrieval | hybrid scorer over vector + token overlap + graph | usable; **see P6b** |
+| 1 — Retrieval | reciprocal-rank fusion over vector + token overlap + graph | **fixed** — P6b resolved; was either/or |
 | 2 — **Offloading** | `spill`: full result to disk, head/tail preview, `read_result` handle | **added** — was absent |
 | 3 — Selection | dedup, TF-IDF rank, importance pinning, `FitToWindow` | kept |
 | 4 — Compaction | LLM briefing at window−reserve, **non-destructive** | re-tiered + made recoverable |
@@ -688,6 +700,101 @@ Three were not the target of any stage; the migration surfaced them.
    into the execute path, unreachable in a shipped binary for want of a config
    key. `go vet` cannot see this: an exported method is "used" by definition.
    `arch-check` gained a boundary for the class. (Stage 1)
+
+### 6.1.1 Verification pass (audit-managers)
+
+A later pass verified the above rather than trusting it, and fixed what it
+found. Each item is marked **[RAN]** (executed) or **[READ]** (traced).
+
+**The enforcement mechanism was itself broken. [RAN]** `make ci` failed on a
+clean checkout with no code change: `arch-check` read `llm-calls` 129 against a
+baseline of 20, and the `safeurl` no-bypass test found dozens of raw HTTP
+clients. Both scanners walk the tree by hand instead of through the Go tool
+(which already skips dot-dirs), so both descended into `.claude/worktrees/` —
+full checkouts of other branches — and counted every branch's violations as
+this branch's. The count scaled with how many worktrees happened to be present.
+Fixed both to skip `.claude`; the audited code was at baseline the whole time.
+This is the same class as the "boundary computed but never checked" defect the
+checker already guards against.
+
+**P6b (retrieval fusion) fixed. [RAN]** See the resolved note on P6b above.
+
+**Leak guard built — hook and CI. [RAN]** `scripts/leak-check.sh` is one rule
+set called by two layers (`.githooks/*` and the `leak-guard` CI job), so they
+cannot drift. Six rules: vendor name in a branch or filename, AI attribution in
+a commit message, sensitive-draft filename, secret-shaped string, key-shaped
+filename, file outside the path allowlist. It deliberately does **not** scan
+source for vendor words — 351 legitimate mentions across 40 files (provider
+catalogue, endpoints, env vars, protocol-compat comments) make that all false
+positive. Two exceptions keep it honest: a model id (`claude-sonnet-5`) is
+allowed anywhere, and a provider-integration file (`openai_provider.go`) may
+name its vendor. `--self-test` asserts every rule fires and every exception
+stays silent, and is wired into `make ci` so a rule cannot rot silently. Each
+rule was watched failing a real commit, then restored.
+
+**Token-waste measurements. [RAN]** All five previously-fixed leaks confirmed
+holding (`spill`, embed cache, compaction band, unbounded completions, planwork
+dedup). Added the repo's first benchmarks. Findings on the open items, letting
+the number decide:
+- *Recall over-fetch (§2.1).* `getRecallBlock` fetches 10 and trims to 3, but
+  `Recall` scans the whole store regardless of `k` — `k` only truncates the
+  sorted tail. So the over-fetch costs nothing; reducing it saves nothing. No
+  cache warranted. `BenchmarkRecall`: ~4 ms for a 500-entry store, zero tokens,
+  zero network.
+- *Duplicate scan (§2.2).* On any LLM-escalating request there are two full
+  scans — `ConfidentRecall` (cascade rung 1) then `Recall` (`getRecallBlock`).
+  The embedding, the only network cost, is already memoised; the duplicate is
+  local CPU only. Not worth a fragile per-request cache at present store sizes.
+  The scaling hotspot is re-tokenising every entry each scan (~11.5k allocs /
+  500 entries). **Threshold to revisit:** stores past ~2 000 entries, where two
+  scans exceed ~30 ms/request; the fix then is a per-entry token cache, not a
+  result cache.
+- *Answer cache (§2.3).* `ConfidentRecall` is correctness-tested and can hit;
+  the live hit-*rate* needs a real session and was not measured (free-tier
+  quota trap). **Deferred, not dismissed.**
+- *File-observation index (§2.4).* `memory/fileobs.go` records every file read
+  (`ObserveFile`), but `FileChanged` — the query that would let a sub-agent skip
+  a file the parent already read — is called only from tests. The index is
+  write-only in production, so its saving is unrealised. **Recommend wiring it
+  into the tool-dispatch read path; deferred** (needs a staleness/typed-nil
+  design pass).
+
+**ReAct loop integration — analysed, no change (correct). [RAN/READ]** The
+requirement is that the loop reach "all calls whenever asked". It does, and
+adding it anywhere further would double-iterate:
+- The prompt's own count of "two `agenticLoop.Run(` sites" misses
+  `RunWithContract` (`kernel_execute.go`), the main enabled-loop path — the loop
+  is integrated in three places (chat-readonly, repair, main).
+- `executeDirect` already iterates: it spawns one worker whose `Execute` runs
+  `for turn := 0; turn < maxTurns` (`agents/subagent.go:167`). Bolting the ReAct
+  loop on top is two budgets. Correctly left alone.
+- DAG nodes iterate individually (each is a sub-agent with `MaxTurns`); on
+  acceptance-check failure the graph does not re-plan inline — `repairFailedAcceptance`
+  runs the ReAct loop as a targeted repair, only for what failed. Two levels,
+  never stacked during normal execution.
+- Consensus members are single-shot by design (independent opinions to compare),
+  not an iteration gap.
+- **Blocked cleanup:** the loop still calls the model directly, so its
+  overflow-recovery ladder is still the only recovery on that path. Deleting the
+  copy (as the brief suggests) must wait until the loop migrates to
+  `modelport.Complete` — part of the deferred §1.3 work below.
+
+### 6.1.2 What this pass did NOT do, and the bar to revisit
+
+- **The §1 manager refactor** (Data Source Manager read gateway, adjudication
+  extraction, migrating the 20 LLM sites and 24 memory writes). Multi-day,
+  behaviour-changing, and the highest-risk work; `orchestrator-impl-imports` is
+  still 10. Left for a dedicated branch so the low-risk fixes above can be
+  reviewed on their own. Revisit when a session can be spent on §1 alone.
+- **The §6 UI conformance audit** (map the 19 events to renderers, three-surface
+  parity, stale copy, live verification on a non-12345 port). Needs the running
+  binary and real telemetry; not started this pass.
+- **Branch consolidation and stale-branch deletion (§3.2).** The
+  `claude/codebase-reverse-engineering-audit` worktree was kept — it is where
+  the fusion was ported from — and no branches were deleted.
+- **`fileobs` read-path wiring** and **the retrieval token cache** — deferred
+  with the thresholds recorded above.
+- **Nothing was pushed.**
 
 ---
 
