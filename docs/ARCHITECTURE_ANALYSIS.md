@@ -779,6 +779,39 @@ adding it anywhere further would double-iterate:
   copy (as the brief suggests) must wait until the loop migrates to
   `modelport.Complete` — part of the deferred §1.3 work below.
 
+**The nested worktrees had poisoned the knowledge graph too. [RAN]** The same
+defect class as the arch-check and safeurl scanners, third instance, and this
+one had been silently corrupting stored knowledge. `./.darkcode/memory/knowledge_graph.json`
+had reached **160 MB**: 29,745 nodes and 475,156 edges, of which **364,481
+(76.7%) were `.claude/worktrees/` entries** — the codebase indexed once per
+worktree, including one (`codebase-research-protocol-2fdda5`) whose directory no
+longer exists. The edge count was the real damage: symbol resolution matched
+identical symbols *across* worktree copies, so every copy of a file referenced
+every other copy's symbols — an N² explosion, which is why edges outnumbered
+nodes 16:1.
+
+The cost was not just disk. The graph is persisted by a whole-file
+`json.Marshal` on a 2-second debounce under `RLock`, so a 160 MB document was
+being re-serialised continuously while readers waited on it.
+
+**No code fix was needed** — `internal/repowalk.SkipDir` already skips `.claude`
+(hidden directories are skipped as a class), verified empirically. The pollution
+predates that unification, which the package doc records: "the knowledge-graph
+sync skipped five; the code indexer checked two by substring". This was stale
+damage from before the fix, not a live leak.
+
+The store was filtered instead (backup taken, entries kept byte-identical,
+dangling edges checked — none): **29,745 → 13,423 nodes, 475,156 → 34,553 edges,
+160 MB → 15 MB, a 91% reduction**, verified by loading the result through
+`NewKnowledgeGraph` and comparing counts. All five worktrees were then removed
+(139 MB reclaimed); every branch is preserved, since removing a worktree does
+not delete its ref.
+
+The lesson generalises: three separate mechanisms — a shell scanner, a Go test,
+and the code indexer — each grew their own idea of what to skip, and each was
+wrong in the same way. `repowalk` fixed the third; the first two were fixed in
+this pass. A fourth walker will make the same mistake unless it uses `repowalk`.
+
 ### 6.1.2 What this pass did NOT do, and the bar to revisit
 
 - **The §1 manager refactor — started, not finished.** Two of the three
@@ -810,6 +843,16 @@ adding it anywhere further would double-iterate:
   the fusion was ported from — and no branches were deleted.
 - **`fileobs` read-path wiring** and **the retrieval token cache** — deferred
   with the thresholds recorded above.
+- **`memory/kgstore.go` (incremental SQLite persistence for the graph).** Real,
+  measured work sitting on `claude/codebase-reverse-engineering-audit-10dc09`:
+  it replaces the whole-file rewrite with per-row writes, using pure-Go
+  `modernc.org/sqlite`, which keeps `CGO_ENABLED=0` and the static binary that
+  THESIS.md §365 and §642 treat as the binding constraint. **Not ported.** The
+  76.7% pollution was the actual cause of the write cost, and removing it took
+  the store to 15 MB, where a whole-file marshal is no longer the top cost.
+  Revisit if the graph passes roughly 50 MB of *legitimate* content, at which
+  point the write amplification returns on its own merits rather than as a
+  symptom of bad data.
 - **Nothing was pushed.**
 
 ---
