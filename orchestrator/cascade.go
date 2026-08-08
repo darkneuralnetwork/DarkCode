@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/datasource"
 	"github.com/darkcode/internal/strutil"
-	"github.com/darkcode/memory"
 	"github.com/darkcode/router"
 )
 
@@ -232,7 +232,7 @@ func (k *Kernel) detectReAsk(goal string, now time.Time) string {
 		// (memory/replay.go). What actually made this feel broken was the
 		// two-minute window above, and that is what changed.
 		if now.Sub(e.Time) > cascadeRetryWindow || e.Retried ||
-			memory.GoalSimilarity(goal, e.Query) < cascadeRetrySimilarity {
+			datasource.GoalSimilarity(goal, e.Query) < cascadeRetrySimilarity {
 			break // most recent local answer isn't a match — not a re-ask
 		}
 		e.Retried = true
@@ -346,7 +346,7 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 	// every rung and reached the model every single time. The cheapest
 	// request in the system was the one paying full price, which is the
 	// opposite of what the cascade is for.
-	if reply, ok := memory.SmalltalkReply(goal); ok {
+	if reply, ok := k.data.SmalltalkReply(goal); ok {
 		return finish(router.RungDeterministic, "smalltalk", core.Confidence{
 			Score:      1.0,
 			Reason:     "the message is a greeting or acknowledgement, answered without retrieval or a model call",
@@ -364,8 +364,8 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 	// Rung 1 — answer cache (exact / strict near-duplicate of a past
 	// successful no-tool task). Subsumes the previous Step 3.02
 	// ConfidentRecall check in Execute.
-	if entryRung <= router.RungCache && k.retriever != nil {
-		if ans, ok := k.retriever.ConfidentRecall(goal, 0); ok {
+	if entryRung <= router.RungCache && k.data != nil {
+		if ans, ok := k.data.ConfidentRecall(goal, 0); ok {
 			conf := core.Confidence{
 				Score:      0.9,
 				Reason:     "exact or ≥0.85 token-Jaccard match to a prior successful no-tool answer",
@@ -382,7 +382,7 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 	// through to the cascade log so a later re-ask can demote the exact
 	// episodic-sourced fact(s) that answered, not just the whole rung.
 	if entryRung <= router.RungGraph && k.memory != nil {
-		if ga, ok := memory.AnswerFromGraph(k.memory.KG(), goal); ok && ga.Confidence.Score >= k.rungThreshold(router.RungGraph) {
+		if ga, ok := k.data.AnswerFromGraph(goal); ok && ga.Confidence.Score >= k.rungThreshold(router.RungGraph) {
 			return finish(router.RungGraph, "graph", ga.Confidence, ga.Text, ga.SourceNodeIDs)
 		}
 	}
@@ -400,8 +400,8 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 	// from live facts and cannot be stale; a replayed one is only as fresh as
 	// the moment it was stored. When both can answer, the one that cannot rot
 	// should win.
-	if entryRung <= router.RungRecall && k.retriever != nil && k.memory != nil {
-		if ca, ok := k.retriever.ComposeAnswer(k.memory.KG(), goal); ok && ca.Confidence.Score >= k.rungThreshold(router.RungGraph) {
+	if entryRung <= router.RungRecall && k.data != nil && k.memory != nil {
+		if ca, ok := k.data.ComposeAnswer(goal); ok && ca.Confidence.Score >= k.rungThreshold(router.RungGraph) {
 			return finish(router.RungGraph, "composed", ca.Confidence, ca.Text, ca.SourceNodeIDs)
 		}
 	}
@@ -412,8 +412,8 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 	// Unlike rungs 0-2 it has no KG node IDs to demote, so a rejected answer
 	// is corrected by the rung-wide re-ask mechanism alone (threshold raise
 	// + forced escalation). Sub-threshold matches stay context injection.
-	if entryRung <= router.RungRecall && k.retriever != nil {
-		if ra, ok := k.retriever.BestRecallAnswer(goal, recallAnswerToolMaxAge); ok && ra.Score >= k.rungThreshold(router.RungRecall) {
+	if entryRung <= router.RungRecall && k.data != nil {
+		if ra, ok := k.data.BestRecallAnswer(goal, recallAnswerToolMaxAge); ok && ra.Score >= k.rungThreshold(router.RungRecall) {
 			conf := core.Confidence{
 				Score:      ra.Score,
 				Reason:     ra.Reason,
@@ -433,7 +433,7 @@ func (k *Kernel) runCascade(ctx context.Context, goal string) (string, bool) {
 // never mistaken for a fresh lookup, and names the escape hatch — immediately
 // re-asking IS the designed correction path (detectReAsk force-escalates and
 // counts the negative label).
-func formatRecallAnswer(ra *memory.RecallAnswer) string {
+func formatRecallAnswer(ra *datasource.RecallAnswer) string {
 	src := "a previous answer"
 	if len(ra.ToolsUsed) > 0 {
 		src += " (via " + strings.Join(ra.ToolsUsed, ", ") + ")"

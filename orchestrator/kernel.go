@@ -12,9 +12,9 @@ import (
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
+	"github.com/darkcode/datasource"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/loop"
-	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/modelport"
 	"github.com/darkcode/permission"
@@ -44,11 +44,14 @@ type contextCompressor interface {
 
 // Kernel is the orchestration core — Layer 1.
 type Kernel struct {
-	cfg        Config
-	router     *router.Router
-	registry   *tools.Registry
-	memory     *memory.System
-	retriever  *memory.HybridRetriever // ranked recall over episodic+semantic+KG
+	cfg      Config
+	router   *router.Router
+	registry *tools.Registry
+	memory   core.MemoryStore
+	// data is the gateway for reads: ranked recall, the answer cache, graph
+	// question answering, and the graph's own reasoning. `recall` owns the
+	// other direction. Never nil in a kernel built by New.
+	data       *datasource.Manager
 	compressor contextCompressor
 	// newClient builds an LLM client from a model config. Injected by the
 	// wiring layer (SetClientFactory) so live model reload can construct clients
@@ -269,7 +272,7 @@ type TaskLogEntry struct {
 }
 
 // New creates the orchestration kernel with all layers wired together.
-func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System, comp contextCompressor, emitter *ui.EventEmitter) *Kernel {
+func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemoryStore, comp contextCompressor, emitter *ui.EventEmitter) *Kernel {
 	errMgr := NewErrorManager()
 	// The memory gateway is built here rather than injected later, so it is
 	// never nil. An earlier version treated nil as "write the stores
@@ -301,7 +304,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		memory:      mem,
 		recall:      rec,
 		models:      models,
-		retriever:   memory.NewHybridRetriever(mem, mem.KG()),
+		data:        datasource.New(mem),
 		compressor:  comp,
 		factory:     factory,
 		executor:    executor,
@@ -430,13 +433,12 @@ const (
 // graph at full confidence would have the agent citing beliefs about a file
 // that has since been reverted underneath it.
 func (k *Kernel) softenBeliefsAfterRollback(changes []checkpoint.Change) {
-	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
-	if !ok || kg == nil || len(changes) == 0 {
+	if k.data == nil || len(changes) == 0 {
 		return
 	}
 	softened := 0
 	for _, c := range changes {
-		softened += kg.PropagateConfidence("file:"+c.Path,
+		softened += k.data.PropagateConfidence("file:"+c.Path,
 			rollbackConfidenceDecay, rollbackDecayFactor, rollbackDecayHops)
 	}
 	if softened > 0 {

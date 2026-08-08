@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/darkcode/core"
-	"github.com/darkcode/memory"
 )
 
 func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble string) (string, error) {
@@ -44,8 +43,10 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 // The synthesis keeps ties. It saw every contribution, so it is the right
 // default whenever the evidence does not actually distinguish the candidates.
 func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core.ConsensusResult) string {
-	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
-	if !ok || kg == nil || consensus == nil {
+	if consensus == nil {
+		return ""
+	}
+	if k.data == nil {
 		return consensus.Synthesized
 	}
 
@@ -61,8 +62,8 @@ func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core
 		return consensus.Synthesized
 	}
 
-	best, supports := kg.AdjudicateCandidates(candidates)
-	if best < 0 || supports[0].Checked == 0 {
+	best, supports, graphed := k.data.Adjudicate(candidates)
+	if !graphed || best < 0 || supports[0].Checked == 0 {
 		// Nothing checkable. This branch used to return the synthesis and move
 		// on, which is the one case where the models disagreeing is all the
 		// information there is — and where letting them answer each other is

@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
-	"github.com/darkcode/memory"
 	"github.com/darkcode/plan"
 )
 
@@ -45,8 +44,7 @@ var planFilePattern = regexp.MustCompile(`\b[\w./-]+\.(?:go|ts|tsx|js|jsx|py|rs|
 // knows the answer.
 func (k *Kernel) previewWithImpact(g *plan.Graph) string {
 	preview := plan.Preview(g)
-	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
-	if !ok || kg == nil {
+	if k.data == nil {
 		return preview
 	}
 
@@ -64,8 +62,8 @@ func (k *Kernel) previewWithImpact(g *plan.Graph) string {
 		return preview
 	}
 
-	imp := kg.BlastRadius(files, 2)
-	if len(imp.Affected) == 0 {
+	imp, graphed := k.data.BlastRadius(files, 2)
+	if !graphed || len(imp.Affected) == 0 {
 		return preview
 	}
 	var b strings.Builder

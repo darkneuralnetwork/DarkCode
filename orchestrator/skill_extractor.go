@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
-	"github.com/darkcode/memory"
+	"github.com/darkcode/datasource"
 	"github.com/darkcode/recall"
 )
 
@@ -135,7 +135,7 @@ func (k *Kernel) recallSkill(goal string) string {
 	// here, so "worked 0 time(s), 0% success" would be both untrue and
 	// actively harmful — it teaches the model to distrust good guidance for
 	// the sole reason that it is new. Say which kind it is.
-	if s.Metadata["origin"] == memory.OriginImported {
+	if s.Metadata["origin"] == datasource.OriginImported {
 		fmt.Fprintf(&b, "## Relevant Written Procedure — %s\n", s.Name)
 		b.WriteString("_Authored guidance, not measured here")
 		if s.UseCount > 0 {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/darkcode/datasource"
 	"github.com/darkcode/internal/strutil"
-	"github.com/darkcode/memory"
 )
 
 // ReflectionKind classifies what a reflection produced, for KG fact typing.
@@ -163,7 +163,7 @@ func (k *Kernel) findRecentFailure(goal, fixOutput string) fixEvidence {
 		if age > reflectLookbackWindow {
 			break // most-recent-first: everything after this is older still
 		}
-		sim := memory.GoalSimilarity(goal, e.TaskGoal)
+		sim := datasource.GoalSimilarity(goal, e.TaskGoal)
 		if sim >= reflectFixSimilarity {
 			return fixEvidence{
 				ProblemGoal: e.TaskGoal,

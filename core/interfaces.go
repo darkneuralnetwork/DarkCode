@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrContextTooLong is the sentinel every provider maps a context-overflow
@@ -137,6 +138,15 @@ type MemoryStore interface {
 	ProceduralAdd(skill *Skill) error
 	ProceduralGet(name string) (*Skill, bool)
 	ProceduralAll() []*Skill
+
+	// STMTruncate drops all but the most recent n messages.
+	STMTruncate(n int)
+
+	// SessionEpoch is when the current session began. Entries older than it
+	// that are conversational (episodic, and the "task:"-keyed semantic facts
+	// written per Q&A) are a previous chat rather than durable knowledge, so
+	// retrieval filters them out. Zero means no session boundary is set.
+	SessionEpoch() time.Time
 
 	// Sub-systems
 	KG() KnowledgeGraphStore

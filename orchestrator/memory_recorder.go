@@ -8,7 +8,7 @@ import (
 	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/core"
-	"github.com/darkcode/memory"
+	"github.com/darkcode/datasource"
 	"github.com/darkcode/recall"
 )
 
@@ -151,7 +151,7 @@ func (k *Kernel) recordOutcome(goal, output string, results []*core.SubAgentResu
 // planner the benefit of prior executions (recalling a past "calculator" task
 // when asked to "build an arithmetic tool") with no embedding model required.
 func (k *Kernel) getRecallBlock(goal string) string {
-	if k.retriever == nil {
+	if k.data == nil {
 		return ""
 	}
 	// Fetch a wider set, then drop episodic (conversation) hits from before the
@@ -159,7 +159,7 @@ func (k *Kernel) getRecallBlock(goal string) string {
 	// Durable semantic/KG facts are session-independent and always kept. We
 	// over-fetch (10) before the epoch filter so trimming stale episodics can't
 	// starve out valid semantic hits that ranked just below them.
-	hits := k.retriever.Recall(goal, 10)
+	hits := k.data.Recall(goal, 10)
 	if epoch := k.memory.SessionEpoch(); !epoch.IsZero() {
 		filtered := hits[:0]
 		for _, h := range hits {
@@ -179,7 +179,7 @@ func (k *Kernel) getRecallBlock(goal string) string {
 	if len(hits) > 3 {
 		hits = hits[:3]
 	}
-	block := memory.FormatRecall(hits)
+	block := k.data.FormatRecall(hits)
 	if block != "" {
 		k.log("memory", fmt.Sprintf("Hybrid recall: %d relevant past entr%s injected", len(hits), pluralY(len(hits))))
 	}
@@ -213,7 +213,7 @@ func (k *Kernel) injectRecall(goal string, block string) string {
 // judge — so this annotates rather than suppresses.
 func annotateUncited(answer, recallBlock string) string {
 	facts := strings.Count(recallBlock, "- [F")
-	if !memory.UncitedClaim(answer, facts) {
+	if !datasource.UncitedClaim(answer, facts) {
 		return answer
 	}
 	return answer + "\n\n_⚠ This answer makes claims about the codebase without citing any of the " +
