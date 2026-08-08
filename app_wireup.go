@@ -72,8 +72,7 @@ func (a *AppRunner) initObservabilityAndSecurity() {
 
 	// 4. Discover and Load External Plugins
 	a.PluginHost = plugin.NewHost()
-	a.PluginLoader = plugin.NewLoader(a.PluginHost, "./plugins")
-	_ = a.PluginLoader.DiscoverAll()
+	a.loadExtensions()
 }
 
 // pingModelAsyncTimeout bounds a single connectivity probe — long enough to
@@ -732,6 +731,12 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// on the machine until a user knew the command existed.
 	a.importSkills()
 
+	// Now that the registry exists, the bundles loaded at startup can be
+	// connected: their tools registered, their commands offered by the console,
+	// their hooks folded in with the configured ones.
+	ext := a.connectExtensions()
+	a.ExtCommands = ext.Commands
+
 	// Lifecycle hooks: built once here and handed to each owner of a point.
 	// The registry owns the tool points because it owns tool execution; the
 	// kernel owns the compaction boundary; uiport carries turn_end for every
@@ -740,7 +745,7 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// A bad hooks block is a startup error rather than a warning: a hook filed
 	// under a misspelled point would never fire and never complain, which is
 	// exactly the silent-no-op failure this codebase has been bitten by before.
-	if h, err := hooks.New(hookConfig(a.Cfg.Hooks)); err != nil {
+	if h, err := hooks.New(mergeHooks(hookConfig(a.Cfg.Hooks), ext.Hooks)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	} else if h != nil {
@@ -973,4 +978,80 @@ func expandHome(p string) string {
 		return p
 	}
 	return filepath.Join(home, strings.TrimPrefix(p, "~"))
+}
+
+// defaultExtensionDirs are searched for bundles: one per-user, one
+// per-workspace, plus ./plugins for anything installed before extensions had a
+// home of their own.
+func defaultExtensionDirs() []string {
+	var dirs []string
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".darkcode", "extensions"))
+	}
+	return append(dirs, defaultDarkcodeDir("extensions"), "./plugins")
+}
+
+// loadExtensions discovers bundles and connects what they declare.
+//
+// The connecting is the point. The host has always loaded plugins and stored
+// them; nothing read the manifests back, so a bundle declaring three tools
+// loaded cleanly, listed in /plugins, and could not be called. Registering the
+// tools is what makes an extension an extension.
+//
+// A load failure is now reported. It used to be assigned to _, so a bundle that
+// failed its handshake was indistinguishable from one that was never there.
+func (a *AppRunner) loadExtensions() {
+	dirs := a.Cfg.ExtensionDirs
+	if len(dirs) == 0 {
+		dirs = defaultExtensionDirs()
+	}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		dir = expandHome(dir)
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		loader := plugin.NewLoader(a.PluginHost, dir)
+		if err := loader.DiscoverAll(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: extensions in %s: %v\n", dir, err)
+		}
+		a.PluginLoader = loader
+	}
+}
+
+// connectExtensions registers the loaded bundles' tools and returns their
+// commands and hooks. Split from loadExtensions because the registry and the
+// hook manager do not exist yet when the bundles are loaded.
+func (a *AppRunner) connectExtensions() tools.Extensions {
+	ext := tools.RegisterExtensions(a.Registry, a.PluginHost)
+	for _, r := range ext.Rejected {
+		fmt.Fprintf(os.Stderr, "Warning: extension: %s\n", r)
+	}
+	if n := len(ext.Tools); n > 0 {
+		fmt.Fprintf(os.Stderr, "Extensions: registered %d tool(s)\n", n)
+	}
+	return ext
+}
+
+// mergeHooks folds a bundle's hooks in with the user's own.
+//
+// The user's come first at each point, so a configured gate runs before an
+// extension's and can refuse without the extension ever executing. An
+// extension that could pre-empt the config would be an extension that can
+// disable the user's own guard.
+func mergeHooks(cfg map[string][]hooks.Hook, ext []tools.ExtensionHook) map[string][]hooks.Hook {
+	if len(ext) == 0 {
+		return cfg
+	}
+	if cfg == nil {
+		cfg = map[string][]hooks.Hook{}
+	}
+	for _, e := range ext {
+		cfg[e.Point] = append(cfg[e.Point], hooks.Hook{Match: e.Match, Run: e.Run, Timeout: e.Timeout})
+	}
+	return cfg
 }

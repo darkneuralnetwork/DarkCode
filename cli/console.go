@@ -66,6 +66,10 @@ type Console struct {
 	ckpt          *checkpoint.Manager
 	activeProject string
 
+	// extCommands are the slash commands loaded extension bundles offer,
+	// consulted just before the console reports an unknown command.
+	extCommands []tools.ExtensionCommand
+
 	// stickyVerb is the strategy every message uses until the user says
 	// otherwise ("" = none, and escalation decides per message).
 	//

@@ -21,6 +21,7 @@ func (a *AppRunner) RunCLI() {
 		ma.SetMode(permission.ModeCLI)
 	}
 	console := cli.NewConsole(a.Cfg, a.Kernel, a.Port, a.MemSystem, a.Registry, a.Emitter, a.Recorder, a.SourceMgr, a.ProjectStore, a.globalActiveProject)
+	console.SetExtensionCommands(a.ExtCommands)
 	console.SetResumed(a.resumedFromGUI)
 	a.resumedFromGUI = false
 	err := console.Run()

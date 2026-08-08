@@ -1227,6 +1227,68 @@ call sites read correctly in isolation. Observers now accumulate, with
 `TestEverySessionObserverRuns` holding it. The singular setter was the bug, not
 the ordering of the two calls.
 
+### 6.1.9 Extension bundles — the plugin system had no second half
+
+The last item from the landscape comparison, and the finding was larger than the
+build. **A loaded plugin's tools were never registered.** The host spawned the
+binary, completed the manifest and init handshake, stored the process — and
+nothing ever read `Manifests()` back. `Host.Execute` had no caller outside its
+own tests. A bundle declaring three tools loaded cleanly, appeared in
+`/plugins`, and was completely inert.
+
+Two supporting facts made it invisible: `app_wireup.go` discarded the loader's
+error into `_`, so a failed handshake looked identical to no plugins at all, and
+the only search path was `./plugins`, a directory that does not exist.
+
+**What a bundle is now.** One manifest declaring tools, slash commands and
+lifecycle hooks together — the shape Pi uses, which fits here because darkcode
+already has the subprocess JSON-RPC protocol that is the same idea with a
+process boundary instead of a module boundary. Discovery follows the same
+convention as skills: `~/.darkcode/extensions`, `./.darkcode/extensions`, plus
+`./plugins` for anything installed before extensions had a home.
+
+**Where each piece lands, and why.**
+
+- **Tools** register into `tools.Registry`, in `tools/extension.go`, mirroring
+  how `sources.go` registers MCP tools. A foreign tool must arrive through the
+  same door as a built-in one or it misses the permission gate, the circuit
+  breaker, the spill store and the lifecycle hooks.
+- **Commands and hooks are returned, not registered** — neither belongs to the
+  registry. The console owns commands; the hook manager owns hooks.
+- **Bundle hooks reuse `hooks.Hook` exactly** rather than gaining a second
+  execution backend that calls back into the plugin process. A hook is a
+  one-liner by design, so a bundle shipping one is shipping configuration.
+- **User hooks run before a bundle's** at each point, so a configured gate can
+  refuse before an extension executes. An extension able to pre-empt the config
+  would be an extension able to disable the user's own guard.
+- **Built-in slash commands win.** A bundle must not be able to shadow
+  `/permissions` or `/rollback` by choosing the name, so extension commands are
+  resolved in the console's `default:` branch, after every built-in.
+
+**Two refusals worth stating.** A tool whose declared schema will not parse is
+*refused*, not registered with an empty one — registering it would tell the
+model the tool takes no arguments, so it would be called wrong every time and
+fail in a way that looks like a broken tool rather than a broken manifest. And
+an unknown registration type is reported rather than skipped, because silence
+would make a typo indistinguishable from a bundle that declared nothing.
+
+Name collisions namespace as `bundle__tool`, the same as MCP, so two bundles
+exporting `search` both stay callable.
+
+[RAN] Verified end to end with a real bundle binary speaking the handshake,
+dropped in `~/.darkcode/extensions/`: startup reported `Extensions: registered
+1 tool(s)`, the tool appeared in `/api/tools` under the `extension` category
+with its manifest description, and executing it through the registry returned
+the plugin process's own output. That last check found one more defect —
+`Host.Execute` returns the RPC result verbatim, so a plugin answering with a
+string handed back `"5 words"`, quotes and escapes included, straight into the
+model's context. JSON strings are now unwrapped; objects and arrays pass through
+untouched, because there the structure is the answer.
+
+[READ] The slash-command path and the hook merge are unit-tested but not driven
+live — both need an interactive console session. The tool path, which is the one
+that was broken, is verified live.
+
 ---
 
 ## 6.2 Where model debate belongs — decided

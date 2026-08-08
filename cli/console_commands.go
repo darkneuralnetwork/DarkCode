@@ -10,6 +10,7 @@ import (
 	"github.com/darkcode/ingest"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/provider/embedded"
+	"github.com/darkcode/tools"
 	"github.com/darkcode/verb"
 )
 
@@ -400,8 +401,55 @@ func (c *Console) handleSlash(input string) bool {
 		c.printPermissions(parts[1:])
 
 	default:
+		// An extension bundle may own this name. Checked here rather than in the
+		// switch above because built-ins win: a bundle must not be able to
+		// shadow /permissions or /rollback by choosing the name.
+		if c.runExtensionCommand(cmd, strings.Join(parts[1:], " ")) {
+			return false
+		}
 		fmt.Printf("%s unknown command: %s %s\n", paint(cRed, "✗"), cmd, paint(cGray, "(try /help)"))
 	}
 
+	return false
+}
+
+// SetExtensionCommands installs the slash commands loaded bundles offer.
+//
+// A setter rather than an eleventh constructor parameter: the console already
+// takes ten, and a bundle's commands are not needed to build one.
+func (c *Console) SetExtensionCommands(cmds []tools.ExtensionCommand) {
+	c.extCommands = cmds
+}
+
+// runExtensionCommand executes a bundle's slash command, reporting whether it
+// handled the name at all.
+//
+// The rest of the line is passed as {"input": "..."} — a bundle wanting real
+// arguments declares a tool schema and lets the agent call it, which is the
+// path that gets validation, the permission gate and the hooks. A slash command
+// is the convenience shortcut, not a second calling convention.
+func (c *Console) runExtensionCommand(cmd, rest string) bool {
+	name := strings.TrimPrefix(cmd, "/")
+	for _, ec := range c.extCommands {
+		if ec.Name != name {
+			continue
+		}
+		args := map[string]interface{}{}
+		if strings.TrimSpace(rest) != "" {
+			args["input"] = strings.TrimSpace(rest)
+		}
+		// Through the registry, so an extension command is gated, recorded and
+		// hooked exactly like any other tool call.
+		res, err := c.registry.Execute(context.Background(), ec.Tool, args)
+		switch {
+		case err != nil:
+			fmt.Printf("%s %s: %v\n", paint(cRed, "✗"), name, err)
+		case res != nil && !res.Success:
+			fmt.Printf("%s %s: %s\n", paint(cRed, "✗"), name, res.Error)
+		case res != nil:
+			fmt.Println(res.Output)
+		}
+		return true
+	}
 	return false
 }

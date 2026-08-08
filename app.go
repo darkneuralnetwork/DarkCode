@@ -61,6 +61,9 @@ type AppRunner struct {
 
 	PluginLoader *plugin.Loader
 	PluginHost   *plugin.Host
+	// ExtCommands are the slash commands loaded bundles offer. The console
+	// consults them before reporting an unknown command.
+	ExtCommands []tools.ExtensionCommand
 	// Hooks runs the user's configured commands at the lifecycle points. nil
 	// when none are configured, which is a valid no-op everywhere.
 	Hooks   *hooks.Manager

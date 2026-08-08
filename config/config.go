@@ -201,6 +201,12 @@ type Config struct {
 	// and cost nothing when absent.
 	SkillDirs []string `json:"skill_dirs,omitempty"`
 
+	// ExtensionDirs are searched for plugin bundles at startup. Empty means
+	// the defaults — ~/.darkcode/extensions, ./.darkcode/extensions and
+	// ./plugins. A bundle is an executable that speaks the JSON-RPC handshake
+	// and declares tools, slash commands and lifecycle hooks in one manifest.
+	ExtensionDirs []string `json:"extension_dirs,omitempty"`
+
 	// EpisodicMaxEntries is the episodic history size consolidation aims for.
 	// 0 uses memory.DefaultEpisodicMax. Entries are evicted by disuse rather
 	// than age: retrieval strengthens an entry, so a fix that keeps being
