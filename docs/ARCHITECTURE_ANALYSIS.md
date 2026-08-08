@@ -643,7 +643,7 @@ Each stage is one revertible commit, `make ci` green (race detector included).
 | 5e — Conversational turns keep tools | `23156de` | **done** — no tool-less mode; read-only is per-call |
 | 5f — Content-hash file beliefs | `67c8c31`, `ba342d7` | **done** — catches uncommitted edits |
 | 6 — Memory Manager | `0931aef` | **done** — `recall` owns placement; 32 → 24 direct writes |
-| 7 — Data Source Manager | `2e124a0` | **partial** — caching landed; the read gateway needs the LLM Manager first |
+| 7 — Data Source Manager | `2e124a0`, `261e92b` | **done** — `datasource` is the read gateway; `orchestrator-impl-imports` reaches 0 |
 | 8 — Documentation | — | this file |
 
 ### The context stack, after Stage 5
@@ -664,7 +664,7 @@ Built as four layers rather than one lossy step (§5.0):
 | Kernel entry points | 6 | **0** |
 | LLM calls outside the model layer | 23 | **21** |
 | Memory writes outside the memory layer | 32 | **24** |
-| `orchestrator` → concrete impl imports | 12 | **7** (llm + compression removed; memory is the datasource keystone) |
+| `orchestrator` → concrete impl imports | 12 | **0** — enforced |
 | Unwired kernel setters | 1 | **0** |
 | Raw HTTP clients outside `safeurl` | 0 | **0** |
 | **Model calls with no token ceiling** | **8** | **0** |
@@ -812,29 +812,47 @@ and the code indexer — each grew their own idea of what to skip, and each was
 wrong in the same way. `repowalk` fixed the third; the first two were fixed in
 this pass. A fourth walker will make the same mistake unless it uses `repowalk`.
 
+**§1.1 — the Data Source Manager landed, and the boundary is enforced. [RAN]**
+`recall` owned writes; nothing owned reads, so the orchestrator reached into
+`memory` for thirteen distinct symbols across seven files. `datasource` is the
+read half of that pair: `Retrieve(Query) Context` is the one way to ask what is
+known, and it owns the session-epoch rule that stops a new chat resurfacing the
+last one while durable facts cross the boundary. It **composes** the existing
+`HybridRetriever` and knowledge graph rather than reimplementing them — one
+door, not a second retrieval engine.
+
+Three call sites (`consensus`, `plan_gate`, the rollback path) each downcast
+`k.memory.KG()` to the concrete `*memory.KnowledgeGraph` to reach exactly one
+method — `AdjudicateCandidates`, `BlastRadius`, `PropagateConfidence`. Those are
+reasoning, not storage, so they do not belong on `core.KnowledgeGraphStore`; the
+gateway holds them behind an unexported `graphReasoner` interface and the
+downcast happens once. `Kernel.memory` is `core.MemoryStore` now, which gained
+the two methods it lacked (`SessionEpoch`, `STMTruncate`); `*memory.System` is
+its only implementer, so nothing else moved.
+
+**`orchestrator-impl-imports` 7 → 0**, ratcheted. The brief's condition —
+`grep '"github.com/darkcode/(memory|llm|compression)"' orchestrator/*.go`
+returning nothing — holds. `datasource` was added to the `unwired-managers`
+list so it cannot decay into a package nobody constructs.
+
+It deliberately **does not cache**, on the §6.1.1 measurements: a recall over a
+500-entry store is ~4 ms of local CPU with no tokens and no network, and the one
+network cost is already memoised. A cache there buys milliseconds and pays in
+invalidation risk.
+
+Verified live on the real binary (port 12399, not 12345): the smalltalk rung
+answered through the gateway with no model call, a real question walked the
+cache → graph → recall rungs and escalated correctly, and the cascade telemetry
+recorded both with zero panics. `adjudicateCtx` also lost a latent nil
+dereference found while migrating — the `consensus == nil` branch returned
+`consensus.Synthesized`.
+
 ### 6.1.2 What this pass did NOT do, and the bar to revisit
 
-- **The §1 manager refactor — started, not finished.** Two of the three
-  concrete `orchestrator` imports are gone: `llm` (client construction injected
-  as a factory) and `compression` (held by a five-method `contextCompressor`
-  interface). `orchestrator-impl-imports` ratcheted **10 → 7**, each removal its
-  own reverted-and-verified commit. What remains is the hard core:
-  - **`memory` (the Data Source Manager, §1.1).** Seven import lines across
-    cascade, plan_gate, reflection, skill_extractor, consensus, memory_recorder
-    and kernel. The field `memory *memory.System` can become `core.MemoryStore`
-    once two methods (`SessionEpoch`, `STMTruncate`) are added to that interface,
-    but the retriever type and **13 package-level `memory.Foo()` calls**
-    (`SmalltalkReply`, `AnswerFromGraph`, `GraphAnswer`, `RecallAnswer`,
-    `GoalSimilarity`, `FormatRecall`, …) are the read gateway itself — they must
-    move behind a `datasource.Manager`, not just be reimported. This is the
-    3–4-day keystone and is genuinely behaviour-adjacent (retrieval, the cache
-    rungs), so it wants its own branch and its own verification, not a tail
-    appended here.
-  - **Adjudication extraction (§1.2)**, **the 20 LLM-site migration to
-    `modelport.Complete` (§1.3)** — which also unblocks deleting the loop's
-    duplicate overflow ladder — and **the 24 memory writes (§1.4)** are
-    untouched. Revisit when a session can be spent on the datasource keystone
-    alone.
+- **§1.2 adjudication extraction, §1.3 the 20 LLM sites, §1.4 the 24 memory
+  writes.** Untouched. §1.3 is the one that unblocks deleting the loop's
+  duplicate overflow ladder, so it is the highest-value of the three.
+  `llm-calls` is still 20 and `memory-writes` still 24.
 - **The §6 UI conformance audit** (map the 19 events to renderers, three-surface
   parity, stale copy, live verification on a non-12345 port). Needs the running
   binary and real telemetry; not started this pass.
