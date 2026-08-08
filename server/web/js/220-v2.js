@@ -160,92 +160,15 @@
   }
 
   // ── Consensus State ────────────────────────────────────────────────
-  let consensusHistory = [];
 
-  function handleConsensusEvent(evt) {
-    let contentStr = "";
-    let conflict = evt.status === "conflict";
-    let modelCount = 0;
-    let strategy = "";
-    let elapsedMs = 0;
 
-    if (typeof evt.content === "object" && evt.content !== null) {
-      conflict = evt.content.conflict || conflict;
-      modelCount = evt.content.model_count || 0;
-      contentStr = evt.content.message || JSON.stringify(evt.content);
-      strategy = evt.content.strategy || "";
-      elapsedMs = evt.content.elapsed_ms || 0;
-    } else {
-      contentStr = String(evt.content);
-    }
-
-    // Update KPIs — element IDs must match telemetry.html:
-    //   cs-model-count, cs-agreement, cs-total-time, cs-strategy.
-    // (Previously this wrote cs-conflict + rendered history into #cs-history,
-    // neither of which exists in the markup, so the consensus panel showed no
-    // data at all.)
-    updateExecMetric("cs-model-count", String(modelCount));
-    updateExecMetric("cs-agreement", conflict ? "⚠️ Conflict" : "✓ Aligned");
-    if (elapsedMs) updateExecMetric("cs-total-time", elapsedMs >= 1000 ? (elapsedMs / 1000).toFixed(1) + "s" : elapsedMs + "ms");
-    if (strategy) updateExecMetric("cs-strategy", strategy);
-
-    const liveEl = document.getElementById("consensus-live");
-    if (liveEl) { liveEl.textContent = "● ACTIVE"; liveEl.style.color = conflict ? "var(--red)" : "var(--green)"; }
-
-    // Add to history
-    consensusHistory.push({ time: new Date().toLocaleTimeString(), content: contentStr, conflict, timestamp: evt.timestamp });
-    renderConsensusHistory();
-
-  }
-
-  function renderConsensusHistory() {
-    const el = document.getElementById("consensus-history");
-    if (!el) return;
-    if (consensusHistory.length === 0) {
-      el.innerHTML = '<div class="mem-empty">No consensus history yet.</div>';
-      return;
-    }
-    el.innerHTML = consensusHistory.slice(-20).reverse().map(h => `
-      <div class="consensus-history-item" style="border-left: 3px solid ${h.conflict ? 'var(--red)' : 'var(--green)'};">
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-          <span style="font-weight:700; color:var(--text-bright);">${h.conflict ? '⚠️ Conflict' : '✓ Consensus'}</span>
-          <span style="color:var(--text-mute); font-size:10px;">${h.time}</span>
-        </div>
-        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim);">${h.content.substring(0, 200)}${h.content.length > 200 ? '…' : ''}</div>
-      </div>
-    `).join("");
-  }
 
   // ── Verification Pipeline State ────────────────────────────────────
-  const VERIFY_STAGES = ["formatter","compiler","tests","lint","security","performance","complexity","coverage","patch"];
-  let verificationHistory = [];
 
-  function updateVerifyStage(stage, state, duration) {
-    const stageEl = document.querySelector(`.verify-stage[data-stage="${stage}"]`);
-    if (stageEl) {
-      stageEl.setAttribute("data-state", state);
-      const statusEl = stageEl.querySelector(".verify-stage-status");
-      if (statusEl) statusEl.textContent = state;
-      const durEl = stageEl.querySelector(".verify-stage-duration");
-      if (durEl && duration) durEl.textContent = duration;
-    }
-  }
 
-  function resetVerifyPipeline() {
-    VERIFY_STAGES.forEach(s => updateVerifyStage(s, "pending", "—"));
-  }
 
   // ── Resource Monitor ───────────────────────────────────────────────
-  let resourcePollTimer = null;
 
-  async function pollResources() {
-    try {
-      const res = await fetch("/api/system/resources");
-      if (!res.ok) return;
-      const data = await res.json();
-      renderResourceTiles(data);
-    } catch { /* endpoint may not exist yet */ }
-  }
 
   function renderResourceTiles(data) {
     // Update existing resource tiles if they exist
@@ -278,18 +201,7 @@
     return (b / 1073741824).toFixed(2) + " GB";
   }
 
-  function startResourcePoll() {
-    if (resourcePollTimer) return;
-    pollResources();
-    // (P4) Skip the fetch while the document is hidden — the resource tiles
-    // are only on the monitoring tab and aren't visible, so the poll is
-    // wasted work + a constant goroutine on the backend.
-    resourcePollTimer = setInterval(() => { if (!document.hidden) pollResources(); }, 3000);
-  }
 
-  function stopResourcePoll() {
-    if (resourcePollTimer) { clearInterval(resourcePollTimer); resourcePollTimer = null; }
-  }
 
   // ── Enhanced SSE Event Router ──────────────────────────────────────
   // Extend the existing SSE handler to process V2 event types.
@@ -324,7 +236,6 @@
         }
         break;
       case "consensus":
-        handleConsensusEvent(evt);
         break;
       case "token_usage":
         handleTokenUsage(evt);
@@ -465,24 +376,6 @@
       //   "Running verification stage: <name>"   → running
       //   "Stage <name> passed successfully"      → passed
       //   "Stage <name> failed checks" / "…: err" → failed
-      // Previously updateVerifyStage was never called from events, so the
-      // panel's stages never lit up. content is already lowercased here.
-      let stage = null, state = "running";
-      let m = content.match(/verification stage:\s*([a-z_]+)/);
-      if (m) { stage = m[1]; state = "running"; }
-      else {
-        m = content.match(/stage\s+([a-z_]+)\s+(passed|failed)/);
-        if (m) { stage = m[1]; state = m[2]; }
-      }
-      if (stage) {
-        const nameMap = { security_scan: "security" }; // backend → data-stage
-        updateVerifyStage(nameMap[stage] || stage, state);
-        const vl = document.getElementById("verify-live");
-        if (vl) {
-          vl.textContent = state === "running" ? "● ACTIVE" : "● IDLE";
-          vl.style.color = state === "failed" ? "var(--red)" : (state === "running" ? "var(--green)" : "");
-        }
-      }
     }
     if (content.includes("reflect")) {
       if (status === "completed" || status === "done") setExecStage("reflection", "completed");
@@ -517,19 +410,6 @@
       tokens: total.toLocaleString(),
       cost: "$" + cost.toFixed(4),
       latency: latency > 0 ? latency + "ms" : "—"
-    };
-  }
-
-  // ── Tab Switch Hook — start/stop resource polling ──────────────────
-  const _origSwitchTab = window.switchTab;
-  if (typeof _origSwitchTab === "function") {
-    window.switchTab = function(tab) {
-      _origSwitchTab(tab);
-      // Start resource polling when monitoring tab is active
-      // Resource polling now follows the consolidated Telemetry tab
-      // (monitoring was merged into telemetry during the nav refactor).
-      if (tab === "telemetry") startResourcePoll();
-      else stopResourcePoll();
     };
   }
 
