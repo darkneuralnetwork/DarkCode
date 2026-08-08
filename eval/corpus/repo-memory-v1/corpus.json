@@ -1,0 +1,373 @@
+{
+  "name": "repo-memory-v1",
+  "about": "Twenty-seven things an agent working on this repository would have learned, and sixteen questions it would later need them for. Every entry is a real fact about darkcode as of 2026-08; every gold label is justified in its query's note. Two properties are deliberate. Distractors: several entries share vocabulary with a query they do not answer, because a corpus where the right answer is the only one containing the query's words measures nothing. Two question shapes: some queries are natural language ('why did the knowledge graph get so large') and some name a file or symbol ('what does spill do with a big tool result'). The knowledge-graph signal only fires when a query token matches a node label, so the split is what makes its contribution visible instead of averaged away.",
+  "entries": [
+    {
+      "id": "ep-rrf-fusion",
+      "kind": "episodic",
+      "text": "replaced the summed retrieval score with reciprocal rank fusion over three signals",
+      "content": "Vector cosine, keyword overlap and knowledge-graph boost were being added together despite living on different scales, so one signal silently dominated. Rewrote as RRF with k=60 over three separately ranked lists.",
+      "node": {
+        "id": "file:memory/retrieval.go",
+        "label": "memory/retrieval.go",
+        "type": "file"
+      }
+    },
+    {
+      "id": "ep-cosine-nan",
+      "kind": "episodic",
+      "text": "fixed cosineSimilarity returning NaN on large vectors",
+      "content": "float64(a[i]*b[i]) does the multiply in float32, which overflows to +Inf near 1e19 and makes the whole score NaN. A NaN does not rank low, it sorts unpredictably. Widened before multiplying."
+    },
+    {
+      "id": "ep-graph-pollution",
+      "kind": "episodic",
+      "text": "the knowledge graph reached 160MB because nested agent worktrees were indexed",
+      "content": "76.7 percent of edges came from .claude/worktrees checkouts of other branches, indexed once per worktree with N-squared cross-worktree symbol references. Filtering the data took it to 15MB.",
+      "node": {
+        "id": "file:memory/knowledge_graph.go",
+        "label": "memory/knowledge_graph.go",
+        "type": "file"
+      }
+    },
+    {
+      "id": "ep-arch-check-worktrees",
+      "kind": "episodic",
+      "text": "make ci went red with no code change because two scanners counted nested worktrees",
+      "content": "scripts/arch-check.sh and safeurl/no_bypass_test.go both hand-walk the tree and were counting .claude/worktrees as this branch's violations. llm-calls read 129 against a baseline of 20."
+    },
+    {
+      "id": "ep-sse-file-change",
+      "kind": "episodic",
+      "text": "the GUI dropped every file_change event because it never subscribed to that type",
+      "content": "EventSource only delivers a named event to a listener registered for that name. The subscription list in 10-sse.js had 19 of 20 types."
+    },
+    {
+      "id": "ep-task-id-field",
+      "kind": "episodic",
+      "text": "the browser read evt.task for a field the wire calls task_id",
+      "content": "core.UIEvent marshals TaskID as task_id. Four reads used the bare name, so the event-feed type mapping was dead and the live plan board never matched its project."
+    },
+    {
+      "id": "ep-datasource-manager",
+      "kind": "episodic",
+      "text": "built the data source manager and took orchestrator implementation imports to zero",
+      "content": "The orchestrator reached into memory directly in ten places. A read gateway composes the existing retriever and graph rather than reimplementing them.",
+      "node": {
+        "id": "file:datasource/datasource.go",
+        "label": "datasource/datasource.go",
+        "type": "file"
+      }
+    },
+    {
+      "id": "ep-adjudicate-extract",
+      "kind": "episodic",
+      "text": "extracted adjudication into its own component out of the orchestrator",
+      "content": "375 lines deciding between candidate answers. Evidence first, debate only when the graph cannot check the claims, capped at one round.",
+      "node": {
+        "id": "file:adjudicate/adjudicate.go",
+        "label": "adjudicate/adjudicate.go",
+        "type": "file"
+      }
+    },
+    {
+      "id": "ep-leak-guard",
+      "kind": "episodic",
+      "text": "built the vendor-name leak guard as a hook and a CI job",
+      "content": "One rule set, two layers. Refuses a branch name, commit message or staged filename carrying a vendor name, with an exception for genuine model identifiers in the provider catalogue."
+    },
+    {
+      "id": "ep-loop-overflow",
+      "kind": "episodic",
+      "text": "deleted the loop's duplicate context-overflow ladder",
+      "content": "The ReAct loop carried its own refit-and-retry path that modelport already owned. Routing the loop through the model manager made it dead code."
+    },
+    {
+      "id": "ep-permission-judge",
+      "kind": "episodic",
+      "text": "the permission judge was running with no token ceiling",
+      "content": "A model call deciding whether a dangerous tool runs, with its limit left to whatever the provider defaults to. Invisible to every test; only showed up when driven live."
+    },
+    {
+      "id": "ep-embed-thrice",
+      "kind": "episodic",
+      "text": "stopped embedding the same string three times per request",
+      "content": "Every episodic and semantic write plus every recall embedded the query independently. Memoised, with embedCacheMax at 512."
+    },
+    {
+      "id": "sem-rrf-constant",
+      "kind": "semantic",
+      "text": "reciprocal rank fusion constant",
+      "content": "RRF uses k=60 in memory/retrieval.go. The constant is the published default and damps the difference between adjacent ranks so no single stream can dominate.",
+      "tags": [
+        "retrieval",
+        "ranking"
+      ]
+    },
+    {
+      "id": "sem-session-epoch",
+      "kind": "semantic",
+      "text": "session epoch and fresh-chat isolation",
+      "content": "StartNewSession clears short-term memory and advances the session epoch. Episodic recall filters entries older than the epoch so a prior conversation stops resurfacing; durable semantic and graph memory is kept deliberately.",
+      "tags": [
+        "memory",
+        "sessions"
+      ]
+    },
+    {
+      "id": "sem-static-binary",
+      "kind": "semantic",
+      "text": "the single static binary constraint",
+      "content": "DarkCode builds with CGO_ENABLED=0 into one static binary with four dependencies. Any storage change must keep that, which is why a pure-Go SQLite driver is the only one considered.",
+      "tags": [
+        "build",
+        "constraints"
+      ]
+    },
+    {
+      "id": "sem-arch-baseline",
+      "kind": "semantic",
+      "text": "architectural boundary baselines are ceilings",
+      "content": "scripts/arch-check.sh holds a count per boundary in .arch-baseline. A count may fall and never rise. A boundary at zero is enforced.",
+      "tags": [
+        "architecture",
+        "ci"
+      ]
+    },
+    {
+      "id": "sem-imported-skills",
+      "kind": "semantic",
+      "text": "imported skills are authored guidance, not measured experience",
+      "content": "A skill read from a file has never been tried on this machine, so it starts at a success rate of 0.5 and is marked imported. A learned skill of the same name outranks it and is never overwritten.",
+      "tags": [
+        "skills",
+        "memory"
+      ]
+    },
+    {
+      "id": "sem-cascade-rungs",
+      "kind": "semantic",
+      "text": "the cognition cascade rungs",
+      "content": "A question descends smalltalk, deterministic, cache, graph, recall, then llm. Each rung that answers saves the model call the next one would have made.",
+      "tags": [
+        "orchestration",
+        "cost"
+      ]
+    },
+    {
+      "id": "sem-free-tier-quota",
+      "kind": "semantic",
+      "text": "the free-tier model budget is measured per day",
+      "content": "A free-tier key with a small daily allowance returns 429 for everything at once when exhausted, which looks exactly like a code bug. Check the log before debugging behaviour that broke all at once.",
+      "tags": [
+        "models",
+        "operations"
+      ]
+    },
+    {
+      "id": "sem-debate-gate",
+      "kind": "semantic",
+      "text": "debate is a fallback, not the mechanism",
+      "content": "Checking claims against the knowledge graph settles a disagreement for zero extra model calls. Debate runs only when the graph cannot check them, and is capped at one round because accuracy plateaus and drift compounds.",
+      "tags": [
+        "consensus",
+        "cost"
+      ]
+    },
+    {
+      "id": "sem-gui-port",
+      "kind": "semantic",
+      "text": "the GUI runs persistently on port 12345",
+      "content": "Test against a different port. Web assets are embedded in the binary, so editing JavaScript or HTML does nothing until a rebuild.",
+      "tags": [
+        "gui",
+        "operations"
+      ]
+    },
+    {
+      "id": "sem-typed-nil",
+      "kind": "semantic",
+      "text": "a typed nil in an interface is not nil",
+      "content": "Assigning a nil concrete pointer to an interface variable gives a non-nil interface. Guard at the call site rather than comparing the interface to nil.",
+      "tags": [
+        "go",
+        "pitfalls"
+      ]
+    },
+    {
+      "id": "sem-map-order",
+      "kind": "semantic",
+      "text": "map iteration order must be broken deterministically",
+      "content": "SemanticAll and the fusion scores range over maps. Any ordering code must break ties on a stable key or retrieval stops being reproducible and the answer cache stops working.",
+      "tags": [
+        "go",
+        "retrieval"
+      ]
+    },
+    {
+      "id": "sem-recall-gateway",
+      "kind": "semantic",
+      "text": "the memory write gateway owns placement",
+      "content": "Every fact the agent learns goes through the recall manager, which decides which of the stores it belongs in. The kernel states what it learned rather than choosing a destination.",
+      "tags": [
+        "memory",
+        "architecture"
+      ]
+    },
+    {
+      "id": "ep-spill-store",
+      "kind": "episodic",
+      "text": "oversized tool results are offloaded by the spill store instead of truncated",
+      "content": "A large tool result used to be cut to a fixed budget. spill/spill.go writes it to disk and leaves a preview plus a retrievable handle in the context.",
+      "node": {
+        "id": "file:spill/spill.go",
+        "label": "spill/spill.go",
+        "type": "file"
+      }
+    },
+    {
+      "id": "ep-pathguard",
+      "kind": "episodic",
+      "text": "confined writes to the working directory in pathguard",
+      "content": "tools/pathguard.go refuses a write whose resolved path escapes the workspace, symlinks included.",
+      "node": {
+        "id": "file:tools/pathguard.go",
+        "label": "tools/pathguard.go",
+        "type": "file"
+      }
+    },
+    {
+      "id": "sem-modelport-purpose",
+      "kind": "semantic",
+      "text": "modelport purposes select a tier",
+      "content": "modelport.Ask carries a Purpose - Plan, Execute, Converse, Synthesize, Compress, Classify, Review, Adjudicate - and the manager maps each to an ordered tier preference.",
+      "tags": [
+        "models",
+        "routing"
+      ],
+      "node": {
+        "id": "symbol:Purpose@modelport/modelport.go",
+        "label": "Purpose",
+        "type": "symbol"
+      }
+    }
+  ],
+  "queries": [
+    {
+      "q": "why did the knowledge graph get so large",
+      "gold": [
+        "ep-graph-pollution"
+      ],
+      "note": "One cause, one entry. ep-arch-check-worktrees shares the worktree vocabulary and is a distractor: same root cause, different symptom, and not an answer to a question about size."
+    },
+    {
+      "q": "what constant does reciprocal rank fusion use",
+      "gold": [
+        "sem-rrf-constant",
+        "ep-rrf-fusion"
+      ],
+      "note": "The semantic fact states the constant; the episodic entry records introducing it. Both are legitimately responsive."
+    },
+    {
+      "q": "how does a fresh chat stop old conversations coming back",
+      "gold": [
+        "sem-session-epoch"
+      ],
+      "note": "Only entry describing the epoch filter."
+    },
+    {
+      "q": "a retrieval score came back NaN",
+      "gold": [
+        "ep-cosine-nan"
+      ],
+      "note": "Direct. sem-rrf-constant and ep-rrf-fusion are scoring distractors."
+    },
+    {
+      "q": "the GUI is not showing something the server emits",
+      "gold": [
+        "ep-sse-file-change",
+        "ep-task-id-field"
+      ],
+      "note": "Two separate defects with the same symptom. A retriever that finds only one has half the answer, which is exactly what R@k should punish."
+    },
+    {
+      "q": "can we switch the graph store to SQLite",
+      "gold": [
+        "sem-static-binary"
+      ],
+      "note": "The constraint that decides it. ep-graph-pollution mentions the graph and its size and is a distractor: it explains why the question came up, not what the answer is."
+    },
+    {
+      "q": "everything started returning 429 at once",
+      "gold": [
+        "sem-free-tier-quota"
+      ],
+      "note": "Operational fact, single answer."
+    },
+    {
+      "q": "when do two models argue with each other",
+      "gold": [
+        "sem-debate-gate",
+        "ep-adjudicate-extract"
+      ],
+      "note": "The fact states the gate; the episodic entry records building it."
+    },
+    {
+      "q": "why can a boundary count never go up",
+      "gold": [
+        "sem-arch-baseline"
+      ],
+      "note": "Single answer. ep-arch-check-worktrees mentions baselines and counts and is a distractor about a failure, not the rule."
+    },
+    {
+      "q": "I edited the JavaScript and nothing changed",
+      "gold": [
+        "sem-gui-port"
+      ],
+      "note": "Embedded assets need a rebuild. ep-sse-file-change and ep-task-id-field are both about GUI JavaScript and are distractors."
+    },
+    {
+      "q": "where should a newly learned fact be written",
+      "gold": [
+        "sem-recall-gateway"
+      ],
+      "note": "Placement is the gateway's job. sem-imported-skills concerns memory writes too and is a distractor."
+    },
+    {
+      "q": "a nil check passed but the value was nil",
+      "gold": [
+        "sem-typed-nil"
+      ],
+      "note": "Single answer, deliberately worded without the words 'typed' or 'interface' so it is not a lexical gimme."
+    },
+    {
+      "q": "what does spill do with a big tool result",
+      "gold": [
+        "ep-spill-store"
+      ],
+      "note": "Names the component. The graph holds file:spill/spill.go, whose label shares the token 'spill' with the query, so this is a query the kg signal is designed to serve."
+    },
+    {
+      "q": "pathguard and writes outside the workspace",
+      "gold": [
+        "ep-pathguard"
+      ],
+      "note": "Same shape: a symbol-named query, which is how a developer actually asks about code."
+    },
+    {
+      "q": "which Purpose does modelport use for planning",
+      "gold": [
+        "sem-modelport-purpose"
+      ],
+      "note": "A symbol name rather than a filename, so the graph is matched on a symbol node."
+    },
+    {
+      "q": "retrieval ranking changed, what happened",
+      "gold": [
+        "ep-rrf-fusion",
+        "ep-cosine-nan"
+      ],
+      "note": "Two entries changed retrieval ranking. 'retrieval' is a token of the file:memory/retrieval.go label, so the graph should lift both."
+    }
+  ]
+}

@@ -27,6 +27,10 @@ test: ## Run the test suite
 test-race: ## Run tests with the race detector
 	$(GO) test -race $(PKGS)
 
+.PHONY: eval
+eval: ## Print the retrieval scorecard (offline; no model calls, no keys)
+	$(GO) test ./eval/ -run TestRetrievalScorecard -v 2>&1 | sed -n '/corpus:/,/^--- /p'
+
 .PHONY: cover
 cover: ## Run tests and write a coverage profile
 	$(GO) test -coverprofile=coverage.out $(PKGS)

@@ -1040,6 +1040,88 @@ follows one convention for half its length and another for the rest, which
 reads worse than leaving it alone. Revisit if the branch is ever rebased for
 other reasons; the fold list is the 11 `record …` commits.
 
+### 6.1.6 Lifecycle hooks, and the first retrieval benchmark
+
+Two additions that came out of a four-way comparison against the current agent
+landscape (report kept out of the tree; it names vendors throughout and the leak
+guard blocks it on staging by design). The comparison's finding was that
+darkcode has the most built-in tools of the four and the fewest ways for a user
+to add one, and that its graph advantage was an argument rather than a number.
+These two builds address exactly those.
+
+**Hooks** (`hooks/`). Commands run at five named points — `session_start`,
+`pre_tool`, `post_tool`, `pre_compact`, `turn_end` — configured under a `hooks`
+key. Three decisions are load-bearing:
+
+- **Context arrives as `DARKCODE_*` environment, never substituted into the
+  command.** The obvious design formats the tool name and path into a template,
+  which is command injection with extra steps: a repository holding a file named
+  `; rm -rf ~` would execute it. Letting the user's shell expand
+  `$DARKCODE_FILE` moves expansion after parsing, where a filename is a value.
+  `TestAHostileFilenameIsAValueNotSyntax` fires exactly that at a canary file.
+- **Only `pre_tool` can refuse.** A hook that fails the work it observes turns a
+  broken journal script into a broken agent.
+- **Both dispatch paths call the same two helpers.** `DispatchAll` and `Execute`
+  already duplicate the permission gate, the snapshot and the file observation
+  — three chances to fix one and not the other. Every hook assertion in
+  `tools/hooks_test.go` runs as a subtest against both.
+
+Memory grew `OnNewSession` rather than making each of the four
+`StartNewSession` callers announce the boundary; `turn_end` rides `uiport`, so a
+surface gets it by existing. A misspelled point is a startup error, not a
+warning — filed under `post_tools` it would never fire and never complain.
+
+[RAN] Verified live on port 12398 with the real binary: `session_start` on
+reset, `post_tool` with its match filter and success flag, `turn_end` after the
+answer, and a `pre_tool` refusal carrying the hook's own message with
+`$DARKCODE_FILE` expanded. [READ] `pre_compact` is unit-tested only.
+
+**The retrieval benchmark** (`eval/`). The repository had two micro-benchmarks
+measuring how *fast* fusion runs and nothing measuring whether it finds the
+right thing, so every ranking change was defended by reading the diff.
+
+The corpus is JSON on disk — 27 entries, 16 queries, every gold label carrying a
+note that justifies it — following package `bench`'s rule that cases live in
+data, not code. No model grades anything: a query is right when the gold id is
+in the top k. Both adapters run with no embedder, so the whole thing is offline,
+free, and reproducible on a machine with no keys. `make eval` prints it.
+
+The two adapters differ in exactly one variable — whether the knowledge graph is
+attached — so the gap is the graph's contribution, isolated:
+
+| adapter | R@1 | R@5 | R@10 | P@5 | MRR |
+|---|---|---|---|---|---|
+| keyword | 0.500 | 0.875 | 0.875 | 0.200 | 0.708 |
+| keyword+graph | **0.594** | 0.875 | 0.875 | 0.200 | **0.786** |
+
+**Read that carefully, because the shape matters more than the size.** R@5 and
+R@10 are identical. The graph does **not** find answers keyword retrieval
+missed; it promotes the right answer to the top — +9.4pp R@1 and +7.8pp MRR,
+with 4 of 16 gold hits attributed to the `keyword+kg` signal. That is a real
+result and a narrower claim than "the graph improves recall".
+
+The harness also surfaced a genuine limitation on its first run: with only
+natural-language queries the two adapters scored *identically*, because
+`kgQueryMatches` fires only when a query token matches a node label. A question
+phrased as "why did the knowledge graph get so large" never activates the graph,
+even though the graph knows which file that is. The corpus now carries both
+question shapes so the limitation stays visible rather than being averaged away.
+Widening that trigger is the obvious next piece of retrieval work, and it now
+has a number to move.
+
+The test asserts the *relationship* (graph must not lower MRR or R@5, and at
+least one gold hit must be attributed to the graph) rather than only constants,
+so it stays meaningful as the corpus grows. Floors sit below the measured values
+— a floor set to the exact current score turns every harmless ranking change
+into a red build, and a benchmark that cries wolf gets deleted. [RAN] The guard
+was shown failing against `kgQueryMatches` stubbed out, then restored
+byte-identically.
+
+`eval` writes its corpus through the recall gateway rather than into the stores
+directly. `arch-check` caught the direct writes (memory-writes 24 → 27) and the
+boundary was honoured rather than widened — which is also more realistic, since
+the benchmark now populates memory by the same route the agent uses.
+
 ---
 
 ## 6.2 Where model debate belongs — decided
