@@ -41,7 +41,11 @@ function addEvent(evt) {
   if (activeTab !== "events") showEvtBadge(evtCount);
 
   let eType = evt.type || "unknown";
-  const eTask = evt.task || evt.agent || "";
+  // task_id is the wire field (core.UIEvent marshals TaskID that way). This
+  // read the bare `task` property, which is never present, so every mapping
+  // below was dead and the streaming coalescer keyed every event on the same
+  // empty string — merging rows from unrelated tasks.
+  const eTask = evt.task_id || evt.agent || "";
 
   // Enterprise UI Event Mapping
   if (eType === "task_update") {

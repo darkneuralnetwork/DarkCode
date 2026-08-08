@@ -898,6 +898,86 @@ it. What was actually missing was a test that the kernel *uses* the gateway —
 the adapter was covered in package `recall`, its installation was not. That gap
 is now closed; the count is not.
 
+### 6.1.4 §6 — UI conformance: four dead wires, found by reading both ends
+
+The brief asked whether every event has a renderer. The answer was yes for
+almost all of them and the interesting failures were elsewhere: telemetry that
+was produced, transmitted, and then discarded by the browser without an error.
+
+**Counts, re-derived.** [RAN] `core.EventType` declares **20** constants, not
+the 19 the brief states (its list names 18). `ui.EventEmitter` has 18 named
+`Emit*` helpers plus the generic `Emit`; `file_change` and `approval` have no
+helper and are emitted with `Emit(core.EventFileChange, …)` from
+`tools/registry.go:590` and `app_wireup.go:784`.
+
+**What was broken.** [RAN] All four confirmed against live SSE frames from a
+real binary on port 12399.
+
+| # | defect | consequence |
+|---|---|---|
+| 1 | `10-sse.js` subscribed to 19 of 20 types; `file_change` was missing | every mutating tool call emitted a change event the GUI dropped. EventSource only delivers a named event to a listener registered for that name — no error, no warning |
+| 2 | the browser read `evt.task`; `core.UIEvent` marshals `task_id` | the event feed's type mapping (`router_decision`, `verification_pipeline`, `strategy_choice`, `security_sandbox`) never fired, and the streaming coalescer keyed every event on `""` — merging rows from unrelated sub-agents |
+| 3 | same bug on the plan gates: `data.task === activeProjectId` | the live plan and workflow boards never rendered from SSE. The boards were only ever populated by the tab-switch fetch, so the failure looked like lag |
+| 4 | Auto Mode listened for a `project_auto_created` **event type** | the server emits it as `EmitTaskUpdate("project_auto_created", proj.ID, proj.Name)` — a `task_update`. Auto Mode never activated the project it had just detected |
+
+Frame evidence for #4, captured live:
+
+```
+{"type":"task_update","status":"text-hi-into-a-new-49e990",
+ "content":"text hi into a new","task_id":"project_auto_created"}
+```
+
+— the id is in `status`, the name in `content`, and the type is `task_update`.
+Both ends were wrong in different ways, which is why neither side looked
+suspicious on its own.
+
+**The exec bar.** [RAN] `220-v2.js` called `updateExecMetric` with seven
+`exec-*` ids; `nexus.html` defined two. `updateExecMetric` no-ops on a missing
+element, so model, cost, latency and context size were computed on every
+`token_usage`/`model_route` event and thrown away. Those four now have slots.
+`exec-provider` and `exec-compress-ratio` were deleted instead — provider is
+already in the per-message meta row and compression already raises a toast;
+adding surface for a duplicate is not the same as fixing a gap.
+
+**Stale copy (§6.4).** The Agentic Loop badge tooltip advertised "the Loop chat
+mode", which the mode picker's removal deleted. Reworded to describe the
+toggle. No other user-visible copy still claims General mode means no tools.
+
+**Surface parity (§6.2).** [READ] Not equal, and the inequality is structural
+rather than a defect:
+
+- **CLI** — every event reaches `recordActivity` and the inline `├─` feed.
+  Full coverage; 13 of 20 have a specific icon, the rest render as `•`.
+- **GUI** — all 20 subscribed as of this pass. Richest surface.
+- **ACP** — `session/update` carries answer chunks only. No telemetry at all.
+  Unchanged; see the deferral below.
+
+**Guards.** `server/sse_subscription_test.go`. The first reads the event-type
+constants out of `core/orchestrator_types.go` and asserts each appears in the
+subscription list, so a constant added to core cannot make the check pass by
+not being looked at. The second asserts `TaskID`'s wire name and forbids
+`evt.task`/`data.task` reads in the three files that consume events. Both were
+shown failing against the pre-fix assets and passing after.
+
+**Not done, with the bar to revisit:**
+
+- **ACP telemetry parity.** ACP has one notification shape and adding a
+  telemetry channel is a protocol design question, not a wiring fix. Revisit
+  when an ACP client asks for progress detail.
+- **Spilled tool results have no GUI surface** — zero references to spill in
+  `server/web/`. The preview is in the tool result text; the full artefact is
+  reachable only from disk. Worth a panel once spilling is common enough to
+  notice; today it fires on large outputs only.
+- **Stale-file count from `graph_query action=stale`** — no surface. This is a
+  differentiator and deserves one, but it belongs with the cognition page
+  rather than bolted onto the chat bar.
+- **`intel-health`** is written by `220-v2.js` and has no element in
+  `cognition.html`. Left alone: unlike the exec metrics, there is no evidence
+  the value was ever meaningful.
+- **No JS test rig exists** and building one was out of scope. The two guards
+  above are Go tests that read the embedded assets — enough to catch the exact
+  defect class found here, not enough to test rendering.
+
 ---
 
 ## 6.2 Where model debate belongs — decided

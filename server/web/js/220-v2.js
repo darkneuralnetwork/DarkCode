@@ -316,12 +316,10 @@
           const content = String(evt.content);
           const modelMatch = content.match(/model=(\S+)/);
           if (modelMatch) updateExecMetric("exec-model", modelMatch[1]);
-          updateExecMetric("exec-provider", evt.agent || "—");
         }
         break;
       case "compression":
         if (evt.content) {
-          updateExecMetric("exec-compress-ratio", String(evt.content));
           setExecStage("compression", "completed");
         }
         break;

@@ -60,7 +60,18 @@
         <div class="exec-stage" data-stage="completion"><span class="exec-stage-dot"></span><span class="exec-stage-label">Done</span></div>
       </div>
       <div class="exec-metrics" id="exec-metrics">
+        <!-- 220-v2.js writes each of these live, per model call. The bar
+             carried only Tokens and Time, so model, cost, latency and context
+             size were computed on every token_usage/model_route event and
+             written to element ids that did not exist. They are the same
+             numbers the per-message meta row shows, but that row only appears
+             once the answer is finished — during a long run this bar is the
+             only place they are visible. -->
+        <div class="exec-metric"><span class="exec-metric-label">Model</span><span class="exec-metric-value" id="exec-model">—</span></div>
         <div class="exec-metric"><span class="exec-metric-label">Tokens</span><span class="exec-metric-value" id="exec-tokens">0</span></div>
+        <div class="exec-metric"><span class="exec-metric-label">Context</span><span class="exec-metric-value" id="exec-context">—</span></div>
+        <div class="exec-metric"><span class="exec-metric-label">Cost</span><span class="exec-metric-value" id="exec-cost">—</span></div>
+        <div class="exec-metric"><span class="exec-metric-label">Latency</span><span class="exec-metric-value" id="exec-latency">—</span></div>
         <div class="exec-metric"><span class="exec-metric-label">Time</span><span class="exec-metric-value" id="exec-duration">0.0s</span></div>
       </div>
       <!-- The global "View/Hide Execution Details" toggle was removed (Fix D).
