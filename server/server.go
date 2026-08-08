@@ -202,6 +202,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/tools/execute", s.handleToolExecute)
 	mux.HandleFunc("/api/memory", s.handleMemory)
+	mux.HandleFunc("/api/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/api/memory/short-term", s.handleShortTermMemory)
 	mux.HandleFunc("/api/memory/episodic", s.handleEpisodicMemory)
 	mux.HandleFunc("/api/memory/semantic", s.handleSemanticMemory)

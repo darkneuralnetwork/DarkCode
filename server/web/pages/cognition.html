@@ -1,103 +1,39 @@
-<div class="cognition-layout custom-scrollbar" style="display: flex; flex-direction: column; width: 100%; height: 100%; overflow-y: auto; background: var(--bg-void); padding: 24px;">
+<!-- Memory — a retrieval surface, not a listing.
 
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-    <h2 class="gradient-text" style="margin: 0; font-size: 24px;">Cognition</h2>
+     The previous version opened by fetching every tier plus the whole
+     knowledge graph and rendering fifty rows of it. On a real repository that
+     is 16 MB, and the tab hung the browser on open. Paginating the dump would
+     only have made a smaller dump.
+
+     Memory here IS a retrieval system, so the interface asks it questions
+     through the same hybrid retriever the agent uses. Nothing loads a store on
+     open: the counts say how much there is, and everything else is a search. -->
+
+<div style="max-width: 900px; margin: 0 auto; padding: 24px;">
+
+  <div class="glass-panel" style="padding: 20px;">
+    <h3 style="margin: 0 0 4px;">🧠 Memory</h3>
+    <p style="font-size: 12px; color: var(--text-mute); margin: 0 0 16px;">
+      Ask what the agent knows. Runs the same keyword + vector + graph retrieval the agent
+      runs, and shows which signal found each result.
+    </p>
+
+    <form id="mem-search-form" style="display: flex; gap: 8px;">
+      <input id="mem-q" type="text" autocomplete="off"
+             placeholder="e.g. why did the knowledge graph get so large"
+             style="flex: 1; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 13px;">
+      <button type="submit" class="btn-glow primary" style="padding: 0 18px;">Search</button>
+    </form>
+
+    <!-- Counts, not contents. Cheap to compute and it is the only thing worth
+         showing before a question has been asked. -->
+    <div id="mem-counts" style="display: flex; flex-wrap: wrap; gap: 18px; margin-top: 16px; font-size: 11px; color: var(--text-dim);"></div>
   </div>
 
-  <!--
-    Project Intelligence, memory and the knowledge graph.
-
-    The project workspace used to sit here too. Blueprint owns it now, since a
-    project's plan and its files belong beside the run that changes them — and
-    two panels sharing an element id meant whichever loaded last won.
-  -->
-  <div class="cog-grid">
-
-    <!-- Intelligence KPIs -->
-    <div class="glass-panel" id="cog-intelligence-panel" style="padding: 20px; display: flex; flex-direction: column;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🔬 Project Intelligence</h3>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <span class="evt-live" id="intel-live">● SYNCED</span>
-          <button class="fe-btn max-btn" data-target="cog-intelligence-panel">⛶</button>
-        </div>
-      </div>
-      <div class="kpi-row" id="intel-kpi" style="margin-bottom: 16px;">
-        <div class="kpi-card">
-          <div class="kpi-icon">📄</div>
-          <div class="kpi-body">
-            <div class="kpi-label">Indexed Files</div>
-            <div class="kpi-value" id="intel-files">0</div>
-            <div class="kpi-sub" id="intel-files-sub">0 pending</div>
-          </div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-icon">🔤</div>
-          <div class="kpi-body">
-            <div class="kpi-label">Symbols</div>
-            <div class="kpi-value" id="intel-symbols">0</div>
-            <div class="kpi-sub"><span id="intel-funcs">0</span> fn · <span id="intel-classes">0</span> cls</div>
-          </div>
-        </div>
-      </div>
-      <div id="intel-deps" class="intel-deps-grid" style="flex: 1; border: 1px solid rgba(255,255,255,0.05); padding: 12px; border-radius: 6px;">
-        <div class="mem-empty">No dependency data available.</div>
-      </div>
+  <div class="glass-panel" id="mem-results-panel" style="padding: 20px; margin-top: 16px;">
+    <div id="mem-results">
+      <div class="mem-empty">Search to see what the agent remembers.</div>
     </div>
-
   </div>
 
-  <!-- MIDDLE ROW: Memory & Knowledge Graph -->
-  <div class="cog-mem-row">
-
-    <!-- 4-Tier Memory -->
-    <div class="glass-panel" id="cog-memory-panel" style="padding: 20px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🧠 Memory</h3>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn-glow" id="mem-refresh" style="padding: 4px 10px; font-size: 11px;">Sync Memory</button>
-          <button class="fe-btn max-btn" data-target="cog-memory-panel">⛶</button>
-        </div>
-      </div>
-      <div class="mem-grid" id="mem-grid">
-        <div class="mem-card glass-panel" data-type="conversation">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">💬</span> <h3>Conversation</h3></div><span class="mc-count" id="mem-conversation-count"></span></div>
-          <div class="mem-card-body custom-scrollbar" id="mem-conversation"></div>
-        </div>
-        <div class="mem-card glass-panel" data-type="episodic">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">📜</span> <h3>Episodic</h3></div><span class="mc-count" id="mem-episodic-count"></span></div>
-          <div class="mc-sub">Past tasks and how they turned out.</div>
-          <div class="mem-card-body custom-scrollbar" id="mem-episodic"></div>
-        </div>
-        <div class="mem-card glass-panel" data-type="semantic">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">🗂</span> <h3>Semantic</h3></div><span class="mc-count" id="mem-semantic-count"></span></div>
-          <div class="mc-sub">Durable facts, each with where it came from.</div>
-          <div class="mem-card-body custom-scrollbar" id="mem-semantic"></div>
-        </div>
-        <div class="mem-card glass-panel" data-type="procedural">
-          <div class="mem-card-head"><div class="mc-title"><span class="mc-icon">🛠</span> <h3>Procedural</h3></div><span class="mc-count" id="mem-procedural-count"></span></div>
-          <div class="mc-sub">Skills — learned from runs here, or imported with <code>/skills import</code>.</div>
-          <div class="mem-card-body custom-scrollbar" id="mem-procedural"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Knowledge Graph -->
-    <div class="glass-panel" id="cog-kg-panel" style="padding: 20px; display: flex; flex-direction: column;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 class="cfg-h3" style="margin: 0; font-size: 14px; text-transform: uppercase;">🕸️ Graph Entities</h3>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn-glow" id="kg-refresh" style="padding: 4px 10px; font-size: 11px;">Reload</button>
-          <button class="fe-btn max-btn" data-target="cog-kg-panel">⛶</button>
-        </div>
-      </div>
-      <div class="kg-container custom-scrollbar" style="flex: 1; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; overflow-y: auto; display: flex; flex-direction: column;">
-        <div class="kg-split" style="height: 100%; display: flex; flex-direction: column;">
-          <div class="kg-list custom-scrollbar" id="kg-nodes" style="border:none; padding: 12px; flex: 1; min-height: 0; overflow-y: auto;"></div>
-          <div class="kg-list custom-scrollbar" id="kg-edges" style="border:none; padding: 12px; border-top: 1px solid rgba(255,255,255,0.05); flex: 1; min-height: 0; overflow-y: auto;"></div>
-        </div>
-      </div>
-    </div>
-
-  </div>
 </div>

@@ -2,6 +2,10 @@ package server
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/darkcode/memory"
 )
 
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
@@ -101,3 +105,75 @@ func (s *Server) handleProceduralMemory(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleConfig returns the current configuration (minus secrets) or updates it.
+
+// handleMemorySearch answers a question against memory instead of listing it.
+//
+// # WHY SEARCH AND NOT A LIST
+//
+// The Memory tab used to open by fetching every tier and the whole knowledge
+// graph — 16 MB on a real repository — and then render fifty rows of it. It
+// hung the browser, and paginating the dump only made a smaller dump.
+//
+// The deeper point is that memory here is a retrieval system. Nobody scrolls
+// fourteen thousand graph nodes looking for something; they ask. So the
+// interface asks, through the same hybrid retriever the agent itself uses —
+// keyword, vector and knowledge-graph signals fused by reciprocal rank.
+//
+// That also makes the thing this project is actually proud of visible: each
+// hit reports WHICH signal found it, so "the graph earns its keep" stops being
+// a claim in a document and becomes something you can watch happen.
+func (s *Server) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	if s.memSystem == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory system not initialized")
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		// An empty query is the tab's resting state, not an error: it wants the
+		// counts so it can say how much there is to search.
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"query": "", "hits": []any{}, "counts": s.memoryCounts(),
+		})
+		return
+	}
+	limit := memoryPageDefault
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 20 {
+		limit = v
+	}
+
+	hits := memory.NewHybridRetriever(s.memSystem, s.memSystem.KG()).Recall(q, limit)
+	out := make([]map[string]interface{}, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, map[string]interface{}{
+			"id": h.ID, "source": h.Source, "goal": h.Goal,
+			"snippet": h.Snippet, "score": h.Score,
+			// Which stream found it. This is the differentiator, so it is on
+			// the wire rather than inferred.
+			"signal":    h.Signal,
+			"timestamp": h.Timestamp,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"query": q, "hits": out, "counts": s.memoryCounts(),
+	})
+}
+
+// memoryCounts is how much there is, without sending any of it.
+func (s *Server) memoryCounts() map[string]int {
+	nodes, edges := 0, 0
+	if kg := s.memSystem.KG(); kg != nil {
+		nodes, edges = kg.Stats()
+	}
+	return map[string]int{
+		"conversation": len(s.memSystem.STMGet()),
+		"episodic":     len(s.memSystem.EpisodicGet()),
+		"semantic":     len(s.memSystem.SemanticAll()),
+		"procedural":   len(s.memSystem.ProceduralAll()),
+		"graph_nodes":  nodes,
+		"graph_edges":  edges,
+	}
+}

@@ -47,7 +47,26 @@ func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core
 		adjudicate.WithDebate(k.debateEnabled),
 		adjudicate.WithLog(func(m string) { k.log("consensus", m) }),
 	)
-	return adj.Verdict(ctx, goal, consensus).Answer
+	res := adj.Verdict(ctx, goal, consensus)
+
+	// How the verdict was reached is emitted, not discarded.
+	//
+	// Everything but Answer used to be dropped here — the method, whether an
+	// exchange ran, and the transcript of it. So the one feature that makes
+	// multi-model worth its cost, the record of models checking each other, was
+	// computed on every consensus turn and thrown away. An exchange nobody can
+	// read is indistinguishable from one that never happened.
+	if k.emitter != nil {
+		k.emitter.EmitConsensus(map[string]interface{}{
+			"method":       res.Method,
+			"debated":      res.Debated,
+			"transcript":   res.Transcript,
+			"note":         res.Note,
+			"models":       len(consensus.Contributions),
+			"contributors": contributorNames(consensus),
+		}, consensus.Conflict)
+	}
+	return res.Answer
 }
 
 // runConsensusOnOutput runs a consensus synthesis round on an already-produced
@@ -121,3 +140,15 @@ func (k *Kernel) mergeWithConsensus(ctx context.Context, results []*core.SubAgen
 // ============================================================================
 // EPISODIC MEMORY STORAGE
 // ============================================================================
+
+// contributorNames lists which models answered, so the interface can say who
+// took part rather than only how many.
+func contributorNames(c *core.ConsensusResult) []string {
+	out := make([]string, 0, len(c.Contributions))
+	for _, x := range c.Contributions {
+		if x.Error == "" && strings.TrimSpace(x.Output) != "" {
+			out = append(out, x.Model)
+		}
+	}
+	return out
+}

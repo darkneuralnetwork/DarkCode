@@ -55,6 +55,10 @@ func (s *Server) handleAuditRecent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKnowledgeGraph returns all knowledge graph nodes and edges.
+// graphPageDefault bounds an unasked-for graph read. Chosen to be enough to
+// show shape and far short of enough to stall a browser.
+const graphPageDefault = 200
+
 func (s *Server) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request) {
 	if s.memSystem == nil || s.memSystem.KG() == nil {
 		writeError(w, http.StatusServiceUnavailable, "knowledge graph not initialized")
@@ -63,10 +67,25 @@ func (s *Server) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request) {
 	kg := s.memSystem.KG()
 	nodeCount, edgeCount := kg.Stats()
 
-	// Nodes grow with the system-wide KG, so they paginate (default: all).
-	page, meta := paginate(kg.AllNodes(), parsePage(r))
-	meta["nodes"] = page
-	meta["edges"] = kg.AllEdges()
+	// Nodes and edges both paginate, and both default to a page rather than to
+	// everything.
+	//
+	// This used to default to "all" for nodes and send EVERY edge with no limit
+	// at all. On a real repository that is a 16 MB response — a graph of ~14k
+	// nodes and ~40k edges — which the browser then has to parse and lay out.
+	// The Memory tab hung on open, and the cause was not the tab: it was this
+	// handler answering "show me the graph" with the whole graph.
+	//
+	// Nobody reads 40,000 edges. A caller that genuinely wants them can page
+	// through; the interface asks what it can show.
+	p := parsePage(r)
+	if p.limit == 0 {
+		p.limit = graphPageDefault
+	}
+	nodes, meta := paginate(kg.AllNodes(), p)
+	edges, _ := paginate(kg.AllEdges(), p)
+	meta["nodes"] = nodes
+	meta["edges"] = edges
 	meta["node_count"] = nodeCount
 	meta["edge_count"] = edgeCount
 	writeJSON(w, http.StatusOK, meta)
