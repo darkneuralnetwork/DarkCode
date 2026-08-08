@@ -759,11 +759,19 @@ func cosineSimilarity(a, b []float32) float64 {
 	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
 		return 0
 	}
+	// Widen before multiplying. float64(a[i]*b[i]) does the multiply in
+	// float32, which tops out near 3.4e38 — a component around 1e19 squares to
+	// +Inf and the whole score comes back NaN, which then sorts
+	// unpredictably against every other candidate rather than merely ranking
+	// low. No embedder emits components that large, so this is a correctness
+	// floor rather than a live bug; it is pinned because the narrow multiply
+	// looks harmless and would be easy to write again.
 	var dotProduct, normA, normB float64
 	for i := range a {
-		dotProduct += float64(a[i] * b[i])
-		normA += float64(a[i] * a[i])
-		normB += float64(b[i] * b[i])
+		x, y := float64(a[i]), float64(b[i])
+		dotProduct += x * y
+		normA += x * x
+		normB += y * y
 	}
 	if normA == 0 || normB == 0 {
 		return 0
