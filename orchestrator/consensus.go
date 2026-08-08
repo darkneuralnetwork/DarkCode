@@ -2,9 +2,9 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/darkcode/adjudicate"
 	"github.com/darkcode/core"
 )
 
@@ -31,71 +31,23 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 	return k.adjudicateCtx(ctx, userGoal, consensus), nil
 }
 
-// adjudicateCtx settles a consensus round on structural evidence rather than on
-// the synthesiser's judgement, falling back to a debate round when the graph
-// cannot decide.
+// adjudicateCtx settles a consensus round through the adjudication component.
 //
-// Aggregating opinions cannot detect a confidently wrong contributor. The
-// graph can: each candidate's checkable claims — this symbol exists, it lives
-// in that file, this package imports that one — are verified, and a candidate
-// whose claims survive better than the synthesis replaces it.
-//
-// The synthesis keeps ties. It saw every contribution, so it is the right
-// default whenever the evidence does not actually distinguish the candidates.
+// The decision itself — check the claims against the graph, and only when
+// checking is silent let the two most divergent answers critique each other
+// once — lives in package adjudicate. The kernel supplies the pieces (model
+// manager, evidence, the bus to record on, the runtime toggle) and calls it,
+// rather than containing 375 lines of it.
 func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core.ConsensusResult) string {
 	if consensus == nil {
 		return ""
 	}
-	if k.data == nil {
-		return consensus.Synthesized
-	}
-
-	candidates := []string{consensus.Synthesized}
-	labels := []string{"synthesis"}
-	for _, c := range consensus.Contributions {
-		if strings.TrimSpace(c.Output) != "" {
-			candidates = append(candidates, c.Output)
-			labels = append(labels, c.Model)
-		}
-	}
-	if len(candidates) < 2 {
-		return consensus.Synthesized
-	}
-
-	best, supports, graphed := k.data.Adjudicate(candidates)
-	if !graphed || best < 0 || supports[0].Checked == 0 {
-		// Nothing checkable. This branch used to return the synthesis and move
-		// on, which is the one case where the models disagreeing is all the
-		// information there is — and where letting them answer each other is
-		// worth a call. Everything else is settled by evidence, which is both
-		// cheaper and better.
-		if consensus.Conflict {
-			if d := k.resolveByDebate(ctx, goal, consensus); d.Ran {
-				k.log("consensus", "Debate settled a conflict the graph could not check")
-				return d.Resolved
-			}
-		}
-		return consensus.Synthesized
-	}
-
-	// Report what the graph refuted in the answer we are about to return,
-	// so a surviving error is visible rather than silently authoritative.
-	chosen := consensus.Synthesized
-	if best != 0 && supports[best].Score() > supports[0].Score() {
-		chosen = candidates[best]
-		k.log("consensus", fmt.Sprintf(
-			"Adjudicated on structure: %s (%d/%d claims verified) over the synthesis (%d/%d)",
-			labels[best], supports[best].Verified, supports[best].Checked,
-			supports[0].Verified, supports[0].Checked))
-	}
-	if wrong := supports[best].Contradicted(); len(wrong) > 0 && best == 0 {
-		var lines []string
-		for _, c := range wrong {
-			lines = append(lines, "- "+c.Detail)
-		}
-		chosen += "\n\n_⚠ The code graph contradicts part of this answer:_\n" + strings.Join(lines, "\n")
-	}
-	return chosen
+	adj := adjudicate.New(k.models, k.data,
+		adjudicate.WithRecorder(critiqueBus{k}),
+		adjudicate.WithDebate(k.debateEnabled),
+		adjudicate.WithLog(func(m string) { k.log("consensus", m) }),
+	)
+	return adj.Verdict(ctx, goal, consensus).Answer
 }
 
 // runConsensusOnOutput runs a consensus synthesis round on an already-produced
