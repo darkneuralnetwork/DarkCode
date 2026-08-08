@@ -47,6 +47,17 @@ detail_*.md
 multi_debate.txt
 /mywebssssite/
 
+# Agent tooling scratch: editor state, nested worktrees, session logs. Same
+# reasoning as /.darkcode/ above — these were excluded only through
+# .git/info/exclude, which lives in one checkout and travels nowhere, so a
+# fresh clone would leave the lot untracked and one blanket add would publish
+# it. Nested worktrees under .claude/ have already cost this repository twice:
+# they broke two boundary scanners and put 364,481 cross-worktree edges into
+# the knowledge graph.
+.claude/
+.aider*
+.cursor/
+
 # Stray, unreferenced asset dir (the embedded web assets live in server/web/).
 # Left untracked and unignored, so a blanket add would sweep it in.
 /ui/html/
