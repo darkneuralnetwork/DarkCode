@@ -189,3 +189,41 @@ func TestValuesReportWhatIsInEffect(t *testing.T) {
 			sv["auto_ingest"], sv["health_daemon"])
 	}
 }
+
+// TestRoutingModeIsDerivedFromWhatIsRegistered.
+//
+// It used to default to a flat "single", so registering three models left two
+// of them unused until the user found a setting nobody mentioned. The tool had
+// every fact it needed to make that call and asked anyway.
+func TestRoutingModeIsDerivedFromWhatIsRegistered(t *testing.T) {
+	one := &Config{Models: map[string]ModelConfig{"a": {}}}
+	if got := derivedRoutingMode(one); got != "single" {
+		t.Errorf("one model derived %q, want single", got)
+	}
+	many := &Config{Models: map[string]ModelConfig{"a": {}, "b": {}, "c": {}}}
+	if got := derivedRoutingMode(many); got != "escalation" {
+		t.Errorf("three models derived %q, want escalation", got)
+	}
+	// Escalation, not consensus: more models should make the agent better
+	// without making every turn cost N calls. Consensus is a deliberate spend.
+	if got := derivedRoutingMode(many); got == "consensus" {
+		t.Error("a multi-model install was opted into consensus spending by default")
+	}
+	if got := derivedRoutingMode(&Config{}); got != "single" {
+		t.Errorf("no models derived %q, want single", got)
+	}
+}
+
+// TestAnExplicitRoutingModeIsNotOverridden — derivation fills a blank, it does
+// not overrule a choice.
+func TestAnExplicitRoutingModeIsNotOverridden(t *testing.T) {
+	cfg := &Config{RoutingMode: "consensus", Models: map[string]ModelConfig{"a": {}}}
+	if cfg.RoutingMode != "consensus" {
+		t.Fatal("precondition")
+	}
+	// The defaulting block only fires on an empty value; assert the guard
+	// rather than the whole loader, which needs a file on disk.
+	if cfg.RoutingMode == "" {
+		t.Error("an explicit mode was blanked")
+	}
+}

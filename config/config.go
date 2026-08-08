@@ -576,7 +576,7 @@ func Load() (*Config, error) {
 		cfg.PlanDepth = "auto"
 	}
 	if cfg.RoutingMode == "" {
-		cfg.RoutingMode = "single"
+		cfg.RoutingMode = derivedRoutingMode(cfg)
 	}
 	if cfg.SafetyLevel == "" {
 		cfg.SafetyLevel = "normal"
@@ -832,4 +832,21 @@ func warnDeprecatedKeys(data []byte) {
 				"note: %q in your config no longer does anything — %s\n", key, deprecatedKeys[key])
 		}
 	}
+}
+
+// derivedRoutingMode picks a routing mode from what is actually registered.
+//
+// It used to be a flat "single". Registering three models therefore left two of
+// them unused until the user found a setting nobody told them about — the tool
+// had every fact it needed to make that call and asked anyway.
+//
+// Escalation rather than consensus for a multi-model install: escalation starts
+// on the cheap tier and climbs only when a task needs it, so more models make
+// the agent better without making every turn cost N calls. Consensus is a
+// deliberate spend and stays opt-in.
+func derivedRoutingMode(cfg *Config) string {
+	if len(cfg.Models) > 1 {
+		return "escalation"
+	}
+	return "single"
 }
