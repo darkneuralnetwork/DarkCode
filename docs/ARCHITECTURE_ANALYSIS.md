@@ -978,6 +978,68 @@ shown failing against the pre-fix assets and passing after.
   above are Go tests that read the embedded assets — enough to catch the exact
   defect class found here, not enough to test rendering.
 
+### 6.1.5 §3.2 — sixteen branches down to three
+
+Containment was tested by content, not by subject line — several branches were
+rebased and carry different SHAs for the same work. Two tests, both [RAN]:
+`git merge-base --is-ancestor` for reachability, and `git cherry` for
+patch-equivalence where reachability fails.
+
+| outcome | branches | evidence |
+|---|---|---|
+| deleted, every commit reachable from `main` | 11 | `git branch -d` accepted each one, so git verified containment itself |
+| deleted, patch-equivalent in `main` | 1 (`…dreamy-tharp…`) | `git cherry main` reported its single commit as `-` |
+| deleted after salvaging one commit | 1 (`backup/structural-pre-email-fix`) | 26 of 27 reported `-`; the 27th is below |
+| kept | 3 | `main`, `architecture-managers`, `…reverse-engineering-audit-10dc09` |
+
+Eight of the thirteen deleted refs were vendor-named (`claude/…`), which the
+leak guard checks on every commit and push. One vendor-named ref survives —
+`…reverse-engineering-audit-10dc09`, kept for the reason below; renaming it is
+the obvious follow-up when it is next touched.
+
+Scope: this is the **local** refs only. `origin` still carries
+`agent-execution-contract`, contained in `main` and equally stale, but deleting
+a remote branch is a push, which this pass is not permitted to do. It is left
+for the owner.
+
+**Two things were recovered rather than deleted.**
+
+`backup/structural-pre-email-fix` held one commit not in `main`: the tracked
+ignore rules for `.claude/`, `.aider*` and `.cursor/`. Those were still living
+only in `.git/info/exclude`, which does not travel — a fresh clone would leave
+them untracked and unignored. That is the same defect the `/.darkcode/` rule
+already fixed, and the same directory whose nested worktrees broke two boundary
+scanners and put 364,481 edges into the knowledge graph earlier in this pass.
+Now in `.gitignore`.
+
+`claude/codebase-reverse-engineering-audit-10dc09` still has four commits with
+no equivalent in `main`. Checking what they actually contain — rather than
+trusting the subject lines — turned up a live defect: `cosineSimilarity`
+computed `float64(a[i] * b[i])`, doing the multiply in float32. A component
+near 1e19 squares to `+Inf` and the score comes back NaN, which does not rank
+low but sorts unpredictably against every other candidate. Fixed, with the
+branch's own regression test, which compiles unchanged against this tree and
+failed on it before the fix. The branch's other three test files were checked
+too: `backfill_test.go` and `relevance_intent_test.go` duplicate coverage that
+already exists here (`embedcache_test.go`, `web_intent_test.go`), and
+`budget_wiring_test.go` no longer compiles — it calls `BudgetCheck`, which this
+tree does not have.
+
+**Why that branch stays.** After the above it holds exactly one thing of value:
+`memory/kgstore.go` and its test, the incremental SQLite persistence deferred
+in §6.1.2 with a ~50 MB threshold. It is the only copy. Delete it when that
+work is either ported or abandoned, not before.
+
+**The commit series was not rewritten, and that is a decision rather than an
+omission.** Of the 42 commits on `architecture-managers`, 11 are
+documentation-only and a few correct earlier mistakes in the same series — both
+are exactly what the brief flags as squash candidates. But 27 of them are
+already on the remote, so folding them means a force-push, which this pass is
+not permitted to do. Squashing only the unpushed tail would leave a series that
+follows one convention for half its length and another for the rest, which
+reads worse than leaving it alone. Revisit if the branch is ever rebased for
+other reasons; the fold list is the 11 `record …` commits.
+
 ---
 
 ## 6.2 Where model debate belongs — decided
