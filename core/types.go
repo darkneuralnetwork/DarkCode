@@ -20,13 +20,62 @@ type ToolCall struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"` // always "function"
 	Function FunctionCall `json:"function"`
+	// ExtraContent is provider state that must be echoed back on the next
+	// request. Absent for every provider that does not use it, so nothing is
+	// sent to an endpoint that would reject the field. See ToolCallExtra.
+	ExtraContent *ToolCallExtra `json:"extra_content,omitempty"`
 }
 
 // FunctionCall is the inner function name + arguments of a ToolCall.
 type FunctionCall struct {
-	Name             string `json:"name"`
-	Arguments        string `json:"arguments"` // raw JSON string of arguments
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // raw JSON string of arguments
+}
+
+// ToolCallExtra carries provider-specific data attached to a tool call that has
+// to survive a round trip.
+//
+// # WHY THIS EXISTS
+//
+// Gemini 3 returns an opaque thought signature with every function call and
+// REFUSES the next request if the signature does not come back with it:
+//
+//	400 INVALID_ARGUMENT — Function call is missing a thought_signature in
+//	functionCall parts.
+//
+// So a tool call is not just a name and arguments any more; part of it is
+// provider state the client has to carry. Dropping it does not degrade the
+// answer, it fails the turn — which is exactly what happened here: the agentic
+// loop died on iteration 2 of every tool-using task, on the model this project
+// is most often run against.
+//
+// The field lives on ToolCall rather than FunctionCall because that is where
+// the wire puts it. An earlier attempt declared it inside FunctionCall, which
+// parsed nothing, sent nothing back, and looked correct.
+type ToolCallExtra struct {
+	Google *GoogleToolExtra `json:"google,omitempty"`
+}
+
+// GoogleToolExtra is the Google branch of extra_content.
+type GoogleToolExtra struct {
 	ThoughtSignature string `json:"thought_signature,omitempty"`
+}
+
+// Signature returns the thought signature, or "" when there is none. Nil-safe
+// so call sites do not each repeat two pointer checks.
+func (e *ToolCallExtra) Signature() string {
+	if e == nil || e.Google == nil {
+		return ""
+	}
+	return e.Google.ThoughtSignature
+}
+
+// WithSignature builds the extra_content a Gemini tool call must echo back.
+func WithSignature(sig string) *ToolCallExtra {
+	if sig == "" {
+		return nil
+	}
+	return &ToolCallExtra{Google: &GoogleToolExtra{ThoughtSignature: sig}}
 }
 
 // Message represents a single message in the conversation history.

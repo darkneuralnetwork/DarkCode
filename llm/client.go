@@ -474,8 +474,11 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *CompletionReques
 				if tc.Function.Name != "" {
 					existing.Function.Name = tc.Function.Name
 				}
-				if tc.Function.ThoughtSignature != "" {
-					existing.Function.ThoughtSignature += tc.Function.ThoughtSignature
+				// Keep the first signature seen. It is an opaque blob, not a
+				// text delta: concatenating successive fragments the way the
+				// arguments are concatenated would corrupt it.
+				if existing.ExtraContent.Signature() == "" && tc.ExtraContent.Signature() != "" {
+					existing.ExtraContent = tc.ExtraContent
 				}
 				existing.Function.Arguments += tc.Function.Arguments
 			}

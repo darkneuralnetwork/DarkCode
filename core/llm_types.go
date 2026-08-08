@@ -107,6 +107,10 @@ type StreamToolCall struct {
 	ID       string       `json:"id,omitempty"`
 	Type     string       `json:"type,omitempty"`
 	Function FunctionCall `json:"function,omitempty"`
+	// ExtraContent arrives on whichever delta the provider chooses, so the
+	// accumulator keeps the first non-empty one rather than assuming a
+	// position. See ToolCallExtra for why losing it fails the next turn.
+	ExtraContent *ToolCallExtra `json:"extra_content,omitempty"`
 }
 
 // StreamCallbacks holds optional callbacks for streaming events.
