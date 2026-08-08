@@ -60,9 +60,9 @@ type System struct {
 	// Bumped by StartNewSession (wired to /api/reset and CLI /new).
 	sessionEpoch time.Time
 
-	// onNewSession is told when the session boundary moves. Optional; see
-	// OnNewSession.
-	onNewSession func()
+	// onNewSession are told when the session boundary moves. Optional; see
+	// OnNewSession for why this is a list and not one callback.
+	onNewSession []func()
 
 	// Episodic Memory — past task executions
 	episodic       []core.EpisodicEntry
@@ -375,12 +375,12 @@ func (s *System) StartNewSession() {
 	s.mu.Lock()
 	s.stm = s.stm[:0]
 	s.sessionEpoch = time.Now()
-	notify := s.onNewSession
+	notify := append([]func(){}, s.onNewSession...)
 	s.mu.Unlock()
-	// Outside the lock: the observer runs user-configured work and must not be
+	// Outside the lock: an observer runs user-configured work and must not be
 	// able to deadlock the store it is being told about.
-	if notify != nil {
-		notify()
+	for _, f := range notify {
+		f()
 	}
 }
 
@@ -388,12 +388,20 @@ func (s *System) StartNewSession() {
 //
 // This exists so the four callers of StartNewSession — two CLI paths, the reset
 // endpoint, and startup — do not each have to remember to announce it. A
-// boundary that three of four surfaces report is not a boundary. Memory takes a
-// plain callback rather than importing whatever wants to know, which keeps the
+// boundary that three of four surfaces report is not a boundary. Memory takes
+// plain callbacks rather than importing whatever wants to know, which keeps the
 // layering intact.
+//
+// Observers ACCUMULATE. A setter that replaced the previous one would mean the
+// last registration silently cancels every earlier one — consolidation and the
+// session_start hook are registered separately and both have to run, and the
+// version of this that replaced would have looked correct at both call sites.
 func (s *System) OnNewSession(f func()) {
+	if f == nil {
+		return
+	}
 	s.mu.Lock()
-	s.onNewSession = f
+	s.onNewSession = append(s.onNewSession, f)
 	s.mu.Unlock()
 }
 

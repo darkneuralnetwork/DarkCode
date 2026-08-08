@@ -201,6 +201,15 @@ type Config struct {
 	// and cost nothing when absent.
 	SkillDirs []string `json:"skill_dirs,omitempty"`
 
+	// EpisodicMaxEntries is the episodic history size consolidation aims for.
+	// 0 uses memory.DefaultEpisodicMax. Entries are evicted by disuse rather
+	// than age: retrieval strengthens an entry, so a fix that keeps being
+	// needed survives being old, and an untouched run does not survive being
+	// recent. Nothing inside a grace period is ever evicted and the newest
+	// entries are kept unconditionally, so lowering this cannot lose current
+	// work. Consolidation runs at the session boundary.
+	EpisodicMaxEntries int `json:"episodic_max_entries,omitempty"`
+
 	// --- Projects ---
 	// Long-lived project context (per-project folders on disk).
 	ProjectsDir string `json:"projects_dir,omitempty"`

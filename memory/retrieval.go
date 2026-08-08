@@ -132,7 +132,36 @@ func (h *HybridRetriever) Recall(query string, k int) []RecallHit {
 		})
 	}
 
-	return fuse(cands, k)
+	hits := fuse(cands, k)
+	h.noteUse(hits)
+	return hits
+}
+
+// useRecorder is told which entries a recall returned, so the forgetting curve
+// in decay.go is fed by retrieval itself rather than by every caller
+// remembering to report. Satisfied by *System.
+//
+// It is an optional interface rather than a method on core.MemoryStore because
+// only one implementation can do anything with it, and widening the store
+// interface would make every test double in the repository implement a
+// bookkeeping call it does not care about.
+type useRecorder interface{ NoteUse(ids []string) }
+
+// noteUse credits the entries a recall surfaced. Retrieval is the only evidence
+// available that an entry was ever worth keeping, so this is what separates
+// "old" from "unused" when consolidation later has to choose.
+func (h *HybridRetriever) noteUse(hits []RecallHit) {
+	rec, ok := h.mem.(useRecorder)
+	if !ok || len(hits) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		if hit.Source == "episodic" && hit.ID != "" {
+			ids = append(ids, hit.ID)
+		}
+	}
+	rec.NoteUse(ids)
 }
 
 // candidate carries every signal for one entry, so ranking can be decided after

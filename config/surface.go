@@ -117,6 +117,8 @@ var descriptors = []Field{
 	{Name: "tool_sources", Label: "Tool sources", Group: "Tools", Tier: TierAdvanced, Kind: "list"},
 	{Name: "hooks", Label: "Lifecycle hooks", Group: "Tools", Tier: TierAdvanced, Kind: "list"},
 	{Name: "skill_dirs", Label: "Skill directories", Group: "Storage", Tier: TierAdvanced, Kind: "list"},
+	{Name: "episodic_max_entries", Label: "History size", Group: "Storage", Tier: TierAdvanced, Kind: "int",
+		Help: "How many past runs to keep. Evicted by disuse, not age."},
 	{Name: "health_cpu_percent", Label: "Background CPU share", Group: "Autonomy", Tier: TierAdvanced, Kind: "int"},
 	{Name: "local_model_role", Label: "Local model role", Group: "Models", Tier: TierAdvanced, Kind: "string"},
 	{Name: "enable_local_offloading", Label: "Offload to local", Group: "Models", Tier: TierAdvanced, Kind: "bool"},

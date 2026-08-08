@@ -1176,6 +1176,57 @@ to twenty skills written against darkcode's own tool names beat several hundred
 imported ones. The fix here makes *any* source viable; it does not make that
 particular source appropriate.
 
+### 6.1.8 Memory forgets by disuse, not by age
+
+The last of the memory gaps the landscape comparison named. `EpisodicPrune`
+already existed and drops everything past a date cutoff — the intuitive rule,
+and it deletes exactly the wrong entries. The fix for a bug that recurs every
+few months is retrieved constantly and is older than almost everything; last
+Tuesday's run that nobody has needed since is young. An age cutoff keeps the
+second and deletes the first.
+
+What separates them is use, and use was not being recorded at all.
+
+**The curve.** Retention follows `exp(-t/S)`: strength falls with time since the
+entry was last *touched*, over a stability that grows with every retrieval. One
+retrieval roughly doubles how long an entry survives disuse. The model is small
+on purpose — a forgetting curve nobody can predict is one nobody leaves
+switched on.
+
+**Retrieval feeds it.** `HybridRetriever.Recall` credits the entries it
+returned, so the curve is fed by retrieval itself rather than by every caller
+remembering to report. It rides an optional `useRecorder` interface rather than
+widening `core.MemoryStore`, because only one implementation can act on it and
+every test double would otherwise have to implement a bookkeeping call it does
+not care about.
+
+**Three hard floors**, so this can only remove entries that are simultaneously
+over budget, old, *and* unused: nothing below the cap is touched, nothing inside
+a 7-day grace period is touched however weak, and the newest 50 entries survive
+regardless of configuration. `episodic_max_entries` sets the target;
+consolidation runs at the session boundary, which is where short-term memory is
+already cleared and nothing is in flight.
+
+**Episodic only.** Semantic holds durable facts and imported procedure, where
+"nobody asked recently" is not evidence of anything — a runbook for an annual
+migration would decay to nothing between uses. Procedural carries its own
+success rate. Extending the curve there is a separate decision with a different
+argument and is not made here.
+
+[RAN] Verified on the real binary with a seeded store: 64 entries, cap 55, one
+entry 400 days old with 25 recent uses and sixty 120-day entries never
+retrieved. Consolidation forgot 9 — all of them from the never-used set — and
+the 400-day-old entry survived. That is the case an age cutoff gets backwards,
+demonstrated end to end.
+
+**A defect introduced and fixed during this work, worth recording because it
+would have been invisible.** `OnNewSession` was written as a setter that
+*replaced* the callback. Consolidation and the `session_start` hook register
+separately, so the second registration silently cancelled the first — and both
+call sites read correctly in isolation. Observers now accumulate, with
+`TestEverySessionObserverRuns` holding it. The singular setter was the bug, not
+the ordering of the two calls.
+
 ---
 
 ## 6.2 Where model debate belongs — decided

@@ -716,6 +716,16 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// directly, which is correct but is what made it thirty-two decisions.
 	a.Kernel.SetRecall(a.Recall)
 
+	// Consolidation at the session boundary: the store is trimmed when a chat
+	// ends, which is the moment there is nothing in flight to disturb and the
+	// same boundary that already clears short-term memory. Registered before
+	// the hooks block so it runs whether or not any hook is configured.
+	a.MemSystem.OnNewSession(func() {
+		if n := a.MemSystem.Consolidate(a.Cfg.EpisodicMaxEntries); n > 0 {
+			fmt.Fprintf(os.Stderr, "Consolidated memory: forgot %d unused entries\n", n)
+		}
+	})
+
 	// Written-down procedure, loaded at startup rather than waiting for
 	// someone to type `/skills import`. The importer has existed all along;
 	// nothing called it, so a fresh install stayed ignorant of every runbook
