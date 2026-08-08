@@ -312,12 +312,16 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemorySto
 		verifier:    verifier,
 		agentBus:    bus,
 		gate:        gate,
-		agenticLoop: loop.New(rtr, reg, emitter, 0), // 0 → loop.DefaultMaxLoops
+		agenticLoop: loop.New(rtr, reg, emitter, 0), // 0 → loop.DefaultMaxLoops; SetModels below
 		classifier:  router.NewTaskClassifier(),
 	}
 	for i := range k.cascadeThresholds {
 		k.cascadeThresholds[i] = cascadeDefaultThreshold
 	}
+	// Share the kernel's model manager with the loop, so both route from one
+	// policy table and one local-preference setting (PreferLocalForAux reaches
+	// the loop through this shared pointer) rather than from two copies.
+	k.agenticLoop.SetModels(models)
 	return k
 }
 

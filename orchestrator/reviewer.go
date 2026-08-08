@@ -29,6 +29,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/plan"
 )
 
@@ -70,16 +71,14 @@ func (k *Kernel) reviewProvenWork(ctx context.Context, goal, output string, g *p
 		return ""
 	}
 
-	client, model, err := k.router.Route(core.ModelTierCritic, 5, "review")
-	if err != nil || client == nil {
-		return ""
-	}
-
 	grounding := k.reviewGrounding(goal)
-	temp := 0.3
-	maxTok := reviewMaxTokens
-	req := &core.CompletionRequest{
-		Model: model,
+	// PurposeReview is the critic tier, degrading to the auxiliary ladder —
+	// which is what this asked for by hand, plus a fallback it did not have:
+	// with no critic registered the review was simply skipped.
+	ans, err := k.models.Complete(ctx, modelport.Ask{
+		Purpose:    modelport.PurposeReview,
+		Complexity: 5,
+		Goal:       "review",
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: reviewerSystemPrompt},
 			{Role: core.RoleUser, Content: fmt.Sprintf(
@@ -89,15 +88,12 @@ func (k *Kernel) reviewProvenWork(ctx context.Context, goal, output string, g *p
 				strutil.Truncate(goal, reviewGoalBudget),
 				strutil.Truncate(output, reviewGoalBudget), grounding)},
 		},
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-
-	resp, err := client.ChatCompletion(ctx, req)
-	if err != nil || len(resp.Choices) == 0 {
+		MaxTokens: reviewMaxTokens,
+	})
+	if err != nil {
 		return "" // advice that could not be fetched is not a failure
 	}
-	notes := strings.TrimSpace(resp.Choices[0].Message.Content)
+	notes := strings.TrimSpace(ans.Text)
 	if notes == "" || isNoSuggestion(notes) {
 		return ""
 	}

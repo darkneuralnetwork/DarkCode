@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/plan"
 )
 
@@ -87,20 +88,19 @@ Fix every problem you find. Output ONLY the corrected FINAL plan as a single JSO
 
 // deepPlan runs the unified planning phase and returns a validated graph.
 func (k *Kernel) deepPlan(ctx context.Context, goal string, depth PlanDepth) (*plan.Graph, error) {
-	client, modelName, err := k.router.PlannerRoute()
-	if err != nil {
-		return nil, err
+	if k.models == nil {
+		return nil, fmt.Errorf("no model manager available for planning")
 	}
 	if k.emitter != nil {
 		k.emitter.EmitTaskUpdate("planner", "thinking",
-			fmt.Sprintf("Planning (%s) on primary model %s", depth, modelName))
+			fmt.Sprintf("Planning (%s)", depth))
 	}
 
-	out, err := k.planCall(ctx, client, modelName, planSystemPrompt(depth), "Goal:\n"+goal, depth)
+	out, modelName, err := k.planCall(ctx, planSystemPrompt(depth), "Goal:\n"+goal, depth)
 	if err != nil {
 		return nil, err
 	}
-	g, err := k.parseOrRepair(ctx, client, modelName, out, goal, depth)
+	g, err := k.parseOrRepair(ctx, out, goal, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +111,9 @@ func (k *Kernel) deepPlan(ctx context.Context, goal string, depth PlanDepth) (*p
 			k.emitter.EmitTaskUpdate("planner", "reviewing", "Self-reviewing draft plan")
 		}
 		reviewIn := "Goal:\n" + goal + "\n\nDraft plan:\n" + g.TasksJSON()
-		reviewOut, rerr := k.planCall(ctx, client, modelName, planReviewPrompt, reviewIn, depth)
+		reviewOut, _, rerr := k.planCall(ctx, planReviewPrompt, reviewIn, depth)
 		if rerr == nil {
-			if reviewed, perr := k.parseOrRepair(ctx, client, modelName, reviewOut, goal, depth); perr == nil {
+			if reviewed, perr := k.parseOrRepair(ctx, reviewOut, goal, depth); perr == nil {
 				g = reviewed
 			}
 			// A failed review parse keeps the validated draft — the review is
@@ -135,9 +135,8 @@ func (k *Kernel) deepPlan(ctx context.Context, goal string, depth PlanDepth) (*p
 // their status/output, so an approved-and-partially-run plan can be revised
 // without redoing finished work.
 func (k *Kernel) revisePlan(ctx context.Context, old *plan.Graph, feedback string) (*plan.Graph, error) {
-	client, modelName, err := k.router.PlannerRoute()
-	if err != nil {
-		return nil, err
+	if k.models == nil {
+		return nil, fmt.Errorf("no model manager available for planning")
 	}
 	if k.emitter != nil {
 		k.emitter.EmitTaskUpdate("planner", "revising", "Revising plan from user feedback")
@@ -145,11 +144,11 @@ func (k *Kernel) revisePlan(ctx context.Context, old *plan.Graph, feedback strin
 	sys := planSystemPrompt(PlanDepthLight) +
 		"\n\nYou are REVISING an existing plan based on user feedback. Keep the id of every task you don't change. Apply the feedback faithfully — add, remove, merge, or modify tasks as it requires."
 	user := "Goal:\n" + old.Goal + "\n\nCurrent plan:\n" + old.TasksJSON() + "\n\nUser feedback:\n" + feedback
-	out, err := k.planCall(ctx, client, modelName, sys, user, PlanDepthLight)
+	out, modelName, err := k.planCall(ctx, sys, user, PlanDepthLight)
 	if err != nil {
 		return nil, err
 	}
-	g, err := k.parseOrRepair(ctx, client, modelName, out, old.Goal, PlanDepthLight)
+	g, err := k.parseOrRepair(ctx, out, old.Goal, PlanDepthLight)
 	if err != nil {
 		return nil, err
 	}
@@ -167,34 +166,30 @@ func (k *Kernel) revisePlan(ctx context.Context, old *plan.Graph, feedback strin
 }
 
 // planCall is one primary-model completion for the planning phase.
-func (k *Kernel) planCall(ctx context.Context, client core.LLMClient, modelName, system, user string, depth PlanDepth) (string, error) {
-	temp := 0.2
+func (k *Kernel) planCall(ctx context.Context, system, user string, depth PlanDepth) (string, string, error) {
 	maxTok := 3000
 	if depth == PlanDepthDeep {
 		maxTok = 6000 // room for the <analysis> scaffold + JSON
 	}
-	resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Model: modelName,
+	ans, err := k.models.Complete(ctx, modelport.Ask{
+		Purpose: modelport.PurposePlan,
+		Goal:    "planning",
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: system},
 			{Role: core.RoleUser, Content: user},
 		},
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
+		MaxTokens: maxTok,
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("planner returned no choices")
-	}
-	return resp.Choices[0].Message.Content, nil
+	return ans.Text, ans.Model, nil
 }
 
 // parseOrRepair parses planner output into a validated graph, giving the
 // model ONE repair round-trip when the output is unparsable or structurally
 // invalid (cycle, unknown dep, empty goals).
-func (k *Kernel) parseOrRepair(ctx context.Context, client core.LLMClient, modelName, out, goal string, depth PlanDepth) (*plan.Graph, error) {
+func (k *Kernel) parseOrRepair(ctx context.Context, out, goal string, depth PlanDepth) (*plan.Graph, error) {
 	g, perr := plan.Parse(out, goal)
 	if perr == nil {
 		if verr := g.Validate(); verr == nil {
@@ -208,7 +203,7 @@ func (k *Kernel) parseOrRepair(ctx context.Context, client core.LLMClient, model
 	}
 	repairSys := "Your previous plan output was invalid: " + perr.Error() +
 		"\nRe-emit the corrected plan as ONLY a single JSON object in this format, no prose:\n" + planWireFormat
-	fixed, err := k.planCall(ctx, client, modelName, repairSys, "Goal:\n"+goal+"\n\nYour previous output:\n"+out, depth)
+	fixed, _, err := k.planCall(ctx, repairSys, "Goal:\n"+goal+"\n\nYour previous output:\n"+out, depth)
 	if err != nil {
 		return nil, fmt.Errorf("plan repair call failed after invalid plan (%v): %w", perr, err)
 	}

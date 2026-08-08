@@ -21,7 +21,6 @@ package loop
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,7 +28,6 @@ import (
 	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/agents"
-	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/modelport"
@@ -95,6 +93,11 @@ type ReActLoop struct {
 	registry core.ToolRegistry
 	emitter  *ui.EventEmitter
 	maxLoops int
+	// models is the gateway to a model. It owns tier, ceiling, temperature,
+	// fitting the prompt to the window of whatever it chose, and recovering
+	// from an overflow — all of which this file used to do itself, and one of
+	// which (the overflow ladder) it kept a second copy of.
+	models *modelport.Manager
 	// budget, when set, is consulted before each acting turn and stops the run
 	// when it reports the spend cap reached.
 	//
@@ -111,11 +114,22 @@ func New(rtr core.ModelRouter, reg core.ToolRegistry, emitter *ui.EventEmitter, 
 	if maxLoops <= 0 {
 		maxLoops = DefaultMaxLoops
 	}
+	m, _ := modelport.New(rtr)
 	return &ReActLoop{
 		router:   rtr,
 		registry: reg,
 		emitter:  emitter,
 		maxLoops: maxLoops,
+		models:   m,
+	}
+}
+
+// SetModels installs the caller's model manager, so the loop shares one policy
+// table and one local-preference setting with the rest of the system rather
+// than routing from a second, unconfigured copy.
+func (l *ReActLoop) SetModels(m *modelport.Manager) {
+	if m != nil {
+		l.models = m
 	}
 }
 
@@ -209,13 +223,10 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	if l.router == nil {
 		return nil, fmt.Errorf("agentic loop: router not configured")
 	}
-	// Route to the coding tier (the capable general-purpose tier). Complexity
-	// is assessed from the goal so the router can still pick the right model.
+	// Complexity is assessed from the goal so routing can still pick the right
+	// model within the purpose's tier. The route itself happens per call now,
+	// inside the model manager.
 	complexity := router.AssessComplexity(goal)
-	client, modelName, err := l.router.Route(core.ModelTierCoding, complexity, goal)
-	if err != nil {
-		return nil, fmt.Errorf("agentic loop: model routing failed: %w", err)
-	}
 
 	// Assemble the initial conversation: a ReAct system prompt + prior
 	// history (if any, continuity) + the goal.
@@ -225,7 +236,7 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 
 	if l.emitter != nil {
 		l.emitter.EmitTaskUpdate("agentic-loop", "started",
-			fmt.Sprintf("ReAct loop beginning (max %d iterations, model %s)", l.maxLoops, modelName))
+			fmt.Sprintf("ReAct loop beginning (max %d iterations)", l.maxLoops))
 	}
 
 	// Constructed once per Run() — not per iteration — since it's re-entered
@@ -249,9 +260,7 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	// after one more repeat we break early so a stuck loop can't burn the
 	// entire iteration budget on the same error.
 	stuckFails := make(map[string]int)
-	// refitDone guards the one-shot context-overflow recovery so a persistent
-	// overflow can't spin the loop forever (single hard refit, then surface).
-	refitDone := false
+	// (the one-shot context-overflow recovery moved into the model manager)
 	start := time.Now()
 
 	// Two separate budgets, because they pay for different things and used to
@@ -314,7 +323,6 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		}
 
 		// ── 1. THINK (Orient/Decide) ──────────────────────────────────────
-		temp := 0.7
 		// Chat (read-only) requests offer only read-only tools so the model is
 		// never given a write/execute tool to call.
 		var schemas []llm.ToolSchema
@@ -329,56 +337,36 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		// is unlocked for the rest of the run (see below), which keeps a wrong
 		// guess to one turn rather than a failed task.
 		schemas = tools.RelevantSchemas(goal, schemas, unlocked)
-		// Hard context-fit guarantee: messages grow with each iteration's tool
-		// output, so fit to the RECEIVING client's effective window right
-		// before dispatch (Part 3 contract). Prevents the "context window
-		// exceeded" fatal on long local-model loops.
-		messages = compression.FitClient(messages, client, 0, len(schemas))
-		// Bound the reply. The loop's main call ran every iteration with no
-		// ceiling, so the limit was whatever the provider defaults to. The
-		// number comes from the one policy table rather than a constant here.
-		_, maxTok, _ := modelport.PolicyFor(modelport.PurposeExecute)
-		req := &core.CompletionRequest{
-			Model:       modelName,
-			Messages:    messages,
-			Tools:       schemas,
-			Temperature: &temp,
-			MaxTokens:   &maxTok,
-		}
-
-		resp, err := client.ChatCompletionStream(ctx, req, &core.StreamCallbacks{
-			OnContent: func(chunk string) {
-				if l.emitter != nil {
-					l.emitter.Emit(core.EventTaskUpdate, chunk,
-						ui.WithTaskID("agentic-loop"), ui.WithStatus("streaming"))
-				}
-			},
-			OnToolCall: func(tc core.ToolCall) {
-				if l.emitter != nil {
-					l.emitter.EmitToolExecution(tc.Function.Name, "requested", tc.Function.Arguments)
-				}
+		// Tier, ceiling, temperature, fitting the prompt to the window of the
+		// model actually chosen, and recovering from an overflow the estimate
+		// missed all belong to the manager now. This file used to do each of
+		// them itself, and kept a second copy of the overflow ladder besides —
+		// two recovery mechanisms for one failure is worse than one.
+		ans, err := l.models.Complete(ctx, modelport.Ask{
+			Purpose:    modelport.PurposeExecute,
+			Complexity: complexity,
+			Goal:       goal,
+			Messages:   messages,
+			Tools:      schemas,
+			Stream: &core.StreamCallbacks{
+				OnContent: func(chunk string) {
+					if l.emitter != nil {
+						l.emitter.Emit(core.EventTaskUpdate, chunk,
+							ui.WithTaskID("agentic-loop"), ui.WithStatus("streaming"))
+					}
+				},
+				OnToolCall: func(tc core.ToolCall) {
+					if l.emitter != nil {
+						l.emitter.EmitToolExecution(tc.Function.Name, "requested", tc.Function.Arguments)
+					}
+				},
 			},
 		})
 		if err != nil {
-			// Recovery ladder: a context overflow past the FitClient estimate
-			// (tokenizer drift) shrinks hard to 75% of the window and retries
-			// the same iteration once, instead of aborting the whole task.
-			if errors.Is(err, core.ErrContextTooLong) && !refitDone {
-				refitDone = true
-				window := client.ModelInfo().Context
-				if window <= 0 {
-					window = compression.DefaultContextWindow
-				}
-				messages = compression.FitToWindow(messages, window*3/4, 0)
-				continue // a refit is not a work turn; iteration is unchanged
-			}
 			return nil, fmt.Errorf("agentic loop iteration %d: %w", iteration, err)
 		}
-		if len(resp.Choices) == 0 {
-			return nil, fmt.Errorf("agentic loop iteration %d: empty response", iteration)
-		}
 
-		msg := resp.Choices[0].Message
+		msg := ans.Raw.Choices[0].Message
 		messages = append(messages, core.Message{
 			Role:      core.RoleAssistant,
 			Content:   msg.Content,
@@ -472,7 +460,7 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 			}
 
 			if !completionVerified && corrections < maxCorrections {
-				done, reason, ran := l.evaluateGoalCompletion(ctx, client, modelName, goal, final)
+				done, reason, ran := l.evaluateGoalCompletion(ctx, goal, final)
 				switch {
 				case !ran && evalFailures < maxEvalFailures:
 					// The check could not run. Failing OPEN here is what made
@@ -674,34 +662,32 @@ const (
 // Unparseable CONTENT still means done: a model that answered but ignored the
 // format is not evidence the goal is unmet, and guessing at free-form prose is
 // how this gets worse.
-func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, client core.LLMClient, model, goal, final string) (done bool, reason string, ran bool) {
+func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, goal, final string) (done bool, reason string, ran bool) {
+	// PurposeExecute, deliberately, NOT the auxiliary ladder.
+	//
 	// This check is a format-following task, not a reasoning task: the answer
 	// is one of two fixed strings. A tiny local model routinely returns prose
 	// instead, which parses as neither marker and therefore as "done" — so
 	// routing here to save a few cents quietly re-created the fail-open
-	// behaviour this function was rewritten to remove. Use the model that is
-	// already doing the work.
+	// behaviour this function was rewritten to remove. Classify would put it on
+	// exactly those local rungs. Use the model that is already doing the work.
 	temp := 0.0
-	maxTok := 60
-	req := &core.CompletionRequest{
-		Model: model,
+	ans, err := l.models.Complete(ctx, modelport.Ask{
+		Purpose: modelport.PurposeExecute,
+		Goal:    goal,
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: "You are a strict completion checker. Respond with EXACTLY one line: \"" +
 				selfEvalDoneMarker + "\" if the answer below fully and completely satisfies the goal, or \"" +
 				selfEvalContinuePrefix + ": <one short reason>\" if it does not. No other text, no explanation."},
 			{Role: core.RoleUser, Content: fmt.Sprintf("GOAL: %s\n\nANSWER:\n%s\n\nDoes the answer fully satisfy the goal?", goal, final)},
 		},
+		MaxTokens:   60,
 		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-	resp, err := client.ChatCompletion(ctx, req)
+	})
 	if err != nil {
 		return false, err.Error(), false
 	}
-	if len(resp.Choices) == 0 {
-		return false, "the completion check returned an empty response", false
-	}
-	line := strings.TrimSpace(resp.Choices[0].Message.Content)
+	line := strings.TrimSpace(ans.Text)
 	if strings.HasPrefix(line, selfEvalContinuePrefix) {
 		reason = strings.TrimSpace(strings.TrimPrefix(line, selfEvalContinuePrefix))
 		reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))

@@ -35,6 +35,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
+	"github.com/darkcode/modelport"
 )
 
 // debateExcerptBudget bounds how much of each position is quoted into the
@@ -81,8 +82,7 @@ func (k *Kernel) resolveByDebate(ctx context.Context, goal string, consensus *co
 	}
 	a, b := positions[0], positions[1]
 
-	client, model, err := k.router.Route(core.ModelTierReasoning, 8, goal)
-	if err != nil || client == nil {
+	if k.models == nil {
 		return out
 	}
 
@@ -93,8 +93,8 @@ func (k *Kernel) resolveByDebate(ctx context.Context, goal string, consensus *co
 	}
 
 	// Each side reads the other, anchored on the original question.
-	critA := k.critique(ctx, client, model, goal, a, b)
-	critB := k.critique(ctx, client, model, goal, b, a)
+	critA := k.critique(ctx, goal, a, b)
+	critB := k.critique(ctx, goal, b, a)
 
 	// Record the exchange on the bus. It has carried MsgCritiqueRequest since
 	// it was written and never sent one; this is the first traffic on it, and
@@ -107,7 +107,7 @@ func (k *Kernel) resolveByDebate(ctx context.Context, goal string, consensus *co
 		a.Model, b.Model, critA, b.Model, a.Model, critB)
 	out.Transcript = t.String()
 
-	resolved := k.settleDebate(ctx, client, model, goal, a, b, critA, critB)
+	resolved := k.settleDebate(ctx, goal, a, b, critA, critB)
 	if strings.TrimSpace(resolved) == "" {
 		return out // the exchange happened but produced nothing usable
 	}
@@ -122,11 +122,11 @@ func (k *Kernel) resolveByDebate(ctx context.Context, goal string, consensus *co
 // critique asks one position to find the specific flaw in the other, with the
 // original question re-pinned so the exchange cannot drift into a topic neither
 // model was asked about.
-func (k *Kernel) critique(ctx context.Context, client core.LLMClient, model, goal string, from, at core.ModelContribution) string {
-	temp := 0.2
-	maxTok := 350
-	req := &core.CompletionRequest{
-		Model: model,
+func (k *Kernel) critique(ctx context.Context, goal string, from, at core.ModelContribution) string {
+	ans, err := k.models.Complete(ctx, modelport.Ask{
+		Purpose:    modelport.PurposeAdjudicate,
+		Complexity: 8,
+		Goal:       goal,
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: "You are reviewing a disagreement between two answers to one question. " +
 				"Name the specific point where the other answer is wrong or unsupported, and say what would settle it. " +
@@ -137,25 +137,23 @@ func (k *Kernel) critique(ctx context.Context, client core.LLMClient, model, goa
 				strutil.Truncate(from.Output, debateExcerptBudget),
 				strutil.Truncate(at.Output, debateExcerptBudget))},
 		},
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-	resp, err := client.ChatCompletion(ctx, req)
-	if err != nil || len(resp.Choices) == 0 {
+		MaxTokens: 350,
+	})
+	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(resp.Choices[0].Message.Content)
+	return strings.TrimSpace(ans.Text)
 }
 
 // settleDebate asks for a final answer given both positions and both critiques.
 // This is the judge the drift research calls for: the exchange ends here rather
 // than looping.
-func (k *Kernel) settleDebate(ctx context.Context, client core.LLMClient, model, goal string,
+func (k *Kernel) settleDebate(ctx context.Context, goal string,
 	a, b core.ModelContribution, critA, critB string) string {
-	temp := 0.3
-	maxTok := 1200
-	req := &core.CompletionRequest{
-		Model: model,
+	ans, err := k.models.Complete(ctx, modelport.Ask{
+		Purpose:    modelport.PurposeAdjudicate,
+		Complexity: 8,
+		Goal:       goal,
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: "Two answers disagreed and have now critiqued each other. " +
 				"Give the single best answer to the original question. Prefer the position whose critique went " +
@@ -167,14 +165,12 @@ func (k *Kernel) settleDebate(ctx context.Context, client core.LLMClient, model,
 				goal, a.Model, strutil.Truncate(a.Output, debateExcerptBudget),
 				b.Model, strutil.Truncate(b.Output, debateExcerptBudget), critA, critB)},
 		},
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-	resp, err := client.ChatCompletion(ctx, req)
-	if err != nil || len(resp.Choices) == 0 {
+		MaxTokens: 1200,
+	})
+	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(resp.Choices[0].Message.Content)
+	return strings.TrimSpace(ans.Text)
 }
 
 // publishCritique records one side of the exchange on the agent bus.
