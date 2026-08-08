@@ -38,6 +38,7 @@ coverage.out
 # would publish them — and some carry a vendor name in the filename, which this
 # project deliberately keeps out of its history.
 DARKCODE_VS_HERMES_AGENT.md
+AGENT_LANDSCAPE_*.md
 THESIS.md
 HANDOFF_PROMPT.md
 NEXT_SESSION_PROMPT.md
@@ -61,3 +62,4 @@ multi_debate.txt
 # Stray, unreferenced asset dir (the embedded web assets live in server/web/).
 # Left untracked and unignored, so a blanket add would sweep it in.
 /ui/html/
+.gstack/
