@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/darkcode/candidate"
@@ -715,6 +716,12 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// directly, which is correct but is what made it thirty-two decisions.
 	a.Kernel.SetRecall(a.Recall)
 
+	// Written-down procedure, loaded at startup rather than waiting for
+	// someone to type `/skills import`. The importer has existed all along;
+	// nothing called it, so a fresh install stayed ignorant of every runbook
+	// on the machine until a user knew the command existed.
+	a.importSkills()
+
 	// Lifecycle hooks: built once here and handed to each owner of a point.
 	// The registry owns the tool points because it owns tool execution; the
 	// kernel owns the compaction boundary; uiport carries turn_end for every
@@ -899,4 +906,61 @@ func hookConfig(cfg map[string][]config.HookConfig) map[string][]hooks.Hook {
 		}
 	}
 	return out
+}
+
+// defaultSkillDirs are searched when the config names none: one per-user, one
+// per-workspace. Neither has to exist — a missing directory is the normal case
+// and is silently skipped, because "you have no runbooks" is not a warning.
+func defaultSkillDirs() []string {
+	var dirs []string
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".darkcode", "skills"))
+	}
+	return append(dirs, defaultDarkcodeDir("skills"))
+}
+
+// importSkills loads every configured skill directory into procedural memory.
+//
+// Failures are reported and never fatal. A malformed runbook should cost that
+// runbook, not the session — the same rule the directory walk already applies
+// to one unparseable file among twenty.
+func (a *AppRunner) importSkills() {
+	if a.MemSystem == nil {
+		return
+	}
+	dirs := a.Cfg.SkillDirs
+	if len(dirs) == 0 {
+		dirs = defaultSkillDirs()
+	}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		dir = expandHome(dir)
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		found, err := a.MemSystem.ImportSkills(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skills in %s: %v\n", dir, err)
+			continue
+		}
+		if n := memory.CountImported(found); n > 0 {
+			fmt.Fprintf(os.Stderr, "Loaded %d skill(s) from %s\n", n, dir)
+		}
+	}
+}
+
+// expandHome resolves a leading ~ so a config may write ~/.darkcode/skills.
+func expandHome(p string) string {
+	if !strings.HasPrefix(p, "~") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~"))
 }

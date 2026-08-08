@@ -1122,6 +1122,60 @@ directly. `arch-check` caught the direct writes (memory-writes 24 → 27) and th
 boundary was honoured rather than widened — which is also more realistic, since
 the benchmark now populates memory by the same route the agent uses.
 
+### 6.1.7 The skill importer produced boilerplate, and nothing could reach it
+
+Two defects in the same feature, found by the landscape comparison and fixed
+together because neither is worth fixing alone.
+
+**The importer stored the collection, not the document.** [RAN] Fed the real
+gstack tree, `ship` and `review` — two skills that do entirely different jobs —
+produced **byte-identical twelve-step procedures**, none of which came from
+either document's subject. Published collections open every file with a long
+identical preamble, and `maxImportedSteps = 12` was exhausted before the file's
+own content was reached.
+
+The obvious fix — prefer numbered lists over headings — was measured and
+rejected: [RAN] the first numbered items in both files are *also* shared
+preamble, byte-identical at lines 312–316. It would have swapped one boilerplate
+for another.
+
+What generalises is repetition, not a word list. `dropSharedBoilerplate` runs
+after the directory walk, when every file has been parsed and their steps can be
+compared: a step appearing in at least half the collection is the collection's
+furniture and is dropped; a step unique to one file is kept even when it looks
+like boilerplate, because being unique is the evidence that it is that file's
+procedure. Fewer than three files is too small a sample to distinguish a shared
+preamble from a coincidence, so the pass does nothing there.
+
+Parsing therefore keeps a wider candidate budget (`maxImportedSteps * 6`) and
+the cap is applied *after* the comparison — the ordering is the whole fix, since
+capping first is what discarded the real procedure. `ParseSkillFile` still caps
+at 12 for the single-file case, which has no collection to compare against.
+
+[RAN] Against 54 real gstack skills: every one now carries its own procedure,
+zero dropped. `review` opens with "Check branch / Scope Drift Detection / Plan
+File Discovery"; `ship` with "Brain Context Load / Pre-flight / Review Readiness
+Dashboard". The guard was shown failing against the pass stubbed out, then
+restored byte-identically.
+
+**Nothing called the importer.** It was reachable only from `/skills import
+<dir>`, so a fresh install stayed ignorant of every runbook on the machine until
+a user knew the command existed. `skill_dirs` now defaults to
+`~/.darkcode/skills` and `./.darkcode/skills`, imported at startup; a missing
+directory is skipped silently, because "you have no runbooks" is not a warning.
+
+[RAN] Verified with the real binary: a skill dropped in the default directory
+was loaded at startup with no command typed, stored with `origin: imported` and
+`success_rate: 0.5` — authored guidance, never laundered into measured
+experience — with all four of the document's own steps intact.
+
+**Still not recommended: bulk-importing a published collection.** The importer
+now produces usable steps, but the steps still instruct a harness darkcode does
+not have — "AskUserQuestion Format", `mcp__*` tool names, plan-mode rules. Ten
+to twenty skills written against darkcode's own tool names beat several hundred
+imported ones. The fix here makes *any* source viable; it does not make that
+particular source appropriate.
+
 ---
 
 ## 6.2 Where model debate belongs — decided

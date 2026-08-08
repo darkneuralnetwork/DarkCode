@@ -189,6 +189,18 @@ type Config struct {
 	// --- Memory ---
 	MemoryDir string `json:"memory_dir,omitempty"`
 
+	// SkillDirs are searched at startup for written-down procedure (SKILL.md
+	// files), which is loaded into procedural memory. The importer has always
+	// existed; without this it was reachable only from `/skills import <dir>`,
+	// so a fresh install stayed ignorant until someone typed the command.
+	//
+	// Imported skills are marked as authored guidance rather than measured
+	// experience, and a skill this machine actually learned is never
+	// overwritten by one somebody wrote down. Empty means the defaults —
+	// ~/.darkcode/skills and ./.darkcode/skills — which are created on demand
+	// and cost nothing when absent.
+	SkillDirs []string `json:"skill_dirs,omitempty"`
+
 	// --- Projects ---
 	// Long-lived project context (per-project folders on disk).
 	ProjectsDir string `json:"projects_dir,omitempty"`

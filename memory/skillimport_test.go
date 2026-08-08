@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,5 +358,143 @@ func TestImportIsDurableImmediately(t *testing.T) {
 	}
 	if !strings.Contains(string(blob), "systematic-debugging") {
 		t.Errorf("the imported skill is not in the persisted file")
+	}
+}
+
+// --- shared boilerplate across a collection ---
+
+// boilerplateSkill builds a file shaped like a published collection's: a long
+// preamble every sibling repeats, then the two headings that are actually about
+// this document's subject. The preamble is longer than maxImportedSteps on
+// purpose — that is what made the real defect invisible, because the file's own
+// procedure was never reached before the cap.
+func boilerplateSkill(subject string, own ...string) string {
+	var b strings.Builder
+	b.WriteString("---\nname: " + subject + "\ndescription: Use when doing " + subject + ".\n---\n\n")
+	for i := 1; i <= 14; i++ {
+		fmt.Fprintf(&b, "## Preamble step %d\nshared scaffolding\n\n", i)
+	}
+	for _, o := range own {
+		b.WriteString("## " + o + "\nthe part that is actually about " + subject + "\n\n")
+	}
+	return b.String()
+}
+
+// TestSharedPreambleIsNotStoredAsProcedure.
+//
+// The defect: two skills from one published collection that do entirely
+// different jobs produced byte-identical twelve-step procedures, none of which
+// came from either document's subject. Near-duplicate memories then compete
+// with each other and with genuinely learned skills on every recall, so this is
+// worse than importing nothing.
+func TestSharedPreambleIsNotStoredAsProcedure(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "ship", boilerplateSkill("ship", "Bump the version", "Open the pull request"))
+	writeSkill(t, root, "review", boilerplateSkill("review", "Read the diff", "Post the findings"))
+	writeSkill(t, root, "deploy", boilerplateSkill("deploy", "Push the image", "Watch the canary"))
+	writeSkill(t, root, "test", boilerplateSkill("test", "Run the suite", "Report failures"))
+
+	found, err := ImportSkillDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string][]string{}
+	for _, f := range found {
+		if f.Skill == nil {
+			t.Fatalf("%s was dropped entirely: %s", f.Source, f.Skipped)
+		}
+		for _, s := range f.Skill.Steps {
+			byName[f.Skill.Name] = append(byName[f.Skill.Name], s.Action)
+		}
+	}
+	if len(byName) != 4 {
+		t.Fatalf("imported %d skills, want 4", len(byName))
+	}
+
+	for name, steps := range byName {
+		for _, s := range steps {
+			if strings.HasPrefix(s, "Preamble step") {
+				t.Errorf("%s stored %q — shared scaffolding became a procedure", name, s)
+			}
+		}
+	}
+
+	// The subject survived.
+	want := map[string][]string{
+		"ship":   {"Bump the version", "Open the pull request"},
+		"review": {"Read the diff", "Post the findings"},
+	}
+	for name, expect := range want {
+		got := strings.Join(byName[name], " | ")
+		for _, e := range expect {
+			if !strings.Contains(got, e) {
+				t.Errorf("%s lost its own step %q; kept %q", name, e, got)
+			}
+		}
+	}
+
+	// And the two no longer describe the same thing.
+	if strings.Join(byName["ship"], "|") == strings.Join(byName["review"], "|") {
+		t.Error("ship and review still produced identical procedures")
+	}
+}
+
+// TestAUniqueStepSurvivesEvenIfItLooksLikeBoilerplate. Being unique is the
+// evidence that a step belongs to its file, so rarity beats appearance.
+func TestAUniqueStepSurvivesEvenIfItLooksLikeBoilerplate(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "a", boilerplateSkill("a", "Preamble step 99"))
+	writeSkill(t, root, "b", boilerplateSkill("b", "Something else"))
+	writeSkill(t, root, "c", boilerplateSkill("c", "Another thing"))
+
+	found, err := ImportSkillDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range found {
+		if f.Skill == nil || f.Skill.Name != "a" {
+			continue
+		}
+		for _, s := range f.Skill.Steps {
+			if s.Action == "Preamble step 99" {
+				return
+			}
+		}
+		t.Error("a step unique to one file was dropped for looking like boilerplate")
+	}
+}
+
+// TestTwoFilesAreTooSmallASample — with two documents, a step in both is as
+// likely to be a coincidence worth keeping as it is to be furniture.
+func TestTwoFilesAreTooSmallASample(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "a", boilerplateSkill("a", "Own step A"))
+	writeSkill(t, root, "b", boilerplateSkill("b", "Own step B"))
+
+	found, err := ImportSkillDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range found {
+		if f.Skill == nil {
+			t.Fatalf("%s was dropped: %s", f.Source, f.Skipped)
+		}
+		if len(f.Skill.Steps) > maxImportedSteps {
+			t.Errorf("%s kept %d steps, above the cap of %d", f.Skill.Name, len(f.Skill.Steps), maxImportedSteps)
+		}
+	}
+}
+
+// TestSingleFileImportIsUnchanged — ParseSkillFile has no collection to compare
+// against and must still cap at maxImportedSteps rather than the wider
+// candidate budget the directory walk uses.
+func TestSingleFileImportIsUnchanged(t *testing.T) {
+	sk, err := ParseSkillFile("x/SKILL.md", []byte(boilerplateSkill("x", "Own step")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sk.Steps) != maxImportedSteps {
+		t.Errorf("single-file import kept %d steps, want the cap of %d", len(sk.Steps), maxImportedSteps)
 	}
 }
