@@ -30,6 +30,9 @@ async function init() {
   // live events begin arriving ASAP. Also kick off the file-tree bootstrap
   // in parallel (only needs the DOM element).
   connectSSE();
+  // Restore the workspace pane's hidden state before the tree loads, so a
+  // hidden pane never flashes into view on every reload.
+  try { initWorkspaceToggle(); } catch (e) { console.error("workspace toggle:", e); }
   if ($("#fe-tree")) { loadFileTree(); startFileTreePoll(); }
 
   // Parallel hydration: fire ALL data fetches concurrently instead of the

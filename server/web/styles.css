@@ -2425,3 +2425,59 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 @media (max-width: 640px) {
   .cfg-surface-row { grid-template-columns: 1fr; gap: 2px; }
 }
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   Nexus: quieter chrome.
+   Same palette throughout — these rules only reduce weight and motion, they
+   introduce no new colours. The page used to open on a pulsing icon, three
+   marketing pills and a heading; a chat window should open on an invitation.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  color: var(--text-mute);
+}
+.chat-empty-icon {
+  font-size: 30px;
+  color: var(--accent-3);
+  opacity: 0.75;
+  animation: none;            /* the pulse was the loudest thing on an idle page */
+}
+.chat-empty p {
+  font-size: 15px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+/* The composer is the one control that is always in use, so it gets the
+   focus ring and nothing else does. */
+.chat-input {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: border-color 120ms ease;
+}
+.chat-input:focus-within {
+  border-color: var(--accent-3);
+}
+
+/* Toolbar buttons recede until hovered. Six equally bright icons above a
+   conversation compete with the conversation. */
+.chat-toolbar .ct-btn {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+.chat-toolbar .ct-btn:hover,
+.chat-toolbar .ct-btn.active,
+.chat-toolbar .ct-btn:focus-visible {
+  opacity: 1;
+}
+
+/* A hidden workspace must actually take no space: [hidden] loses to the
+   pane's own display:flex without this. */
+#workspace-pane[hidden] { display: none !important; }

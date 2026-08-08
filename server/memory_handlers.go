@@ -20,13 +20,45 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 	// where nobody would look for them. Two further keys held a sentence
 	// explaining they were unimplemented, which reads to any consumer as a tier
 	// containing one string.
+	//
+	// Paged, like the per-tier endpoints beside it. This one served every entry
+	// of every tier and the browser sliced to fifty after downloading the lot —
+	// invisible at a few dozen entries, and megabytes of JSON to paint one
+	// screen once episodic memory reaches its cap. The counts travel alongside,
+	// because a paged response with no total is indistinguishable from a nearly
+	// empty memory.
+	p := parsePage(r)
+	if p.limit == 0 {
+		p.limit = memoryPageDefault
+	}
+	episodic := s.memSystem.EpisodicGet()
+	semantic := s.memSystem.SemanticAll()
+	procedural := s.memSystem.ProceduralAll()
+	stm := s.memSystem.STMGet()
+
+	epPage, _ := paginate(episodic, p)
+	semPage, _ := paginate(semantic, p)
+	procPage, _ := paginate(procedural, p)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"conversation": s.memSystem.STMGet(),        // short-term: this conversation
-		"episodic":     s.memSystem.EpisodicGet(),   // past tasks and their outcomes
-		"semantic":     s.memSystem.SemanticAll(),   // durable facts
-		"procedural":   s.memSystem.ProceduralAll(), // skills, learned and imported
+		"conversation": stm, // this conversation; bounded by compaction already
+		"episodic":     epPage,
+		"semantic":     semPage,
+		"procedural":   procPage,
+		"counts": map[string]int{
+			"conversation": len(stm),
+			"episodic":     len(episodic),
+			"semantic":     len(semantic),
+			"procedural":   len(procedural),
+		},
+		"limit":  p.limit,
+		"offset": p.offset,
 	})
 }
+
+// memoryPageDefault matches what the browser renders. Asking for more is
+// allowed; asking for nothing no longer means "everything".
+const memoryPageDefault = 50
 
 // handleShortTermMemory returns short-term memory (working context).
 func (s *Server) handleShortTermMemory(w http.ResponseWriter, r *http.Request) {

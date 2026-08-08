@@ -1,7 +1,7 @@
 <div class="studio-layout" style="display: flex; width: 100%; height: 100%; overflow: hidden; background: var(--bg-void);">
   
   <!-- LEFT PANE: Workspace -->
-  <div class="studio-pane-left" style="width: 320px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-panel); overflow: hidden;">
+  <div class="studio-pane-left" id="workspace-pane" style="width: 320px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-panel); overflow: hidden;">
     
     <!-- FILE EXPLORER -->
     <div style="flex: 1; display: flex; flex-direction: column; min-height: 100%;">
@@ -22,8 +22,11 @@
   <!-- CENTER PANE: Chat -->
   <div class="studio-pane-center chat-main" style="flex: 1; display: flex; flex-direction: column; background: var(--bg-deep); position: relative;">
     <div class="chat-toolbar" style="padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05);">
-      <div style="font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.9); display: flex; align-items: center; gap: 8px;">
-        <span style="color: var(--accent-3);">✦</span> DarkCode Orchestrator
+      <div style="font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.9); display: flex; align-items: center; gap: 10px;">
+        <button type="button" id="workspace-toggle" class="ct-btn" title="Hide the workspace (Ctrl+B)" aria-expanded="true" aria-controls="workspace-pane">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
+        <span style="color: var(--accent-3);">✦</span> DarkCode
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
         <label class="chat-brain-wrap" title="Which brain answers: Auto (local-first, escalate), Local (offline), or Cloud" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-mute);">
@@ -81,14 +84,8 @@
 
     <div class="chat-messages custom-scrollbar" id="chat-messages" style="flex: 1; padding: 24px;">
       <div class="chat-empty">
-        <div class="chat-empty-icon pulse-anim">⚡</div>
-        <h3>Welcome to DarkCode</h3>
-        <p>Advanced enterprise orchestration. Type a message to command the kernel.</p>
-        <div class="feature-pills">
-          <span class="pill">7-Layer Pipeline</span>
-          <span class="pill">Self-Verification</span>
-          <span class="pill">Live Workspace</span>
-        </div>
+        <div class="chat-empty-icon">✦</div>
+        <p>What are we working on?</p>
       </div>
     </div>
 

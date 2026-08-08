@@ -230,3 +230,49 @@ function fmtDur(ms) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════
+// WORKSPACE PANE
+// ════════════════════════════════════════════════════════════════════════
+//
+// The file tree is useful when you are watching the agent edit, and it is
+// 320px of permanent furniture the rest of the time. Hiding it is the single
+// biggest thing that makes this read as a chat window rather than an IDE.
+//
+// The choice persists: a pane you have to re-hide on every reload is a pane
+// that is effectively not hideable.
+
+const WORKSPACE_KEY = "dc.workspace.hidden";
+
+function setWorkspaceHidden(hidden) {
+  const pane = document.getElementById("workspace-pane");
+  const btn = document.getElementById("workspace-toggle");
+  if (pane) pane.hidden = hidden;
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(!hidden));
+    btn.title = hidden ? "Show the workspace (Ctrl+B)" : "Hide the workspace (Ctrl+B)";
+    btn.classList.toggle("active", !hidden);
+  }
+  try { localStorage.setItem(WORKSPACE_KEY, hidden ? "1" : "0"); } catch (e) { /* private mode */ }
+}
+
+function toggleWorkspace() {
+  const pane = document.getElementById("workspace-pane");
+  setWorkspaceHidden(pane ? !pane.hidden : false);
+}
+
+function initWorkspaceToggle() {
+  let hidden = false;
+  try { hidden = localStorage.getItem(WORKSPACE_KEY) === "1"; } catch (e) { /* private mode */ }
+  setWorkspaceHidden(hidden);
+  document.getElementById("workspace-toggle")?.addEventListener("click", toggleWorkspace);
+  // Ctrl+B is the sidebar toggle everywhere else; honour it here too, but not
+  // while the user is typing a B into the composer.
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "b") return;
+    const t = e.target;
+    if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+    e.preventDefault();
+    toggleWorkspace();
+  });
+}

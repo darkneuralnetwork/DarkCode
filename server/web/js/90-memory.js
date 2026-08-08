@@ -5,10 +5,11 @@ async function loadMemory() {
   try {
     const res = await fetch(API + "/api/memory");
     const data = await res.json();
-    renderMemList("mem-conversation", "mem-conversation-count", data.conversation, "message");
-    renderMemList("mem-episodic", "mem-episodic-count", data.episodic, "episode");
-    renderMemList("mem-semantic", "mem-semantic-count", data.semantic, "fact");
-    renderMemList("mem-procedural", "mem-procedural-count", data.procedural, "skill");
+    const n = data.counts || {};
+    renderMemList("mem-conversation", "mem-conversation-count", data.conversation, "message", n.conversation);
+    renderMemList("mem-episodic", "mem-episodic-count", data.episodic, "episode", n.episodic);
+    renderMemList("mem-semantic", "mem-semantic-count", data.semantic, "fact", n.semantic);
+    renderMemList("mem-procedural", "mem-procedural-count", data.procedural, "skill", n.procedural);
   } catch (err) {
     ["conversation","episodic","semantic","procedural"].forEach((k) => {
       const el = $("#mem-" + k); if (el) el.innerHTML = `<div class="mem-empty">Failed: ${esc(err.message)}</div>`;
@@ -16,14 +17,17 @@ async function loadMemory() {
   }
 }
 
-function renderMemList(bodyId, countId, items, label) {
+function renderMemList(bodyId, countId, items, label, total) {
   const body = $("#" + bodyId);
   const countEl = $("#" + countId);
   if (!body) return;
   const arr = Array.isArray(items) ? items : [];
-  if (countEl) countEl.textContent = arr.length;
+  // The count is the store's total, which the server sends separately: the
+  // array is one page, so counting it would report "50" for a memory of any
+  // size above fifty.
+  if (countEl) countEl.textContent = (total === undefined ? arr.length : total);
   if (!arr.length) { body.innerHTML = `<div class="mem-empty">No ${label}s stored.</div>`; return; }
-  body.innerHTML = arr.slice(0, 50).map((item) => renderMemItem(item, label)).join("");
+  body.innerHTML = arr.map((item) => renderMemItem(item, label)).join("");
 }
 
 // renderMemItem renders a single memory entry in a readable, type-aware way
