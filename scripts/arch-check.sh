@@ -64,6 +64,26 @@ scan() {
 # among five stores; a record with one destination has no placement to decide,
 # and routing it through a fact manager would only obscure that it is telemetry.
 #
+# What memory-writes counts is CALL SHAPE, not gateway coverage, and the two
+# have come apart. Do not read the number as "N writes bypass the gateway" —
+# as of this writing none of the 24 does. They split two ways:
+#
+#   22 graph writes (tools/deterministic/kgsync.go, orchestrator/
+#   memory_recorder.go) go through core.KnowledgeGraphStore handles that ARE
+#   recall.GraphWriter at runtime — orchestrator/kernel.go graph() and the
+#   deterministicKG in app_wireup.go both hand out the manager's writer.
+#
+#   2 store writes (ingest/ingest.go, tools/memory_tool.go) are the fallback
+#   arm of an already-gated write: both call the gateway when one is installed,
+#   and both have one installed in the real binary. Dropping the arm would
+#   discard the write instead of routing it, so it stays.
+#
+# Rewriting the 22 into Remember(Entity{...}) would re-nest that many composite
+# literals for no behavioural change — Remember(Entity) IS kg.AddNode. The
+# runtime property is what matters and it is guarded
+# directly — orchestrator/graph_gateway_test.go proves the kernel hands out the
+# writer, recall's own tests prove the writer routes every method.
+#
 # Boundary definitions. Keep NAME, PATTERN and EXCLUDE aligned by index.
 NAMES=(
   llm-calls

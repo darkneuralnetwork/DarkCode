@@ -850,9 +850,7 @@ dereference found while migrating — the `consensus == nil` branch returned
 ### 6.1.2 What this pass did NOT do, and the bar to revisit
 
 - **§1.2 adjudication extraction, §1.3 the 20 LLM sites, §1.4 the 24 memory
-  writes.** Untouched. §1.3 is the one that unblocks deleting the loop's
-  duplicate overflow ladder, so it is the highest-value of the three.
-  `llm-calls` is still 20 and `memory-writes` still 24.
+  writes.** All three done or decided in the following pass — see §6.1.3.
 - **The §6 UI conformance audit** (map the 19 events to renderers, three-surface
   parity, stale copy, live verification on a non-12345 port). Needs the running
   binary and real telemetry; not started this pass.
@@ -872,6 +870,33 @@ dereference found while migrating — the `consensus == nil` branch returned
   point the write amplification returns on its own merits rather than as a
   symptom of bad data.
 - **Nothing was pushed.**
+
+### 6.1.3 §1.4 — the 24 memory writes, decided rather than churned
+
+`memory-writes` stays at 24, and the number is now documented in
+`scripts/arch-check.sh` as an upper bound rather than a tally. The reason: the
+boundary counts **call shape**, and shape has come apart from gateway coverage.
+
+| what | how many | routed through `recall`? |
+|---|---|---|
+| `tools/deterministic/kgsync.go`, `orchestrator/memory_recorder.go` | 22 | yes — the `core.KnowledgeGraphStore` handle they hold IS `recall.GraphWriter` |
+| `ingest/ingest.go:233`, `tools/memory_tool.go:287` | 2 | yes — these lines are the *fallback arm* of a write that calls the gateway first |
+
+[RAN] `scripts/arch-check.sh --list memory-writes` — 24 sites, 10 in kgsync, 12
+in memory_recorder, 2 SemanticAdd. [READ] `orchestrator/kernel.go` `graph()`
+and `app_wireup.go:207` `deterministicKG` both hand out `recall.Graph(m)`;
+`app_wireup.go:173` sets `memTool.Recall`; `ingest/tool.go:19` calls
+`SetRecall`. [RAN] `orchestrator/graph_gateway_test.go` — two new tests prove
+the kernel hands out the writer and that `SetRecall` moves the writes with it.
+Both were shown failing against a `graph()` reverted to `return k.memory.KG()`,
+which was then restored byte-identically.
+
+Rewriting the 22 into `Remember(Entity{...})` would re-nest that many composite
+literals to change nothing: `Remember(Entity)` *is* `kg.AddNode`. The two
+fallback arms stay because deleting them discards the write rather than routing
+it. What was actually missing was a test that the kernel *uses* the gateway —
+the adapter was covered in package `recall`, its installation was not. That gap
+is now closed; the count is not.
 
 ---
 
