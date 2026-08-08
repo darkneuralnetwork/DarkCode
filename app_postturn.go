@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/planwork"
 	"github.com/darkcode/uiport"
 )
@@ -46,6 +47,20 @@ func (p projectRefresh) AfterTurn(ctx context.Context, req uiport.Request, outpu
 	p.r.Refresh(ctx, req.Project, req.Query, output)
 }
 
+// turnEndHook fires the user's turn_end hooks. It rides the same post-turn
+// registration as the plan refresh, for the same reason: a surface gets it by
+// existing rather than by remembering to.
+type turnEndHook struct{ h *hooks.Manager }
+
+func (t turnEndHook) AfterTurn(ctx context.Context, req uiport.Request, output string) {
+	// turn_end cannot fail a turn that has already produced its answer, so the
+	// error is discarded rather than ignored by accident — see package hooks.
+	_ = t.h.Run(ctx, hooks.TurnEnd, hooks.Context{
+		Goal:    req.Query,
+		Success: output != "",
+	})
+}
+
 // newPostTurnHooks builds the post-turn work shared by every surface. Returns
 // nothing when the pieces are missing, so a build without a project store
 // simply has no post-turn step.
@@ -53,6 +68,9 @@ func (a *AppRunner) newPostTurnHooks() []uiport.Option {
 	var opts []uiport.Option
 	if r := planwork.NewRefresher(a.ProjectStore, a.Kernel, a.Emitter); r != nil {
 		opts = append(opts, uiport.WithPostTurn(projectRefresh{r: r, seq: a.Kernel}))
+	}
+	if a.Hooks.Configured(hooks.TurnEnd) {
+		opts = append(opts, uiport.WithPostTurn(turnEndHook{a.Hooks}))
 	}
 	return opts
 }

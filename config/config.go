@@ -261,6 +261,18 @@ type Config struct {
 	// disconnected at runtime from both the CLI and the GUI.
 	ToolSources []ToolSourceConfig `json:"tool_sources,omitempty"`
 
+	// --- Lifecycle hooks ---
+	// Commands run at named points in a turn, keyed by point name:
+	// session_start, pre_tool, post_tool, pre_compact, turn_end. Context
+	// arrives as DARKCODE_* environment variables rather than being
+	// substituted into the command, so a hostile filename stays a value.
+	// A non-zero exit from a pre_tool hook refuses the tool; everywhere else
+	// it is logged and the turn continues. See package hooks.
+	//
+	// Kept as a plain map here to avoid a config → hooks import cycle; the
+	// shapes are identical and hooks.New validates.
+	Hooks map[string][]HookConfig `json:"hooks,omitempty"`
+
 	// DebugPprof enables the /debug/pprof/* profiler endpoints on the GUI
 	// server. Off by default — pprof leaks process args/env and lets any
 	// caller trigger CPU-consuming profile captures, so it must be opted
@@ -286,6 +298,19 @@ type ModelConfig struct {
 	// ReasoningEffort ("low" | "medium" | "high") is sent to models that
 	// support it. Empty omits the field.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+// HookConfig is the persistable definition of one lifecycle hook. It mirrors
+// hooks.Hook exactly; the duplication buys config the freedom not to import a
+// package that shells out.
+type HookConfig struct {
+	// Match filters by tool name at the tool points. Empty matches every
+	// tool; a trailing * globs ("write_*").
+	Match string `json:"match,omitempty"`
+	// Run is the command line, executed by the shell.
+	Run string `json:"run"`
+	// Timeout overrides the 30s default, e.g. "5s". Capped at 5m.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // ToolSourceConfig is the persistable definition of a tool source. It is the

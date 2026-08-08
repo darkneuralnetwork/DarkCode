@@ -13,6 +13,7 @@ import (
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
 	"github.com/darkcode/datasource"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/loop"
 	"github.com/darkcode/metrics"
@@ -90,6 +91,11 @@ type Kernel struct {
 	// content-addressed identity, so the kernel states what it learned rather
 	// than choosing a store. Never nil in a kernel built by New.
 	recall *recall.Manager
+
+	// hooks runs the user's configured commands at the turn-level points.
+	// nil = none configured, which is the common case; every call site is one
+	// unconditional line because a nil *hooks.Manager is a valid no-op.
+	hooks *hooks.Manager
 
 	// agenticLoop is the optional ReAct execution loop (looping technology).
 	// Non-nil always; whether it runs is decided per request — the loop, tool
@@ -804,6 +810,16 @@ func (k *Kernel) Status() string {
 // Runs lists the recorded execution journals, most recent first, so a replay
 // view can offer something to open.
 func (k *Kernel) Runs() []RunSummary { return ListRuns(k.runsDir) }
+
+// SetHooks installs the user's lifecycle hooks. The kernel owns the points that
+// are properties of a turn rather than of a tool call — the compaction boundary
+// and the end of the turn. The tool points live on the registry, which owns
+// tool execution.
+func (k *Kernel) SetHooks(h *hooks.Manager) {
+	k.mu.Lock()
+	k.hooks = h
+	k.mu.Unlock()
+}
 
 // SetRecall replaces the memory gateway. A nil argument is ignored rather than
 // clearing it: an absent gateway means facts go nowhere, and there is no

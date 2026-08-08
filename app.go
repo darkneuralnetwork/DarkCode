@@ -13,6 +13,7 @@ import (
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/intelligence"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/orchestrator"
@@ -60,7 +61,10 @@ type AppRunner struct {
 
 	PluginLoader *plugin.Loader
 	PluginHost   *plugin.Host
-	Sandbox      *security.Sandbox
+	// Hooks runs the user's configured commands at the lifecycle points. nil
+	// when none are configured, which is a valid no-op everywhere.
+	Hooks   *hooks.Manager
+	Sandbox *security.Sandbox
 
 	StatusOnly bool
 	PortFlag   string

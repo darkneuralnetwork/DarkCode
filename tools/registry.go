@@ -12,6 +12,7 @@ import (
 
 	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/permission"
 	"github.com/darkcode/spill"
@@ -78,6 +79,9 @@ type Registry struct {
 	// graph knows which of its beliefs are about a version that no longer
 	// exists. nil = not recording. See memory.System.ObserveFile.
 	observeFile func(path, content string)
+	// hooks runs the user's configured commands around a tool call. nil = none
+	// configured, which is the common case and costs nothing.
+	hooks *hooks.Manager
 }
 
 // NewRegistry creates an empty tool registry.
@@ -462,6 +466,11 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 		return result
 	}
 
+	if blocked := r.preToolHook(ctx, call.Function.Name, args); blocked != nil {
+		result.Result = blocked
+		return result
+	}
+
 	// Capture the "before" state for file-mutating tools so we can show a
 	// before→after diff afterwards.
 	beforePath, beforeContent, beforeExists := captureFileBefore(ctx, call.Function.Name, args)
@@ -493,6 +502,7 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 	// and the inline after-query summary.
 	r.recordChange(ctx, call.Function.Name, args, res, beforePath, beforeContent, beforeExists, started)
 	r.noteFileObservation(ctx, call.Function.Name, args, res)
+	r.postToolHook(ctx, call.Function.Name, args, res)
 
 	return result
 }
@@ -752,6 +762,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("tool %s is temporarily unavailable (quarantined after repeated failures; retry in ~%s)", name, remaining.Round(time.Second))
 	}
 
+	if blocked := r.preToolHook(ctx, name, args); blocked != nil {
+		return blocked, nil
+	}
+
 	if !entry.ReadOnly {
 		r.snapshot(name)
 	}
@@ -777,6 +791,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	// still a file the agent has looked at, and a belief formed on one path
 	// that the other cannot invalidate is worse than no belief.
 	r.noteFileObservation(ctx, name, args, result)
+	r.postToolHook(ctx, name, args, result)
 	return result, nil
 }
 
@@ -911,4 +926,54 @@ func readOnlyOperations(observing ...string) func(map[string]interface{}) bool {
 		}
 		return allowed[op]
 	}
+}
+
+// ============================================================================
+// LIFECYCLE HOOKS
+// ============================================================================
+
+// SetHooks installs the user's lifecycle hooks. Optional; nil disables them.
+//
+// The registry owns the tool points because it owns tool execution: a tool run
+// through /api/tools/execute is as much a tool run as one the loop dispatched,
+// and a gate that only one of the two surfaces honours is not a gate. Both
+// dispatch paths call preToolHook/postToolHook rather than inlining the logic,
+// so the two cannot drift the way the permission check nearly did.
+func (r *Registry) SetHooks(h *hooks.Manager) {
+	r.mu.Lock()
+	r.hooks = h
+	r.mu.Unlock()
+}
+
+// preToolHook runs the pre_tool hooks and returns a denial result when one
+// refused. A refusal is shaped like a permission denial because that is what it
+// is: the user said no in advance, in a config file rather than at a prompt.
+func (r *Registry) preToolHook(ctx context.Context, tool string, args map[string]interface{}) *ToolResult {
+	r.mu.RLock()
+	h := r.hooks
+	r.mu.RUnlock()
+	if !h.Configured(hooks.PreTool) {
+		return nil
+	}
+	err := h.Run(ctx, hooks.PreTool, hooks.Context{Tool: tool, File: hooks.FileArg(args)})
+	if err == nil {
+		return nil
+	}
+	return &ToolResult{Name: tool, Success: false, Error: err.Error()}
+}
+
+// postToolHook runs the post_tool hooks. It cannot fail the tool — the work is
+// already done, and failing it here would report a success as a failure.
+func (r *Registry) postToolHook(ctx context.Context, tool string, args map[string]interface{}, res *ToolResult) {
+	r.mu.RLock()
+	h := r.hooks
+	r.mu.RUnlock()
+	if !h.Configured(hooks.PostTool) {
+		return
+	}
+	_ = h.Run(ctx, hooks.PostTool, hooks.Context{
+		Tool:    tool,
+		File:    hooks.FileArg(args),
+		Success: res != nil && res.Success,
+	})
 }

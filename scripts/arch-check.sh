@@ -168,7 +168,7 @@ unbounded_completions() {
 # built the same way in this very migration: a full package, well tested, and
 # New() had no non-test caller, so only its policy table was reachable.
 unwired_managers() {
-  for pkg in modelport recall uiport spill planwork concurrency datasource adjudicate; do
+  for pkg in modelport recall uiport spill planwork concurrency datasource adjudicate hooks; do
     [ -d "$pkg" ] || continue
     grep -qE "^func New\\(" "$pkg"/*.go 2>/dev/null || continue
     n=$(grep -rn --include='*.go' --exclude-dir='.claude' "$pkg\\.New(" . 2>/dev/null | grep -v '_test\.go:' | grep -vc "^\\./$pkg/")

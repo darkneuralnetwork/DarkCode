@@ -60,6 +60,10 @@ type System struct {
 	// Bumped by StartNewSession (wired to /api/reset and CLI /new).
 	sessionEpoch time.Time
 
+	// onNewSession is told when the session boundary moves. Optional; see
+	// OnNewSession.
+	onNewSession func()
+
 	// Episodic Memory — past task executions
 	episodic       []core.EpisodicEntry
 	episodicPath   string
@@ -369,9 +373,28 @@ func (s *System) STMTruncate(n int) {
 // the CLI /new command.
 func (s *System) StartNewSession() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.stm = s.stm[:0]
 	s.sessionEpoch = time.Now()
+	notify := s.onNewSession
+	s.mu.Unlock()
+	// Outside the lock: the observer runs user-configured work and must not be
+	// able to deadlock the store it is being told about.
+	if notify != nil {
+		notify()
+	}
+}
+
+// OnNewSession registers an observer for the session boundary.
+//
+// This exists so the four callers of StartNewSession — two CLI paths, the reset
+// endpoint, and startup — do not each have to remember to announce it. A
+// boundary that three of four surfaces report is not a boundary. Memory takes a
+// plain callback rather than importing whatever wants to know, which keeps the
+// layering intact.
+func (s *System) OnNewSession(f func()) {
+	s.mu.Lock()
+	s.onNewSession = f
+	s.mu.Unlock()
 }
 
 // SessionEpoch returns the start time of the current chat session (zero if a

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/loop"
 	"github.com/darkcode/plan"
@@ -223,6 +224,13 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		if shouldCompact(len(stm), used, window) {
 			k.log("compress", fmt.Sprintf("Compacting context: %d tokens used of a %d window (threshold %d)",
 				used, window, compactionThreshold(window)))
+			// pre_compact fires while the messages about to be summarised are
+			// still whole. After this point they are a briefing, and whatever
+			// a hook wanted to keep is already gone.
+			_ = k.hooks.Run(ctx, hooks.PreCompact, hooks.Context{
+				Goal:   userGoal,
+				Detail: fmt.Sprintf("%d tokens of a %d window", used, window),
+			})
 			snapshot, err := k.compressor.Compress(ctx, stm, userGoal)
 			if err == nil && snapshot != nil {
 				k.log("compress", fmt.Sprintf("Context compressed: %d→%d tokens (ratio: %.1f%%)",

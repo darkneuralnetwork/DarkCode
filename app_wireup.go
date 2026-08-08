@@ -13,6 +13,7 @@ import (
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/ingest"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
@@ -714,6 +715,27 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// directly, which is correct but is what made it thirty-two decisions.
 	a.Kernel.SetRecall(a.Recall)
 
+	// Lifecycle hooks: built once here and handed to each owner of a point.
+	// The registry owns the tool points because it owns tool execution; the
+	// kernel owns the compaction boundary; uiport carries turn_end for every
+	// surface (see app_postturn.go); memory announces the session boundary.
+	//
+	// A bad hooks block is a startup error rather than a warning: a hook filed
+	// under a misspelled point would never fire and never complain, which is
+	// exactly the silent-no-op failure this codebase has been bitten by before.
+	if h, err := hooks.New(hookConfig(a.Cfg.Hooks)); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	} else if h != nil {
+		a.Hooks = h
+		h.SetLog(func(m string) { fmt.Fprintf(os.Stderr, "hook: %s\n", m) })
+		a.Registry.SetHooks(h)
+		a.Kernel.SetHooks(h)
+		a.MemSystem.OnNewSession(func() {
+			_ = h.Run(context.Background(), hooks.SessionStart, hooks.Context{})
+		})
+	}
+
 	// The auxiliary ladder in modelport reads this: with it on, summarising and
 	// classifying prefer a healthy local model before any metered one. It is
 	// the setting RouteAux used to consult.
@@ -861,4 +883,20 @@ func (a *AppRunner) loadPolicy() {
 		fmt.Fprintf(os.Stderr, "policy: %s applied\n", path)
 		return
 	}
+}
+
+// hookConfig converts the persisted hook blocks into the shapes package hooks
+// validates. The two structs are identical on purpose: config does not import a
+// package that shells out, and hooks does not import config.
+func hookConfig(cfg map[string][]config.HookConfig) map[string][]hooks.Hook {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string][]hooks.Hook, len(cfg))
+	for point, list := range cfg {
+		for _, h := range list {
+			out[point] = append(out[point], hooks.Hook{Match: h.Match, Run: h.Run, Timeout: h.Timeout})
+		}
+	}
+	return out
 }
