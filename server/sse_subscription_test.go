@@ -36,13 +36,13 @@ func declaredEventTypes(t *testing.T) []string {
 }
 
 func TestEveryEventTypeHasABrowserSubscription(t *testing.T) {
-	js, err := webFS.ReadFile("web/js/10-sse.js")
+	js, err := webFS.ReadFile("web/js/stream.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(js)
 	for _, et := range declaredEventTypes(t) {
-		if !regexp.MustCompile(`"` + et + `"`).MatchString(src) {
+		if !regexp.MustCompile(`['"]` + et + `['"]`).MatchString(src) {
 			t.Errorf("the browser never subscribes to %q, so every one of those events is dropped", et)
 		}
 	}
@@ -56,7 +56,7 @@ func TestBrowserReadsTheTaskFieldByItsWireName(t *testing.T) {
 	// Only reads off the event object. `dataset.task` is a DOM attribute the
 	// feed owns and names itself, not a wire field.
 	wrong := regexp.MustCompile(`\b(evt|data|event)\.task\b[^_]`)
-	for _, path := range []string{"web/js/10-sse.js", "web/js/40-events.js", "web/js/220-v2.js"} {
+	for _, path := range []string{"web/js/stream.js", "web/js/main.js", "web/js/chat.js"} {
 		js, err := webFS.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

@@ -31,7 +31,7 @@ func TestUnknownAppPathStillGetsTheShell(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("SPA route = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "<!DOCTYPE html>") {
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "<!doctype html>") {
 		t.Error("SPA route did not get the app shell")
 	}
 }

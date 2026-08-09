@@ -42,8 +42,11 @@ func TestWebHandlerServesIndexWithPNGLogo(t *testing.T) {
 		t.Fatalf("GET / status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "/logo.png") {
-		t.Error("index.html should reference /logo.png for the header logo")
+	// The shell's mark is typographic now (see the .rail-mark wordmark), so it
+	// references no logo image. What must not regress is the shell pointing at
+	// an asset that no longer exists, which is what the .ico removal broke.
+	if !strings.Contains(body, "/favicon.ico") {
+		t.Error("index.html should reference the favicon it ships")
 	}
 	if strings.Contains(body, "/logo.ico") {
 		t.Error("index.html still references the removed /logo.ico")
@@ -132,7 +135,7 @@ func TestWebHandlerServesVendoredAssetsOffline(t *testing.T) {
 func TestStaticAssetsRevalidateButDoNotRetransfer(t *testing.T) {
 	h := webHandler()
 
-	req := httptest.NewRequest("GET", "/styles.css", nil)
+	req := httptest.NewRequest("GET", "/css/app.css", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -148,7 +151,7 @@ func TestStaticAssetsRevalidateButDoNotRetransfer(t *testing.T) {
 	}
 
 	// Presenting the tag back must yield an empty 304, not the file again.
-	req2 := httptest.NewRequest("GET", "/styles.css", nil)
+	req2 := httptest.NewRequest("GET", "/css/app.css", nil)
 	req2.Header.Set("If-None-Match", etag)
 	w2 := httptest.NewRecorder()
 	h.ServeHTTP(w2, req2)
@@ -169,7 +172,7 @@ func TestETagIsContentDerived(t *testing.T) {
 		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		return w.Header().Get("ETag")
 	}
-	if a, b := get("/styles.css"), get("/index.html"); a == b {
+	if a, b := get("/css/app.css"), get("/index.html"); a == b {
 		t.Errorf("two different files share the ETag %q", a)
 	}
 }
@@ -191,7 +194,7 @@ func TestTextAssetsAreCompressed(t *testing.T) {
 
 	// A client that cannot decompress still has to get usable bytes.
 	plain := httptest.NewRecorder()
-	h.ServeHTTP(plain, httptest.NewRequest("GET", "/styles.css", nil))
+	h.ServeHTTP(plain, httptest.NewRequest("GET", "/css/app.css", nil))
 	if plain.Header().Get("Content-Encoding") != "" {
 		t.Error("gzip was sent to a client that never asked for it")
 	}
@@ -217,22 +220,29 @@ func TestAlreadyCompressedAssetsAreNotGzipped(t *testing.T) {
 
 // Mermaid is 2.7 MB, larger than the rest of the frontend combined, and is only
 // needed for replies that contain a diagram. It must not be on the startup path.
-func TestMermaidIsNotLoadedEagerly(t *testing.T) {
+func TestNoDiagramLibraryIsShipped(t *testing.T) {
 	h := webHandler()
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
-	body := w.Body.String()
+	if strings.Contains(w.Body.String(), "mermaid") {
+		t.Error("the shell references a diagram library again")
+	}
 
-	if regexp.MustCompile(`<script[^>]*src="/vendor/mermaid\.min\.js"`).MatchString(body) {
-		t.Error("mermaid is still a render-blocking script tag on every page load")
-	}
-	if !strings.Contains(body, "ensureMermaid") {
-		t.Error("no on-demand loader, so diagrams would never render at all")
-	}
-	// It must still be served locally: the GUI has to work air-gapped.
+	// This replaces TestMermaidIsNotLoadedEagerly, and the change of contract
+	// is deliberate rather than an oversight.
+	//
+	// mermaid.min.js was 2.7 MB of a 3.9 MB embedded interface — 69% of every
+	// byte the binary carried for the browser — to render the occasional
+	// diagram inside a plan document. It was already lazy-loaded, so the cost
+	// was not page weight; it was that a single static binary got 2.7 MB
+	// heavier for one feature on one screen.
+	//
+	// Fenced blocks now render as code, which is what they are. If diagram
+	// rendering is wanted back, the honest options are a much smaller renderer
+	// or an explicit "open diagram" action — not a library nobody sees.
 	vw := httptest.NewRecorder()
 	h.ServeHTTP(vw, httptest.NewRequest("GET", "/vendor/mermaid.min.js", nil))
-	if vw.Code != http.StatusOK || vw.Body.Len() == 0 {
-		t.Error("mermaid is no longer served from /vendor, breaking offline use")
+	if vw.Code == http.StatusOK && vw.Body.Len() > 100000 {
+		t.Error("the diagram library is back in the binary")
 	}
 }
