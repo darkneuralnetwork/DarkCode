@@ -1,86 +1,380 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DarkCode</title>
-<link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="/fonts/fonts.css">
-<link rel="stylesheet" href="/css/tokens.css">
-<link rel="stylesheet" href="/css/app.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DarkCode</title>
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/css/animations.css" />
+  <link rel="stylesheet" href="/css/layout.css" />
+  <!-- Fonts + libraries are vendored locally (server/web/fonts, server/web/vendor)
+       and embedded in the binary so the GUI works fully offline / air-gapped —
+       no external CDN or Google Fonts dependency at runtime. -->
+  <link href="/fonts/fonts.css" rel="stylesheet">
+  <!--
+    Chart.js stays eager. It is 200 KB (67 KB gzipped) and the render paths bail
+    out silently when Chart is undefined, so deferring it risks a monitoring tab
+    that quietly draws nothing — a bad trade for the bytes involved.
+  -->
+  <script src="/vendor/chart.umd.min.js"></script>
+  <!--
+    Mermaid stays off the startup path. It is 2.7 MB — larger than the whole
+    rest of the frontend put together — and it is only needed when a reply
+    happens to contain a ```mermaid block, which most sessions never produce.
+    Loaded here it was a render-blocking download on every page load, paid for
+    by everyone and used by almost nobody.
+
+    ensureMermaid() fetches it on first use and returns the same promise
+    thereafter, so several diagrams in one reply still load it once. It is
+    still served from /vendor, so the GUI remains fully offline.
+  -->
+  <script>
+    window.ensureMermaid = (function () {
+      let pending = null;
+      return function () {
+        if (window.mermaid) return Promise.resolve(window.mermaid);
+        if (pending) return pending;
+        pending = new Promise(function (resolve, reject) {
+          const s = document.createElement('script');
+          s.src = '/vendor/mermaid.min.js';
+          s.onload = function () {
+            try { window.mermaid.initialize({ startOnLoad: false, theme: 'dark' }); } catch (e) {}
+            resolve(window.mermaid);
+          };
+          s.onerror = function () { pending = null; reject(new Error('mermaid failed to load')); };
+          document.head.appendChild(s);
+        });
+        return pending;
+      };
+    })();
+  </script>
+  <link rel="icon" href="./favicon.ico">
 </head>
 <body>
+  <!-- ═══ Splash Screen ═══ -->
+  <div id="splash">
+    <pre class="splash-logo"> ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ██████╗ ██████╗ ███████╗
+ ██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔════╝██╔═══██╗██╔══██╗██╔════╝
+ ██║  ██║███████║██████╔╝█████╔╝ ██║     ██║   ██║██║  ██║█████╗
+ ██║  ██║██╔══██║██╔══██╗██╔═██╗ ██║     ██║   ██║██║  ██║██╔══╝
+ ██████╔╝██║  ██║██║  ██║██║  ██╗╚██████╗╚██████╔╝██████╔╝███████╗
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝</pre>
+    <div class="splash-title">DarkCode System</div>
+    <div class="splash-sub">**Next-Generation Autonomous AI Agent Platform**</div>
+    <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+    <div class="splash-status" id="splash-status">Initializing System...</div>
+  </div>
 
-<!-- The shell is two rows: a hairline rail carrying state, and the work.
-     There is no navigation chrome. The previous console spent a header, a
-     nine-item dropdown and a sidebar on getting between six screens; this
-     spends one keystroke, which is how a developer already moves around every
-     other tool on their machine. -->
-<div class="shell">
+  <!-- ═══ Ambient Background ═══ -->
+  <div class="ambient-bg"></div>
+  <div class="ambient-grid"></div>
+  <div class="ambient-blob blob-1"></div>
+  <div class="ambient-blob blob-2"></div>
+  <div class="ambient-blob blob-3"></div>
 
-  <header class="rail">
-    <span class="rail-mark">dark<b>code</b></span>
-    <span class="rail-work" id="rail-work" hidden aria-hidden="true"></span>
-    <span class="rail-item" id="rail-stage"></span>
-
-    <span class="rail-spacer"></span>
-
-    <span class="rail-item" id="rail-model" title="Model answering this turn"></span>
-    <span class="rail-item" id="rail-cost" title="Spend this session"></span>
-    <span class="rail-item" id="rail-conn" title="Live connection">—</span>
-    <button class="rail-key" id="palette-open" aria-haspopup="dialog">
-      <span>Go to</span><kbd>⌘K</kbd>
-    </button>
-  </header>
-
-  <div class="work" id="work" data-aside="on">
-
-    <!-- The workspace. Collapsible, because the file tree is essential while
-         watching an edit land and is furniture the rest of the time. -->
-    <aside class="aside" id="aside" aria-label="Workspace">
-      <div class="eyebrow">
-        <span id="cwd-label">workspace</span>
-        <button class="ghost" id="tree-refresh" title="Refresh">↻</button>
+  <div id="app" class="glass-container">
+    <!-- ═══ Unified Header (brand + horizontal nav + right cluster) ═══ -->
+    <header class="app-header glass-panel">
+      <div class="brand brand-compact">
+        <img src="/logo.png" alt="DarkCode Logo" style="height: 36px; width: auto; object-fit: contain; border-radius: 4px;" />
       </div>
-      <div class="tree" id="tree"><div class="empty">Reading the workspace…</div></div>
-    </aside>
 
-    <main class="main" id="main">
-      <!-- Views swap in here. One at a time, because a tool that shows you
-           six things at once has decided none of them matter. -->
-      <div class="thread" id="view-chat">
-        <div class="thread-inner" id="thread">
-          <div class="turn turn-agent">
-            <div class="turn-who">darkcode</div>
-            <div class="turn-body" id="greeting">What are we working on?</div>
+      <!-- Section dropdown: trigger shows the active section; click opens a
+           grouped menu of all sections. -->
+      <div class="nav-dropdown" id="nav-dropdown">
+        <button class="nav-dropdown-trigger" id="nav-dropdown-btn" type="button"
+                aria-haspopup="true" aria-expanded="false" title="Switch section">
+          <span class="nav-dropdown-icon" id="nav-dropdown-icon">💬</span>
+          <span class="nav-dropdown-label" id="nav-dropdown-label">Nexus (Chat & Workspace)</span>
+          <span class="nav-dropdown-caret">▾</span>
+        </button>
+        <div class="nav-dropdown-menu custom-scrollbar" id="nav-dropdown-menu" hidden>
+          <div class="nav-dropdown-group">
+            <div class="nav-dropdown-group-label">Nexus</div>
+            <button class="nav-dropdown-item active" data-tab="nexus" data-ico="⚡">⚡ Chat & Workspace</button>
+            <button class="nav-dropdown-item" data-tab="blueprint" data-ico="📐">📐 Blueprint (Plan & Workflow)</button>
+          </div>
+          <div class="nav-dropdown-group">
+            <div class="nav-dropdown-group-label">Observability</div>
+            <button class="nav-dropdown-item" data-tab="cognition" data-ico="🧠">🧠 Memory</button>
+            <button class="nav-dropdown-item" data-tab="telemetry" data-ico="📊">📊 Telemetry &amp; Cost <span class="nav-badge" id="evt-badge" hidden>0</span></button>
+            <button class="nav-dropdown-item" data-tab="changes" data-ico="↩">↩ Changes &amp; Rollback</button>
+          </div>
+          <div class="nav-dropdown-group">
+            <div class="nav-dropdown-group-label">System</div>
+            <button class="nav-dropdown-item" data-tab="config" data-ico="⚙️">⚙️ Configuration &amp; Tools</button>
           </div>
         </div>
       </div>
 
-      <div class="panel" id="view-panel" hidden></div>
+      <div class="header-right">
+        <div class="loop-indicator" id="loop-indicator" title="Agentic Loop (ReAct) — toggle in Configurations" hidden>
+          <span class="loop-ico">🔁</span>
+          <span class="loop-label">Loop</span>
+        </div>
+        <div class="live-meters" id="live-meters">
+          <div class="meter"><span class="meter-ico">🪙</span><span class="meter-val" id="meter-tokens">0</span><span class="meter-lbl">tok</span></div>
+          <div class="meter"><span class="meter-ico">💲</span><span class="meter-val" id="meter-cost">$0.00</span><span class="meter-lbl">cost</span></div>
+          <div class="meter"><span class="meter-ico">📡</span><span class="meter-val" id="meter-reqs">0</span><span class="meter-lbl">calls</span></div>
+        </div>
+        <div class="model-switcher" id="model-switcher" title="Switch primary model (hot-reload)">
+          <span class="model-switcher-label">Model</span>
+          <select id="model-select"></select>
+        </div>
+        <div class="badges" id="badges"></div>
+        <div class="conn" id="conn-indicator" title="Connection status">
+          <span class="conn-dot"></span>
+          <span class="conn-label">Connecting…</span>
+        </div>
+        <div class="kbd-hint" id="cmdk-hint" title="Open command palette">
+          <span class="kbd">⌘K</span>
+        </div>
+        <button type="button" id="chat-switch-cli" class="cli-btn" title="Switch to CLI">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          CLI
+        </button>
+      </div>
+    </header>
 
-      <div class="composer-wrap" id="composer-wrap">
-        <form class="composer" id="composer">
-          <textarea id="input" rows="1" placeholder="Describe what you want built, or ask about this repository…" autocomplete="off"></textarea>
-          <div class="composer-row">
-            <span class="composer-hint" id="hint"><kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> newline</span>
-            <button type="button" class="ghost" id="stop" hidden>Stop</button>
-            <button type="submit" class="send" id="send">Send</button>
-          </div>
-        </form>
+    <!-- ═══ Page title breadcrumb (slim sub-row) ═══ -->
+    <div class="page-title-bar" style="display: none;">
+      <h2 id="page-title" class="gradient-text">Nexus (Chat & Workspace)</h2>
+    </div>
+
+    <!-- ═══ Main ═══ -->
+    <main class="main">
+      <div class="content">
+        <section class="tab-panel active fade-in" id="tab-nexus" data-src="/pages/nexus.html"></section>
+        <section class="tab-panel fade-in" id="tab-blueprint" data-src="/pages/blueprint.html"></section>
+        <section class="tab-panel fade-in" id="tab-cognition" data-src="/pages/cognition.html"></section>
+        <section class="tab-panel fade-in" id="tab-telemetry" data-src="/pages/telemetry.html"></section>
+        <section class="tab-panel fade-in" id="tab-changes" data-src="/pages/changes.html"></section>
+        <section class="tab-panel fade-in" id="tab-config" data-src="/pages/config.html"></section>
       </div>
     </main>
   </div>
-</div>
 
-<!-- Command palette. Every destination and action in one filtered list. -->
-<div class="palette-scrim" id="palette-scrim" hidden role="dialog" aria-modal="true" aria-label="Command palette">
-  <div class="palette">
-    <input id="palette-input" placeholder="Go to, or run…" autocomplete="off" spellcheck="false">
-    <div class="palette-list" id="palette-list" role="listbox"></div>
+  <!-- ═══ Command Palette ═══ -->
+  <div id="cmd-palette">
+    <div class="cmd-box">
+      <div class="cmd-input-wrap">
+        <span>▸</span>
+        <input type="text" class="cmd-input" id="cmd-input" placeholder="Type a command or search…" autocomplete="off" />
+      </div>
+      <div class="cmd-results" id="cmd-results"></div>
+    </div>
   </div>
-</div>
 
-<script type="module" src="/js/main.js"></script>
+  <!-- ═══ Permission Popup ═══ -->
+  <!-- Shown when a dangerous tool call needs the user's approval. The -->
+  <!-- orchestrator blocks until a button is clicked (or the request times out). -->
+  <div class="perm-overlay" id="perm-overlay">
+    <div class="perm-modal">
+      <div class="perm-header">
+        <span class="perm-icon">⚠</span>
+        <span class="perm-title">Permission Required</span>
+        <span class="perm-risk" id="perm-risk">medium risk</span>
+      </div>
+      <div class="perm-body">
+        <div class="perm-tool-row">
+          <span class="perm-label">Tool</span>
+          <span class="perm-tool" id="perm-tool">—</span>
+        </div>
+        <div class="perm-summary" id="perm-summary"></div>
+        <pre class="perm-preview" id="perm-preview"></pre>
+        <!-- Optional in-between feedback: the user can attach a free-form steer
+             (e.g. "use /tmp instead of /var") that flows back to the agent via
+             the tool-result channel so it adapts mid-execution. -->
+        <textarea class="perm-feedback" id="perm-feedback" rows="2" placeholder="Optional feedback for the agent (e.g. use /tmp instead)…"></textarea>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-once" id="perm-allow-once">✓ Allow Once</button>
+        <button class="perm-btn perm-allow-session" id="perm-allow-session">✓✓ Allow for Session</button>
+        <button class="perm-btn perm-deny" id="perm-deny">✗ Deny</button>
+      </div>
+      <div class="perm-hint" id="perm-hint">The agent is waiting for your decision…</div>
+    </div>
+  </div>
+
+  <!-- ═══ Global Modals ═══ -->
+  <!-- Maximize Panel Modal -->
+  <div class="perm-overlay" id="maximize-modal" style="display: none; z-index: 10000; align-items: center; justify-content: center;">
+    <div class="perm-modal" style="width: 90vw; height: 90vh; max-width: 1400px; max-height: 1000px; display: flex; flex-direction: column;">
+      <div class="perm-header" style="justify-content: space-between;">
+        <div>
+          <span class="perm-icon">⛶</span>
+          <span class="perm-title" id="maximize-modal-title">Maximized View</span>
+        </div>
+        <button class="btn-glow btn-xs" id="maximize-close-btn">Close</button>
+      </div>
+      <div class="perm-body" id="maximize-modal-body" style="flex: 1; padding: 20px; overflow: auto; background: var(--bg-void);">
+        <!-- Content will be cloned here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- File Viewer Modal -->
+  <div class="perm-overlay" id="file-viewer-modal" style="display: none; z-index: 10001; align-items: center; justify-content: center;">
+    <div class="perm-modal" style="width: 80vw; height: 80vh; max-width: 1000px; display: flex; flex-direction: column;">
+      <div class="perm-header" style="justify-content: space-between;">
+        <div>
+          <span class="perm-icon">📄</span>
+          <span class="perm-title" id="file-viewer-title">file.txt</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-glow btn-xs" id="file-viewer-min-btn">Minimize</button>
+          <button class="btn-glow btn-xs danger" id="file-viewer-close-btn">Close</button>
+        </div>
+      </div>
+      <div class="perm-body" style="flex: 1; padding: 0; display: flex; flex-direction: column; overflow: hidden; background: #1e1e1e;">
+        <pre id="file-viewer-content" class="custom-scrollbar" style="margin: 0; padding: 16px; overflow: auto; flex: 1; font-family: 'Fira Code', monospace; font-size: 13px; color: #d4d4d4;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Toast Container ═══ -->
+  <div id="toast-container"></div>
+
+  <!-- ═══ Project modals (top-level so they render from any tab) ═══ -->
+  <!-- New / Edit project modal -->
+  <div class="perm-overlay" id="proj-modal">
+    <div class="perm-modal" style="max-width:560px">
+      <div class="perm-header">
+        <span class="perm-icon">📁</span>
+        <span class="perm-title" id="proj-modal-title">New Project</span>
+      </div>
+      <div class="perm-body" style="padding:18px 20px">
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-name">Name</label>
+          <input class="proj-input" id="pf-name" type="text" placeholder="e.g. DarkCode GUI" autocomplete="off" />
+        </div>
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-desc">Description</label>
+          <input class="proj-input" id="pf-desc" type="text" placeholder="What is this project?" autocomplete="off" />
+        </div>
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-path">Working Directory</label>
+          <div style="display:flex; gap:8px;">
+            <input class="proj-input" id="pf-path" type="text" placeholder="/path/to/project (optional)" autocomplete="off" style="flex:1" />
+            <button class="btn-glow btn-xs" id="proj-browse-btn" type="button">Browse</button>
+          </div>
+        </div>
+        <div class="proj-form-row">
+          <label class="perm-label" for="pf-tags">Tags</label>
+          <input class="proj-input" id="pf-tags" type="text" placeholder="go, web, ai (comma-separated)" autocomplete="off" />
+        </div>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-session" id="proj-save">Save</button>
+        <button class="perm-btn perm-deny" id="proj-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Directory Picker Modal -->
+  <div class="perm-overlay" id="dir-picker-modal">
+    <div class="perm-modal" style="max-width:600px; width:90%; display:flex; flex-direction:column; max-height:80vh;">
+      <div class="perm-header" style="justify-content:space-between">
+        <div>
+          <span class="perm-icon">📁</span>
+          <span class="perm-title">Select Directory</span>
+        </div>
+        <button class="btn-glow btn-xs" id="dir-picker-new-btn">New Folder</button>
+      </div>
+      <div class="perm-body" style="padding:0; display:flex; flex-direction:column; overflow:hidden; flex:1">
+        <div class="dir-picker-path" id="dir-picker-breadcrumbs">
+          <!-- populated dynamically -->
+        </div>
+        <div class="dir-picker-new-row" id="dir-picker-new-row" style="display:none; padding:10px 15px; background:var(--bg-panel); border-bottom:1px solid var(--border-light);">
+          <div style="display:flex; gap:8px;">
+            <input type="text" id="dir-picker-new-input" class="glass-input" placeholder="New folder name" style="flex:1; padding:6px 10px; font-size:13px;" autocomplete="off" />
+            <button class="btn-glow btn-xs primary" id="dir-picker-create-btn">Create</button>
+            <button class="btn-glow btn-xs" id="dir-picker-cancel-new-btn">Cancel</button>
+          </div>
+        </div>
+        <div class="dir-picker-list custom-scrollbar" id="dir-picker-list" style="overflow-y:auto; flex:1; padding:10px 0;">
+          <!-- populated dynamically -->
+        </div>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-once" id="dir-picker-select">Select This Directory</button>
+        <button class="perm-btn perm-deny" id="dir-picker-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context editor modal -->
+  <div class="perm-overlay" id="ctx-modal">
+    <div class="perm-modal" style="max-width:760px">
+      <div class="perm-header">
+        <span class="perm-icon">📝</span>
+        <span class="perm-title" id="ctx-modal-title">Project Context</span>
+      </div>
+      <div class="perm-body" style="padding:14px 20px">
+        <div class="perm-tool-row" id="ctx-meta"></div>
+        <div style="font-size:11px;color:var(--text-mute);margin-bottom:6px">
+          Markdown context for this project. When active, this is injected into the agent's prompt.
+        </div>
+        <textarea class="proj-context-editor" id="ctx-body" placeholder="# Project Context&#10;&#10;Describe the project, key files, conventions, current goals..."></textarea>
+      </div>
+      <div class="perm-actions">
+        <button class="perm-btn perm-allow-once" id="ctx-rewrite" title="Rewrite context with local LLM" style="background:var(--blue);color:var(--bg-deep)">Rewrite</button>
+        <div style="flex:1"></div>
+        <button class="perm-btn perm-allow-once" id="ctx-set-active">Set Active &amp; Save</button>
+        <button class="perm-btn perm-allow-session" id="ctx-save">Save</button>
+        <button class="perm-btn perm-deny" id="ctx-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLI Switching Modal -->
+  <div class="perm-overlay" id="cli-modal">
+    <div class="perm-modal" style="max-width:500px; text-align:center;">
+      <div class="perm-header" style="justify-content:center">
+        <span class="perm-title">DarkCode is Running in Terminal</span>
+      </div>
+      <div class="perm-body" style="padding:30px 20px">
+        <p>The orchestrator has successfully resumed execution in your CLI prompt.</p>
+        <p style="color:var(--text-mute); margin-top:10px;">You can safely close this browser window or return to the terminal to continue.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Frontend modules (loaded in dependency order). app.js is now a thin
+       loader doc; the logic lives in /js/*.js. Zero build step — go:embed
+       web/* embeds these verbatim. Cache-busting ?v=8 forces a reload after
+       a binary rebuild (the server also sends no-store). -->
+  <script src="/js/00-core.js?v=8"></script>
+  <script src="/js/10-sse.js?v=8"></script>
+  <script src="/js/20-approvals.js?v=8"></script>
+  <script src="/js/30-tokens.js?v=8"></script>
+  <script src="/js/40-events.js?v=9"></script>
+  <script src="/js/50-chat.js?v=9"></script>
+  <script src="/js/60-filetree.js?v=8"></script>
+  <script src="/js/70-attachments.js?v=9"></script>
+  <script src="/js/75-verbs.js?v=1"></script>
+  <script src="/js/80-tools.js?v=8"></script>
+  <script src="/js/90-memory.js?v=8"></script>
+  <script src="/js/100-projects.js?v=10"></script>
+  <script src="/js/110-status.js?v=8"></script>
+  <script src="/js/120-metrics.js?v=8"></script>
+  <script src="/js/130-config.js?v=13"></script>
+  <script src="/js/135-cfgsurface.js?v=2"></script>
+  <script src="/js/140-ui.js?v=8"></script>
+  <script src="/js/150-events.js?v=11"></script>
+  <script src="/js/160-widgets.js?v=8"></script>
+  <script src="/js/170-init.js?v=8"></script>
+  <script src="/js/180-dirpicker.js?v=8"></script>
+  <script src="/js/190-model-fetch.js?v=8"></script>
+  <script src="/js/220-v2.js?v=8"></script>
+  <script src="/js/230-tail.js?v=8"></script>
+  <script src="/js/240-replay.js?v=8"></script>
+  <script src="/js/250-changes.js?v=8"></script>
+  <script src="/js/260-cascade.js?v=8"></script>
+  <script src="/js/270-blueprint.js?v=9"></script>
+  <script src="/js/280-reqlog.js?v=8"></script>
+  <script src="/js/290-plugins.js?v=8"></script>
+  <script src="/app.js?v=8"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ import (
 
 	"github.com/darkcode/config"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/metrics"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/tools"
@@ -18,73 +19,145 @@ import (
 
 // printBanner renders the full startup banner with architecture layers,
 // runtime configuration, and a hint line.
-// printBanner renders the startup header.
-//
-// It used to be six lines of block-capital ASCII art, a "capabilities matrix"
-// of six bullets, a seven-row architecture table naming every internal layer,
-// and a runtime block — around thirty lines before the first prompt.
-//
-// None of it was for the user. A person opening a coding agent wants to know
-// it is alive, which model answers, and whether it can reach the network; the
-// layer names are facts about our source tree. So this is the same information
-// the GUI's status rail carries, in the same order, and everything else went.
-//
-// The wordmark matches the browser's: lowercase, the second half in amber.
 func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registry, kernel *orchestrator.Kernel) {
 	w := termWidth()
-	if w > 88 {
-		w = 88
+	if w > 100 {
+		w = 100
 	}
 
-	modelName, modelProv := cfg.Model, cfg.Provider
+	ascii := ` ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ██████╗ ██████╗ ███████╗
+ ██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔════╝██╔═══██╗██╔══██╗██╔════╝
+ ██║  ██║███████║██████╔╝█████╔╝ ██║     ██║   ██║██║  ██║█████╗
+ ██║  ██║██╔══██║██╔══██╗██╔═██╗ ██║     ██║   ██║██║  ██║██╔══╝
+ ██████╔╝██║  ██║██║  ██║██║  ██╗╚██████╗╚██████╔╝██████╔╝███████╗
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
+
+	// Render the ASCII logo line-by-line in orange.
+	for _, line := range strings.Split(ascii, "\n") {
+		fmt.Println(paint(cOrange, line))
+	}
+	fmt.Println()
+
+	subtitle := bold("  Enterprise AI Developer Platform") + paint(cGray, "  ·  written in Go  ·  ") + paint(cAmber, "v1.0.0")
+	fmt.Println(subtitle)
+	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+
+	// Capabilities Matrix
+	fmt.Println(paint(cGreen+clrBold, "  CAPABILITIES MATRIX"))
+	fmt.Printf("   %s %s   %s %s   %s %s\n",
+		paint(cBlue, "●"), paint(cWhite, "Multi-Model Consensus"),
+		paint(cBlue, "●"), paint(cWhite, "Auto-Healing Loop"),
+		paint(cBlue, "●"), paint(cWhite, "Security Sandbox"),
+	)
+	fmt.Printf("   %s %s   %s %s   %s %s\n",
+		paint(cBlue, "●"), paint(cWhite, "gRPC Plugin Engine   "),
+		paint(cBlue, "●"), paint(cWhite, "Observability UI "),
+		paint(cBlue, "●"), paint(cWhite, "6-Layer Memory  "),
+	)
+	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+
+	// Architecture layers
+	layers := []struct {
+		id   string
+		name string
+		desc string
+	}{
+		{"L1", "Orchestration Kernel", "planning · delegating · self-healing loop"},
+		{"L2", "Verification Pipeline", "syntax · linting · compiler · tests"},
+		{"L3", "Model Router", "single · escalation · consensus"},
+		{"L4", "Memory System", "STM · episodic · semantic · procedural"},
+		{"L5", "Security Sandbox", "firejail · namespace isolation"},
+		{"L6", "Tool Runtime", "terminal · file · plugins · search · web"},
+		{"L7", "Observability", "live telemetry · pprof · traces"},
+	}
+	fmt.Println(paint(cAmber+clrBold, "  ARCHITECTURE"))
+	for _, l := range layers {
+		fmt.Printf("   %s  %s  %s\n",
+			paint(cOrange+clrBold, l.id),
+			paint(cWhite, padRight(l.name, 26)),
+			paint(cGray, l.desc))
+	}
+	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+
+	// Runtime configuration
+	fmt.Println(paint(cAmber+clrBold, "  RUNTIME"))
+	safety := safetyLabel(parseSafetyInt(cfg.SafetyLevel))
+
+	// Primary model line. In a local-only setup (cfg.Model == ""), fall back
+	// to the embedded llama.cpp model so the banner never shows a blank model.
+	modelName := cfg.Model
+	modelProv := cfg.Provider
 	if modelName == "" {
 		if id := localModelID(); id != "" {
-			modelName, modelProv = id, "embedded"
+			modelName = id
+			modelProv = "embedded"
 		}
 	}
-	if modelName == "" {
-		modelName, modelProv = "none registered", ""
+	fmt.Printf("   %s  %s  %s\n",
+		paint(cGray, "Model"),
+		paint(cWhite+clrBold, modelName),
+		paint(cGray, "("+modelProv+")"))
+
+	// Local LLM line — shown when the embedded llama.cpp server is enabled,
+	// regardless of whether a cloud primary is also configured.
+	if cfg.LocalEnabled() {
+		localLine := "disabled"
+		if id := localModelID(); id != "" {
+			localLine = id + " (llama.cpp · running)"
+		} else if st := embedded.Default(); st != nil && st.Status().State == embedded.StateStarting {
+			localLine = "starting…"
+		} else {
+			localLine = "enabled (not loaded)"
+		}
+		fmt.Printf("   %s  %s\n",
+			paint(cGray, "Local"),
+			paint(cGreen, localLine))
+	}
+
+	fmt.Printf("   %s  %s  %s  %s  %s\n",
+		paint(cGray, "Routing"),
+		paint(cBlue, cfg.RoutingMode),
+		paint(cGray, "· Safety"),
+		paint(cYellow, safety),
+		paint(cGray, "· Concurrency "+fmtNum(cfg.MaxConcurrent)))
+
+	toolCount := 0
+	if registry != nil {
+		toolCount = len(registry.List())
+	}
+	memStats := "4-tier"
+	if mem != nil {
+		memStats = mem.ShortSummary()
+	}
+	fmt.Printf("   %s  %s  %s  %s  %s\n",
+		paint(cGray, "Tools"),
+		paint(cGreen, fmtNum(toolCount)+" registered"),
+		paint(cGray, "· Memory"),
+		paint(cPurple, memStats),
+		paint(cGray, "· Providers "+fmtNum(len(config.Providers()))))
+
+	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+
+	// Metrics hint
+	snap := metrics.Default.Snapshot()
+	if snap.TotalRequests > 0 {
+		fmt.Printf("   %s  %s tokens · %s · %s requests  %s\n",
+			paint(cAmber+clrBold, "USAGE"),
+			paint(cOrange, fmtNum(snap.TotalTokens)),
+			paint(cGreen, fmtCost(snap.TotalCost)),
+			paint(cBlue, fmtNum(snap.TotalRequests)),
+			paint(cGray, "(since "+fmtTimeShort(snap.Since)+")"))
+		fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
 	}
 
 	fmt.Println()
-	fmt.Printf("  %s%s\n", paint(cGrayLt+clrBold, "dark"), paint(cOrange+clrBold, "code"))
-
-	// One line of state, mirroring the browser rail: what answers, how much
-	// autonomy it has, and whether it may leave the machine.
-	reach := paint(cGreen, "network")
-	if cfg.AirGap {
-		reach = paint(cAmber, "air-gapped")
-	}
-	fmt.Printf("  %s  %s  %s  %s\n",
-		paint(cGray, modelHint(modelName, modelProv)),
-		paint(cGray, "·"),
-		paint(cGray, "safety ")+safetyLabel(parseSafetyInt(cfg.SafetyLevel)),
-		reach)
-
-	// Tools and memory are the two things whose absence changes what you can
-	// ask for, so they are stated and nothing else is.
-	tools, episodes := 0, 0
-	if registry != nil {
-		tools = len(registry.List())
-	}
-	if mem != nil {
-		episodes = len(mem.EpisodicGet())
-	}
-	fmt.Printf("  %s\n", paint(cGray, fmt.Sprintf("%d tools · %d remembered runs", tools, episodes)))
-
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
-	fmt.Printf("  %s %s\n\n",
-		paint(cGray, "Type a request, or"),
-		paint(cGrayLt, "/help")+paint(cGray, " for commands."))
-}
-
-// modelHint names the model without repeating the provider when it is already
-// obvious from the model id.
-func modelHint(name, provider string) string {
-	if provider == "" || strings.Contains(strings.ToLower(name), strings.ToLower(provider)) {
-		return name
-	}
-	return name + " (" + provider + ")"
+	fmt.Printf("  %s  %s\n",
+		paint(cGreen+clrBold, "►"),
+		bold("Type a message to begin"))
+	fmt.Printf("     %s   %s\n",
+		paint(cGray, "/help"),
+		paint(cGray, "for commands  ·  /monitor for live dashboard  ·  /quit to exit"))
+	fmt.Println()
 }
 
 // safetyLabel converts a SafetyLevel to a friendly label.
