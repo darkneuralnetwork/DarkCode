@@ -10,32 +10,45 @@ import (
 	"time"
 
 	"github.com/darkcode/checkpoint"
-	"github.com/darkcode/cli"
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
+	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/intelligence"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/orchestrator"
-	"github.com/darkcode/permission"
 	"github.com/darkcode/plugin"
 	"github.com/darkcode/project"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/security"
 	"github.com/darkcode/server"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 )
 
 type AppRunner struct {
-	Cfg          *config.Config
-	Registry     *tools.Registry
-	SourceMgr    *tools.SourceManager
-	MemSystem    *memory.System
+	Cfg       *config.Config
+	Registry  *tools.Registry
+	SourceMgr *tools.SourceManager
+	MemSystem *memory.System
+	// Recall is the single gateway for remembering a fact. Placement is its
+	// decision, not each caller's — see the recall package.
+	Recall       *recall.Manager
 	ProjectStore *project.Store
 	Emitter      *ui.EventEmitter
 	Router       *router.Router
 	Compressor   *compression.Compressor
+	// createClient builds an LLM client from a model config (handling the
+	// embedded provider). It is the wiring layer's factory, persisted here so
+	// the kernel's live model-reload can reuse it without importing llm.
+	createClient func(config.ModelConfig) core.LLMClient
 	Kernel       *orchestrator.Kernel
+	// Port is the single way a surface reaches the kernel. Every surface
+	// goes through it so none can decide for itself whether a request
+	// carries a workspace — see uiport for what that omission cost.
+	Port         *uiport.Manager
 	Recorder     *tools.ChangeRecorder
 	Checkpoints  *checkpoint.Manager
 	LSP          *intelligence.LSPClient
@@ -48,10 +61,15 @@ type AppRunner struct {
 
 	PluginLoader *plugin.Loader
 	PluginHost   *plugin.Host
-	Sandbox      *security.Sandbox
+	// ExtCommands are the slash commands loaded bundles offer. The console
+	// consults them before reporting an unknown command.
+	ExtCommands []tools.ExtensionCommand
+	// Hooks runs the user's configured commands at the lifecycle points. nil
+	// when none are configured, which is a valid no-op everywhere.
+	Hooks   *hooks.Manager
+	Sandbox *security.Sandbox
 
 	StatusOnly bool
-	Query      string
 	PortFlag   string
 	BindAddr   string
 	GuiFlag    bool
@@ -65,10 +83,9 @@ type AppRunner struct {
 	shutdownOnce sync.Once
 }
 
-func NewAppRunner(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) *AppRunner {
+func NewAppRunner(cfg *config.Config, statusOnly bool, portFlag string, guiFlag bool, bindAddr string) *AppRunner {
 	return &AppRunner{
 		Cfg:        cfg,
-		Query:      query,
 		StatusOnly: statusOnly,
 		PortFlag:   portFlag,
 		GuiFlag:    guiFlag,
@@ -86,28 +103,6 @@ func (a *AppRunner) Execute() {
 		}
 		fmt.Println("\n" + a.MemSystem.Summary())
 		os.Exit(0)
-	}
-
-	if a.Query != "" {
-		ctx := context.Background()
-		a.Kernel.Gate().SetApprover(permission.AutoApprover())
-		if a.Cfg.UIMode {
-			a.Emitter.EmitTaskUpdate("kernel", "observe", a.Query)
-		}
-		result, err := a.Kernel.Execute(ctx, a.Query)
-		if err != nil {
-			a.MemSystem.Shutdown()
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if changes := a.Recorder.All(); len(changes) > 0 {
-			cli.PrintChanges(os.Stderr, changes)
-		}
-		if !a.Cfg.UIMode {
-			fmt.Println(result)
-		}
-		a.MemSystem.Shutdown()
-		return
 	}
 
 	a.mode = "cli"

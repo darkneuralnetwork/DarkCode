@@ -15,6 +15,7 @@ import (
 	"github.com/darkcode/plan"
 	"github.com/darkcode/project"
 	"github.com/darkcode/router"
+	"github.com/darkcode/uiport"
 	"github.com/darkcode/verb"
 )
 
@@ -124,12 +125,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			req.Mode = verbStrategy.Mode
 		}
 	}
-	restoreOverrides := s.kernel.ApplyRequestOverrides(req.Mode, req.Safety, loopOverride, toolsOverride, req.Brain)
-	defer restoreOverrides()
-	if verbFound {
-		restorePlan := s.kernel.ApplyPlanOverride(verbStrategy.Plan)
-		defer restorePlan()
-	}
+	// The overrides are applied further down, once ctx exists: the loop, tool
+	// scope and planning decisions now ride on the request's own context so a
+	// second chat turn cannot change what this one is doing mid-flight.
 
 	// If an active project is specified, prepend its long-lived context to
 	// the query so the agent operates with project knowledge in scope.
@@ -196,6 +194,27 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	ctx = context.WithValue(ctx, core.WorkspaceKey, ws)
 	ctx = context.WithValue(ctx, core.ProjectKey, req.Project)
 
+	// The per-request overrides are carried on the uiport.Request below rather
+	// than applied here, so this surface assembles a request exactly the way
+	// the CLI and ACP do. We deliberately do NOT mutate s.cfg: the override is
+	// per-request, so /api/status and /api/config keep reflecting the
+	// configured state.
+	planOverride := ""
+	if verbFound {
+		planOverride = verbStrategy.Plan
+	}
+	turn := uiport.Request{
+		Surface:   uiport.SurfaceGUI,
+		Workspace: ws,
+		Project:   req.Project,
+		Mode:      req.Mode,
+		Safety:    req.Safety,
+		Brain:     req.Brain,
+		Loop:      loopOverride,
+		Tools:     toolsOverride,
+		Plan:      planOverride,
+	}
+
 	// Inject the active project's implementation plan + workflow architecture
 	// so the kernel's planner follows the plan. The plan/workflow are amended
 	// SYNCHRONOUSLY here, before Execute runs, when the incoming message
@@ -222,6 +241,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		amending := needsPlanAmend(req.Query, s.kernel.RecentSTM(), skipReadOnly)
 		if amending {
 			plan, workflow = s.amendPlanWorkflowSync(ctx, req.Project, req.Query, plan, workflow)
+			// Amending before the turn is what lets the plan drive execution.
+			// Tell the shared post-turn refresh not to rewrite the same two
+			// documents again afterwards.
+			turn.PlanAlreadyAmended = true
 		}
 		if id, line, ok := orchestrator.NextPendingWorkflowTask(workflow); ok {
 			pendingTaskID = id
@@ -235,7 +258,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		defer s.kernel.ClearProjectContext()
 	}
 
-	output, err := s.kernel.Execute(ctx, query)
+	turn.Query = query
+	output, err := s.port.Execute(ctx, turn)
 	if err != nil {
 		if s.emitter != nil {
 			s.emitter.EmitError(err.Error())
@@ -279,7 +303,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	awaitingPlan := s.kernel != nil && s.kernel.PlanAwaitingApproval()
 	buildTurn := req.ChatMode != "general" && !awaitingPlan // Chat is read-only; it never "builds"
 	if buildTurn {
-		output = s.completeBuild(ctx, cm, req.Query, ws, output)
+		output = s.completeBuild(ctx, cm, turn, req.Query, ws, output)
 	}
 	if pendingTaskID != "" && req.Project != "" && s.projects != nil && buildTurn {
 		// Only mark the subtask done when its own deliverable is verified present.
@@ -351,7 +375,7 @@ const maxCompletePasses = 2
 // with a focused corrective goal so a Build finishes what it started instead of
 // stopping with skipped deliverables (the "made a website but no .js" failure).
 // Appends each corrective result to the output. No-op when nothing is missing.
-func (s *Server) completeBuild(ctx context.Context, cm *orchestrator.ChatManager, goal, workspace, output string) string {
+func (s *Server) completeBuild(ctx context.Context, cm *orchestrator.ChatManager, turn uiport.Request, goal, workspace, output string) string {
 	for pass := 0; pass < maxCompletePasses; pass++ {
 		done, gaps := cm.CheckCompleteness(goal, workspace)
 		if done {
@@ -362,7 +386,11 @@ func (s *Server) completeBuild(ctx context.Context, cm *orchestrator.ChatManager
 		}
 		corrective := fmt.Sprintf("The work so far is INCOMPLETE for the goal %q. It is still missing: %s. Create ONLY the missing file(s) now, with real, working content — do not repeat what already exists.",
 			goal, strings.Join(gaps, ", "))
-		more, err := s.kernel.Execute(ctx, corrective)
+		// Same request shape as the turn that produced the gap — a corrective
+		// pass that ran under different tool scope or planning than the work it
+		// is completing would be a second, differently-configured agent.
+		turn.Query = corrective
+		more, err := s.port.Execute(ctx, turn)
 		if err != nil {
 			log.Printf("[server] completeness auto-continue failed: %v", err)
 			break

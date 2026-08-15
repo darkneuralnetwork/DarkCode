@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+
+	"github.com/darkcode/internal/repowalk"
 )
 
 // chunk splits text into chunks of about size bytes with overlap bytes carried
@@ -89,17 +91,9 @@ func ingestibleExt(path string) bool {
 	return codeExtensions[ext] || docExtensions[ext]
 }
 
-// skipDir reports whether a directory should not be descended into during a
-// repo walk (VCS internals, dependency and build dirs, caches).
-func skipDir(name string) bool {
-	switch name {
-	case ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build",
-		"target", ".venv", "venv", "__pycache__", ".idea", ".vscode",
-		".darkcode", ".cache", "bin", "obj":
-		return true
-	}
-	return strings.HasPrefix(name, ".") && name != "." && name != ".."
-}
+// skipDir defers to the one shared predicate. This used to be its own list,
+// one of four that disagreed; see internal/repowalk.
+func skipDir(name string) bool { return repowalk.SkipDir(name) }
 
 // isBinary reports whether data looks binary (contains a NUL in the first 8KB).
 func isBinary(data []byte) bool {

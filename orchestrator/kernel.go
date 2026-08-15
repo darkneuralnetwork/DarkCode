@@ -9,17 +9,18 @@ import (
 
 	"github.com/darkcode/agents"
 	"github.com/darkcode/checkpoint"
-	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
 	"github.com/darkcode/ctxengine"
+	"github.com/darkcode/datasource"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/internal/strutil"
-	"github.com/darkcode/llm"
 	"github.com/darkcode/loop"
-	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/permission"
 	"github.com/darkcode/plan"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/tools"
@@ -30,19 +31,38 @@ import (
 // DAGs, delegates to sub-agents, routes models, enforces safety, and stores
 // episodic memory. Trivial tasks are answered directly without decomposition.
 
+// contextCompressor is the slice of compression.Compressor the kernel uses, named
+// here so the orchestrator states context compaction as a capability rather than
+// importing the concrete package for it. EstimateTokens and SnapshotToMessages
+// are method forms of the two package helpers, added for exactly this seam.
+type contextCompressor interface {
+	Compress(ctx context.Context, messages []core.Message, goal string) (*core.ContextSnapshot, error)
+	SetClient(client core.LLMClient, model string)
+	Summarize(ctx context.Context, text, focus string) (string, error)
+	EstimateTokens(messages []core.Message) int
+	SnapshotToMessages(snapshot *core.ContextSnapshot) []core.Message
+}
+
 // Kernel is the orchestration core — Layer 1.
 type Kernel struct {
-	cfg        Config
-	router     *router.Router
-	registry   *tools.Registry
-	memory     *memory.System
-	retriever  *memory.HybridRetriever // ranked recall over episodic+semantic+KG
-	compressor *compression.Compressor
-	factory    *agents.AgentFactory
-	executor   *agents.ConcurrentExecutor
-	emitter    *ui.EventEmitter
-	verifier   *agents.VerificationPipeline
-	agentBus   *agents.AgentBus
+	cfg      Config
+	router   *router.Router
+	registry *tools.Registry
+	memory   core.MemoryStore
+	// data is the gateway for reads: ranked recall, the answer cache, graph
+	// question answering, and the graph's own reasoning. `recall` owns the
+	// other direction. Never nil in a kernel built by New.
+	data       *datasource.Manager
+	compressor contextCompressor
+	// newClient builds an LLM client from a model config. Injected by the
+	// wiring layer (SetClientFactory) so live model reload can construct clients
+	// without the orchestrator importing the llm package.
+	newClient func(config.ModelConfig) core.LLMClient
+	factory   *agents.AgentFactory
+	executor  *agents.ConcurrentExecutor
+	emitter   *ui.EventEmitter
+	verifier  *agents.VerificationPipeline
+	agentBus  *agents.AgentBus
 
 	// permission gate — enforces user approval for dangerous tool calls.
 	// The registry consults it before executing any tool.
@@ -62,24 +82,27 @@ type Kernel struct {
 	// never leaves a stale approver (the prior CLI→GUI permission bug).
 	modeApprover *permission.ModeAwareApprover
 
-	// agenticLoop is the optional ReAct execution loop (looping technology).
-	// Non-nil always; activated/deactivated via SetAgenticLoop.
-	agenticLoop *loop.ReActLoop
-	agenticOn   bool
+	// models is the gateway for reaching a model: it picks the tier for a
+	// purpose, applies the ceiling and temperature, and fits the prompt to the
+	// window of whatever it chose. Never nil in a kernel built by New.
+	models *modelport.Manager
 
-	// requestLoop is a per-request override of the agentic-loop decision.
-	// nil ⇒ fall back to the master toggle (agenticOn). The web chat sets
-	// this from chat_mode=="loop" so the loop runs only when the user
-	// explicitly picks Loop mode; the CLI/single-query path leaves it nil so
-	// the master toggle still drives loop usage there. Guarded by mu.
-	requestLoop *bool
-	// requestPlan forces (or forbids) the planning phase for one request.
-	// It is what separates /graph from /loop: both iterate, but /graph always
-	// decomposes into a task graph first so there are per-task acceptance
-	// criteria to prove, while /loop plans only when the goal is complex
-	// enough to be worth a planner call. Without this the two verbs selected
-	// identical behaviour and /graph was a synonym.
-	requestPlan *bool
+	// recall is the gateway for remembering a fact: it owns placement and
+	// content-addressed identity, so the kernel states what it learned rather
+	// than choosing a store. Never nil in a kernel built by New.
+	recall *recall.Manager
+
+	// hooks runs the user's configured commands at the turn-level points.
+	// nil = none configured, which is the common case; every call site is one
+	// unconditional line because a nil *hooks.Manager is a valid no-op.
+	hooks *hooks.Manager
+
+	// agenticLoop is the optional ReAct execution loop (looping technology).
+	// Non-nil always; whether it runs is decided per request — the loop, tool
+	// scope, read-only and planning overrides all live on the request's
+	// context now, not here. See request_state.go for why.
+	agenticLoop *loop.ReActLoop
+
 	// reviewerOn gates the post-acceptance reviewer. Off by default: an extra
 	// model call on every successful run is a real cost for advice nobody
 	// asked for, and it can never change the outcome. See reviewer.go.
@@ -88,19 +111,6 @@ type Kernel struct {
 	// fires when models disagree AND the graph cannot check them, but that is
 	// still two extra calls on a metered tier. See debate.go.
 	debateOn bool
-
-	// requestToolsDisabled is a per-request override of tool access. nil ⇒
-	// tools enabled (the default). The web chat sets this from
-	// chat_mode=="general" so General mode is a fast pure-conversation path
-	// with NO tools offered to the LLM (no DAG, no worker agents, no approval
-	// popups); project/auto/loop leave it nil (tools on). Guarded by mu.
-	requestToolsDisabled *bool
-
-	// requestReadOnly is a per-request override for Chat mode: only read-only
-	// tools (read/list/search/web) are offered and any mutating tool is
-	// refused, so Chat can answer from the project without writing. nil ⇒ not
-	// read-only. Set from chat_mode=="general"/"chat". Guarded by mu.
-	requestReadOnly *bool
 
 	// projectPlan/projectWorkflow hold the active project's plan + workflow for
 	// the current request, set via SetProjectContext and injected into the goal
@@ -116,11 +126,6 @@ type Kernel struct {
 	// guarded by mu.
 	pendingPlan *pendingPlanState
 	lastRunPlan *plan.Graph
-
-	// lastCompressedLen tracks the STM length at the most recent compression.
-	// Used to skip re-compressing the same window twice when two requests land
-	// while STM is between thresholds (see compressionMinGrowth). Guarded by mu.
-	lastCompressedLen int
 
 	// ctxEngine is the optional intelligent context-assembly engine
 	// ("Strategy 6b" — dedup + TF-IDF ranking + budget trimming), lazily
@@ -273,8 +278,16 @@ type TaskLogEntry struct {
 }
 
 // New creates the orchestration kernel with all layers wired together.
-func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System, comp *compression.Compressor, emitter *ui.EventEmitter) *Kernel {
+func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemoryStore, comp contextCompressor, emitter *ui.EventEmitter) *Kernel {
 	errMgr := NewErrorManager()
+	// The memory gateway is built here rather than injected later, so it is
+	// never nil. An earlier version treated nil as "write the stores
+	// directly"; the code returned without writing at all, so every fact the
+	// kernel learned was silently dropped in any build that had not called
+	// SetRecall — which the tests caught immediately and a user would not have.
+	// A gateway that can be absent is a gateway that can be forgotten.
+	rec, _ := recall.New(mem)
+	models, _ := modelport.New(rtr)
 	factory := agents.NewAgentFactory(rtr, reg, emitter, errMgr)
 	executor := agents.NewConcurrentExecutor(factory, cfg.MaxConcurrent, emitter)
 	verifier := agents.NewVerificationPipeline(rtr, emitter, "")
@@ -295,7 +308,9 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		router:      rtr,
 		registry:    reg,
 		memory:      mem,
-		retriever:   memory.NewHybridRetriever(mem, mem.KG()),
+		recall:      rec,
+		models:      models,
+		data:        datasource.New(mem),
 		compressor:  comp,
 		factory:     factory,
 		executor:    executor,
@@ -303,12 +318,16 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem *memory.System
 		verifier:    verifier,
 		agentBus:    bus,
 		gate:        gate,
-		agenticLoop: loop.New(rtr, reg, emitter, 0), // 0 → loop.DefaultMaxLoops
+		agenticLoop: loop.New(rtr, reg, emitter, 0), // 0 → loop.DefaultMaxLoops; SetModels below
 		classifier:  router.NewTaskClassifier(),
 	}
 	for i := range k.cascadeThresholds {
 		k.cascadeThresholds[i] = cascadeDefaultThreshold
 	}
+	// Share the kernel's model manager with the loop, so both route from one
+	// policy table and one local-preference setting (PreferLocalForAux reaches
+	// the loop through this shared pointer) rather than from two copies.
+	k.agenticLoop.SetModels(models)
 	return k
 }
 
@@ -356,16 +375,13 @@ func (k *Kernel) SetChangeRecorder(rec *tools.ChangeRecorder) {
 	}
 }
 
-// newConfiguredClient builds an LLM client from a model config, applying the
-// provider, the credential pool, and the reasoning effort. Shared by every
-// registration site here so a model reloaded from the GUI gets the same
-// treatment as one wired at startup.
-func newConfiguredClient(mc config.ModelConfig) *llm.Client {
-	c := llm.NewClient(mc.BaseURL, mc.APIKey, mc.Model)
-	c.SetProvider(mc.Provider)
-	c.Keys = llm.NewKeyPool(append([]string{mc.APIKey}, mc.APIKeys...)...)
-	c.Effort = mc.ReasoningEffort
-	return c
+// SetClientFactory installs the wiring layer's LLM-client builder so live model
+// reload (ReloadModels) can construct clients without the orchestrator
+// importing llm. The factory handles every provider, including embedded — which
+// the old in-kernel builder did not, so a reloaded embedded model now keeps its
+// embedded client instead of silently degrading to a plain HTTP one.
+func (k *Kernel) SetClientFactory(fn func(config.ModelConfig) core.LLMClient) {
+	k.newClient = fn
 }
 
 // SetCheckpoints installs the workspace snapshotter, both on the tool registry
@@ -427,13 +443,12 @@ const (
 // graph at full confidence would have the agent citing beliefs about a file
 // that has since been reverted underneath it.
 func (k *Kernel) softenBeliefsAfterRollback(changes []checkpoint.Change) {
-	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
-	if !ok || kg == nil || len(changes) == 0 {
+	if k.data == nil || len(changes) == 0 {
 		return
 	}
 	softened := 0
 	for _, c := range changes {
-		softened += kg.PropagateConfidence("file:"+c.Path,
+		softened += k.data.PropagateConfidence("file:"+c.Path,
 			rollbackConfidenceDecay, rollbackDecayFactor, rollbackDecayHops)
 	}
 	if softened > 0 {
@@ -442,44 +457,30 @@ func (k *Kernel) softenBeliefsAfterRollback(changes []checkpoint.Change) {
 	}
 }
 
-// SetApprovalCallback is a legacy bridge: it wraps the simple bool callback
-// as a permission.Approver on the gate. Prefer SetPermissionGate +
-// Gate().SetApprover for the full allow-once / allow-session / deny flow.
-func (k *Kernel) SetApprovalCallback(cb func(action string) bool) {
-	if cb == nil {
-		return
-	}
-	g := k.Gate()
-	g.SetApprover(func(req permission.ApprovalRequest) permission.Verdict {
-		if cb(req.Summary) {
-			return permission.AllowV(permission.DecisionAllowOnce)
-		}
-		return permission.DenyV("")
-	})
-}
-
-// SetAgenticLoop is retained so an older client that still posts the setting
-// gets a definite answer rather than a 500, but it no longer stores anything:
-// whether a request iterates is decided per request by the /loop verb or the
-// Loop chat mode. The iteration ceiling is loop.DefaultMaxLoops.
-func (k *Kernel) SetAgenticLoop(bool, int) {}
-
 // ApplyRequestOverrides applies per-request routing/safety/loop/tool overrides
-// to the live router, gate, and kernel flags, returning a restore func to defer.
-// Empty strings leave a setting unchanged; loop is "on"/"off"/"", tools is
-// "off"/""/"on". Lets the mode/safety/chat_mode fields of POST /api/chat apply
-// for a single request.
-func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) func() {
+// and returns the context the request must execute under, plus a restore func
+// to defer. Empty strings leave a setting unchanged; loop is "on"/"off"/"",
+// tools is "off"/"readonly"/"on". Lets the mode/safety/chat_mode fields of
+// POST /api/chat apply for a single request.
+//
+// The returned context carries the loop/tools/read-only decisions. Those used
+// to be written to fields on the shared Kernel, which meant two overlapping
+// requests fought over one field and the earlier one finished under the later
+// one's settings — see request_state.go. Callers MUST pass the returned
+// context to Execute; passing the original silently restores the old bug.
+//
+// Mode, safety and brain still mutate shared router/gate state under a depth
+// counter, because a request does not own those objects.
+func (k *Kernel) ApplyRequestOverrides(ctx context.Context, mode, safety, loop, tools, brain string) (context.Context, func()) {
 	var oldMode core.RoutingMode
 	var oldLevel permission.Level
-	var oldReqLoop *bool
-	var oldToolsDisabled *bool
-	var oldReadOnly *bool
 	var oldForceLocal *bool
 	haveMode := mode != ""
 	haveSafety := safety != ""
 	haveLoop := loop != ""
 	haveTools := tools != ""
+
+	rs := &requestState{}
 	// Brain selector (per-request): "local" pins to the local model (offline),
 	// "cloud" allows cloud routing, "auto"/"" leave the configured default. Only
 	// local/cloud actually change the router's force-local flag.
@@ -519,39 +520,46 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 		k.overrideMu.Unlock()
 		k.gate.SetLevel(permission.LevelFromString(safety))
 	}
-	if haveLoop || haveTools {
-		k.mu.Lock()
-		if haveLoop {
-			oldReqLoop = k.requestLoop
-			switch strings.ToLower(loop) {
-			case "on":
-				on := true
-				k.requestLoop = &on
-			case "off":
-				off := false
-				k.requestLoop = &off
-			}
+	// The per-request half. No lock and no saved "old" value: these go into the
+	// request's own context, so there is nothing shared to protect or restore.
+	if haveLoop {
+		switch strings.ToLower(loop) {
+		case "on":
+			on := true
+			rs.loop = &on
+		case "off":
+			off := false
+			rs.loop = &off
 		}
-		if haveTools {
-			oldToolsDisabled = k.requestToolsDisabled
-			oldReadOnly = k.requestReadOnly
-			disabled, enabled, readOnly := true, false, true
-			switch strings.ToLower(tools) {
-			case "off":
-				k.requestToolsDisabled = &disabled
-				k.requestReadOnly = nil
-			case "readonly", "read-only":
-				// Chat mode: tools enabled, but only read-only ones offered.
-				k.requestToolsDisabled = &enabled
-				k.requestReadOnly = &readOnly
-			case "on":
-				k.requestToolsDisabled = &enabled
-				k.requestReadOnly = nil
-			}
-		}
-		k.mu.Unlock()
 	}
-	return func() {
+	if haveTools {
+		enabled, readOnly := false, true
+		switch strings.ToLower(tools) {
+		case "off", "readonly", "read-only":
+			// "off" used to mean NO tools at all — the General mode fast path.
+			// It is now the same as read-only, and the no-tools path is gone.
+			//
+			// A conversational turn still needs to look things up: search the
+			// web for something current, read a PDF the user is asking about,
+			// check what a file actually says. A mode that cannot check
+			// anything does not answer more cheaply, it answers more
+			// confidently and less correctly — which is the failure the
+			// acceptance gates and graph adjudication exist to prevent. The
+			// schema cost that justified it is already handled by relevance
+			// filtering, and read-only tools cannot change anything, so the
+			// safety boundary that mattered is kept.
+			rs.toolsDisabled = &enabled
+			rs.readOnly = &readOnly
+		case "on":
+			rs.toolsDisabled = &enabled
+		}
+	}
+	if haveLoop || haveTools {
+		ctx = withRequestState(ctx, rs)
+	} else if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx, func() {
 		if haveMode && k.router != nil {
 			k.overrideMu.Lock()
 			k.modeDepth--
@@ -579,60 +587,8 @@ func (k *Kernel) ApplyRequestOverrides(mode, safety, loop, tools, brain string) 
 				k.router.SetForceLocal(*oldForceLocal)
 			}
 		}
-		if haveLoop || haveTools {
-			k.mu.Lock()
-			if haveLoop {
-				k.requestLoop = oldReqLoop
-			}
-			if haveTools {
-				k.requestToolsDisabled = oldToolsDisabled
-				k.requestReadOnly = oldReadOnly
-			}
-			k.mu.Unlock()
-		}
+		// loop/tools need no restore: they never left this request's context.
 	}
-}
-
-// loopEnabledForRequest reports whether the ReAct loop should run for the
-// current request. A per-request override (set by the web chat's Loop mode)
-// wins; otherwise the master toggle (agenticOn) decides — preserving the
-// CLI/single-query behaviour where the loop runs iff the user enabled it in
-// Settings. Mutex-safe.
-func (k *Kernel) loopEnabledForRequest() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.requestLoop != nil {
-		return *k.requestLoop
-	}
-	return k.agenticOn
-}
-
-// toolsDisabledForRequest reports whether tool access is disabled for the
-// current request (General mode fast path). When true, Execute takes a
-// lightweight single-call path with NO tools offered to the LLM — no DAG,
-// no worker agents, no approval popups. Mutex-safe.
-func (k *Kernel) toolsDisabledForRequest() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.requestToolsDisabled != nil {
-		return *k.requestToolsDisabled
-	}
-	return false
-}
-
-// readOnlyForRequest reports whether this is a Chat (read-only) request: only
-// read-only tools are offered and mutating tools are refused. Mutex-safe.
-func (k *Kernel) readOnlyForRequest() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.requestReadOnly != nil && *k.requestReadOnly
-}
-
-// AgenticLoopEnabled reports whether the ReAct loop is currently active.
-func (k *Kernel) AgenticLoopEnabled() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.agenticOn
 }
 
 // ReloadModels re-wires the model router with the latest config so that models
@@ -642,13 +598,21 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// effect immediately (not just at startup).
 	k.router.SetMode(parseRoutingModeLocal(cfg.RoutingMode))
 
+	// Without a client factory there is nothing to build a client with. The
+	// wiring layer always sets one; a kernel constructed in a test without it
+	// simply cannot reload models, which is not something a test does.
+	if k.newClient == nil {
+		k.log("model", "model reload skipped: no client factory wired")
+		return
+	}
+
 	// Register all models from the config map. RegisterModel dedups by name
 	// (upsert), so the primary — which also appears in cfg.Models — is not
 	// duplicated in the router's allModels slice. The tier map keeps the last
 	// writer per tier (used by Route/escalation); the allModels slice keeps
 	// every registered model (used by consensus fan-out).
 	for _, mc := range cfg.Models {
-		client := newConfiguredClient(mc)
+		client := k.newClient(mc)
 		k.router.RegisterModel(modelTierFromString(mc.Tier), client, mc.Model)
 		// Set the consensus role from config (empty = default "general").
 		k.router.SetModelRole(mc.Model, mc.Role)
@@ -658,7 +622,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// consensus, coding otherwise). This ensures the primary wins its tier
 	// slot for Route/escalation, and MarkPrimary below flags it as the
 	// consensus synthesizer.
-	primaryClient := newConfiguredClient(config.ModelConfig{
+	primaryClient := k.newClient(config.ModelConfig{
 		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model})
 	tier := primaryTierForMode(k.router.GetMode())
 	k.router.RegisterModel(tier, primaryClient, cfg.Model)
@@ -672,7 +636,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 		compModel := cfg.Model
 		if cfg.CompressorModel != "" {
 			if mc, ok := cfg.Models[cfg.CompressorModel]; ok {
-				compClient = newConfiguredClient(mc)
+				compClient = k.newClient(mc)
 				compModel = mc.Model
 			}
 		}
@@ -847,31 +811,58 @@ func (k *Kernel) Status() string {
 // view can offer something to open.
 func (k *Kernel) Runs() []RunSummary { return ListRuns(k.runsDir) }
 
-// ApplyPlanOverride forces the planning phase on ("always") or off ("never")
-// for one request, returning a restore func to defer. "" leaves the adaptive
-// decision alone.
-func (k *Kernel) ApplyPlanOverride(mode string) func() {
-	if mode != "always" && mode != "never" {
-		return func() {}
-	}
+// SetHooks installs the user's lifecycle hooks. The kernel owns the points that
+// are properties of a turn rather than of a tool call — the compaction boundary
+// and the end of the turn. The tool points live on the registry, which owns
+// tool execution.
+func (k *Kernel) SetHooks(h *hooks.Manager) {
 	k.mu.Lock()
-	prev := k.requestPlan
-	v := mode == "always"
-	k.requestPlan = &v
+	k.hooks = h
 	k.mu.Unlock()
-	return func() {
-		k.mu.Lock()
-		k.requestPlan = prev
-		k.mu.Unlock()
-	}
 }
 
-// planForced reports the per-request planning override, if any.
-func (k *Kernel) planForced() (force bool, set bool) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.requestPlan == nil {
-		return false, false
+// SetRecall replaces the memory gateway. A nil argument is ignored rather than
+// clearing it: an absent gateway means facts go nowhere, and there is no
+// caller for whom that is the intent.
+func (k *Kernel) SetRecall(m *recall.Manager) {
+	if m == nil {
+		return
 	}
-	return *k.requestPlan, true
+	k.mu.Lock()
+	k.recall = m
+	k.mu.Unlock()
+}
+
+// remember routes a fact through the gateway. Bookkeeping must never fail the
+// work it describes, so the error is returned for callers that care and
+// ignorable by those that do not.
+func (k *Kernel) remember(f recall.Fact) error {
+	k.mu.Lock()
+	m := k.recall
+	k.mu.Unlock()
+	if m == nil {
+		return fmt.Errorf("orchestrator: no memory gateway")
+	}
+	return m.Remember(f)
+}
+
+// graph returns the knowledge graph to WRITE through: the recall-backed writer
+// when a manager is installed, else the store itself.
+func (k *Kernel) graph() core.KnowledgeGraphStore {
+	k.mu.Lock()
+	m := k.recall
+	k.mu.Unlock()
+	if w := recall.Graph(m); w != nil {
+		return w
+	}
+	return k.memory.KG()
+}
+
+// PreferLocalForAux mirrors the config's use_local_for_aux onto the model
+// manager, so auxiliary work runs on a local model when one is healthy. This
+// is the setting RouteAux used to read; the ladder in modelport reads it now.
+func (k *Kernel) PreferLocalForAux(on bool) {
+	if k.models != nil {
+		k.models.PreferLocal(on)
+	}
 }

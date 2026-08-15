@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/darkcode/planwork"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestNeedsPlanAmend_ReadOnlyQuestionSkipsAmend(t *testing.T) {
 
 func TestParseWorkflowTaskStatuses(t *testing.T) {
 	workflow := "# Workflow\n\n- [x] T1: set up schema\n- [/] T2: build the API\n- [ ] T3: write tests\n"
-	got := parseWorkflowTaskStatuses(workflow)
+	got := planwork.TaskStatuses(workflow)
 	want := map[string]string{"T1": "done", "T2": "running", "T3": "pending"}
 	if len(got) != len(want) {
 		t.Fatalf("parseWorkflowTaskStatuses = %v, want %v", got, want)
@@ -66,7 +67,7 @@ func TestParseWorkflowTaskStatuses(t *testing.T) {
 }
 
 func TestParseWorkflowTaskStatuses_NoTaskLinesReturnsEmpty(t *testing.T) {
-	got := parseWorkflowTaskStatuses("# Workflow\n\nJust prose, no checklist.\n")
+	got := planwork.TaskStatuses("# Workflow\n\nJust prose, no checklist.\n")
 	if len(got) != 0 {
 		t.Errorf("expected no statuses, got %v", got)
 	}
@@ -76,7 +77,7 @@ func TestInjectNodeStatus_StampsClassesOntoMermaidFence(t *testing.T) {
 	plan := "# Plan\n\n## Architecture\n```mermaid\ngraph TD\n  T1[Schema]\n  T2[API]\n```\n"
 	workflow := "- [x] T1: set up schema\n- [/] T2: build the API\n"
 
-	got := injectNodeStatus(plan, workflow)
+	got := planwork.InjectNodeStatus(plan, workflow)
 
 	if !strings.Contains(got, "class T1 done") {
 		t.Errorf("missing 'class T1 done':\n%s", got)
@@ -96,7 +97,7 @@ func TestInjectNodeStatus_StampsClassesOntoMermaidFence(t *testing.T) {
 func TestInjectNodeStatus_NoMermaidFenceIsNoop(t *testing.T) {
 	plan := "# Plan\n\nJust prose, no diagram.\n"
 	workflow := "- [x] T1: set up schema\n"
-	got := injectNodeStatus(plan, workflow)
+	got := planwork.InjectNodeStatus(plan, workflow)
 	if got != plan {
 		t.Errorf("expected no-op when plan has no mermaid fence, got:\n%s", got)
 	}
@@ -104,7 +105,7 @@ func TestInjectNodeStatus_NoMermaidFenceIsNoop(t *testing.T) {
 
 func TestInjectNodeStatus_NoWorkflowTasksIsNoop(t *testing.T) {
 	plan := "# Plan\n```mermaid\ngraph TD\n  T1[Schema]\n```\n"
-	got := injectNodeStatus(plan, "no checklist here")
+	got := planwork.InjectNodeStatus(plan, "no checklist here")
 	if got != plan {
 		t.Errorf("expected no-op when workflow has no task lines, got:\n%s", got)
 	}

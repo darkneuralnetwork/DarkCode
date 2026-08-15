@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"github.com/darkcode/internal/repowalk"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,12 @@ func (t *FileTool) ListDir(ctx context.Context, args map[string]interface{}) *To
 
 	var result strings.Builder
 	for _, entry := range entries {
+		// Skip the agent's own state, dependency trees and build output. This
+		// listed .darkcode/ back to the model, which is how an agent ends up
+		// reasoning about its own bookkeeping instead of the user's code.
+		if entry.IsDir() && repowalk.SkipDir(entry.Name()) {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			continue

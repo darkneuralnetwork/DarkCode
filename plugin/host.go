@@ -77,6 +77,9 @@ func (h *Host) Load(binaryPath string) error {
 		return fmt.Errorf("plugin %s manifest parse failed: %w", binaryPath, err)
 	}
 
+	// The manifest describes the bundle; where it came from is ours to record.
+	mp.manifest.Path = binaryPath
+
 	// Handshake: init.
 	if _, err := mp.call(h.nextReqID(), MethodInit, nil); err != nil {
 		_ = cmd.Process.Kill()

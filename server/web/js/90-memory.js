@@ -1,120 +1,103 @@
-/* 90-memory.js — extracted from app.js (lines 1751-1842) */
-// MEMORY
-// ════════════════════════════════════════════════════════════════════════
+/* 90-memory.js — the Memory tab.
+ *
+ * Rewritten from a listing into a search.
+ *
+ * The old version called /api/memory and /api/knowledge on tab open, rendered
+ * fifty rows per tier, and hung the browser: /api/knowledge answered "show me
+ * the graph" with the entire graph, 16 MB of it. Paginating that would have
+ * produced a smaller dump of a thing nobody reads by scrolling.
+ *
+ * Memory is a retrieval system, so this asks it questions. Nothing loads a
+ * store on open — only counts, which are computed without sending contents.
+ */
+
+const MEM_SIGNAL_COLOR = {
+  keyword: "var(--accent-3)",
+  vector: "var(--cyan, #26c6da)",
+  kg: "var(--green, #22c55e)",
+};
+
+// loadMemory is the tab's entry point. It fetches counts only: an empty query
+// is the resting state, so opening the tab costs one small response.
 async function loadMemory() {
   try {
-    const res = await fetch(API + "/api/memory");
-    const data = await res.json();
-    renderMemList("mem-conversation", "mem-conversation-count", data.conversation, "message");
-    renderMemList("mem-episodic", "mem-episodic-count", data.episodic, "episode");
-    renderMemList("mem-semantic", "mem-semantic-count", data.semantic, "fact");
-    renderMemList("mem-procedural", "mem-procedural-count", data.procedural, "skill");
+    const res = await fetch(API + "/api/memory/search");
+    renderMemCounts((await res.json()).counts || {});
   } catch (err) {
-    ["conversation","episodic","semantic","procedural"].forEach((k) => {
-      const el = $("#mem-" + k); if (el) el.innerHTML = `<div class="mem-empty">Failed: ${esc(err.message)}</div>`;
-    });
+    const el = $("#mem-counts");
+    if (el) el.textContent = "Memory unavailable: " + err.message;
   }
 }
 
-function renderMemList(bodyId, countId, items, label) {
-  const body = $("#" + bodyId);
-  const countEl = $("#" + countId);
+function renderMemCounts(c) {
+  const el = $("#mem-counts");
+  if (!el) return;
+  const items = [
+    ["conversation", "in this chat"],
+    ["episodic", "past runs"],
+    ["semantic", "facts"],
+    ["procedural", "skills"],
+    ["graph_nodes", "graph nodes"],
+    ["graph_edges", "graph edges"],
+  ];
+  el.innerHTML = items
+    .map(([k, label]) => `<span><b style="color:var(--text)">${fmtNum(c[k] || 0)}</b> ${label}</span>`)
+    .join("");
+}
+
+async function searchMemory(q) {
+  const body = $("#mem-results");
   if (!body) return;
-  const arr = Array.isArray(items) ? items : [];
-  if (countEl) countEl.textContent = arr.length;
-  if (!arr.length) { body.innerHTML = `<div class="mem-empty">No ${label}s stored.</div>`; return; }
-  body.innerHTML = arr.slice(0, 50).map((item) => renderMemItem(item, label)).join("");
-}
-
-// renderMemItem renders a single memory entry in a readable, type-aware way
-// instead of dumping raw JSON. Falls back to a stringified view for unknown shapes.
-function renderMemItem(item, label) {
-  if (typeof item === "string") return `<div class="mem-item">${esc(item)}</div>`;
-  if (label === "fact") {
-    // Semantic memory entry
-    const cat = item.category ? `<span class="mem-tag">${esc(item.category)}</span>` : "";
-    return `<div class="mem-item"><div class="mem-item-key">${esc(item.key || "")}</div>${cat}<div class="mem-item-body">${esc((item.content || "").replace(/\n/g, "<br>"))}</div></div>`;
-  }
-  if (label === "skill") {
-    // Procedural memory (Skill)
-    const steps = (item.steps || []).map((s) => `<li>${esc(s.action || "")}</li>`).join("");
-    const meta = `use ${item.use_count || 0}× · ${Math.round((item.success_rate || 0) * 100)}% success`;
-    return `<div class="mem-item"><div class="mem-item-key">${esc(item.name || "")}</div><div class="mem-item-meta">${meta}</div><div class="mem-item-body">${esc(item.description || "")}</div>${steps ? `<ol class="mem-steps">${steps}</ol>` : ""}</div>`;
-  }
-  if (label === "episode") {
-    // Episodic memory entry
-    const cls = item.outcome === "success" ? "mem-ok" : "mem-bad";
-    const tools = (item.tools_used || []).join(", ");
-    return `<div class="mem-item"><div class="mem-item-key">${esc(item.task_goal || "")}</div><span class="mem-tag ${cls}">${esc(item.outcome || "")}</span>${tools ? `<span class="mem-tag">${esc(tools)}</span>` : ""}<div class="mem-item-body">${esc((item.summary || "").replace(/\n/g, "<br>"))}</div></div>`;
-  }
-  // message / fallback
-  const txt = (item && item.content != null) ? String(item.content) : JSON.stringify(item);
-  const role = item && item.role ? `<span class="mem-tag">${esc(item.role)}</span>` : "";
-  return `<div class="mem-item">${role}<div class="mem-item-body">${esc(txt)}</div></div>`;
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// KNOWLEDGE GRAPH
-// ════════════════════════════════════════════════════════════════════════
-async function loadKnowledgeGraph() {
-  const nodesC = $("#kg-nodes");
-  const edgesC = $("#kg-edges");
-  if (!nodesC || !edgesC) return;
-  nodesC.innerHTML = "<h3>Entities (Nodes)</h3><div class='mem-empty'>Loading...</div>";
-  edgesC.innerHTML = "<h3>Relationships (Edges)</h3><div class='mem-empty'>Loading...</div>";
+  body.innerHTML = `<div class="mem-empty">Searching…</div>`;
   try {
-    const res = await fetch(API + "/api/knowledge");
+    const res = await fetch(API + "/api/memory/search?q=" + encodeURIComponent(q));
     const data = await res.json();
-    const stats = $("#kg-stats"); if (stats) stats.textContent = `${data.node_count || 0} nodes / ${data.edge_count || 0} edges`;
-    nodesC.innerHTML = "<h3>Entities (Nodes)</h3>";
-    if (!data.nodes || !data.nodes.length) {
-      nodesC.innerHTML += "<div class='mem-empty'>No nodes in graph</div>";
-    } else {
-      data.nodes.forEach(n => {
-        nodesC.innerHTML += `<div class="kg-item"><span class="kg-badge">${esc(n.type)}</span> <strong>${esc(n.id)}</strong><br><span style="color:var(--text-mute)">${esc(n.content || n.label || "")}</span></div>`;
-      });
+    renderMemCounts(data.counts || {});
+    const hits = data.hits || [];
+    if (!hits.length) {
+      body.innerHTML = `<div class="mem-empty">Nothing recalled for “${esc(q)}”.</div>`;
+      return;
     }
-    edgesC.innerHTML = "<h3>Relationships (Edges)</h3>";
-    if (!data.edges || !data.edges.length) {
-      edgesC.innerHTML += "<div class='mem-empty'>No edges in graph</div>";
-    } else {
-      data.edges.forEach(e => {
-        edgesC.innerHTML += `<div class="kg-item"><strong>${esc(e.from)}</strong> <span style="color:var(--accent-3)">⟷</span> <strong>${esc(e.to)}</strong><br><span class="kg-badge" style="background:var(--bg-panel);margin-top:4px">${esc(e.relation)}</span> (weight: ${e.weight})</div>`;
-      });
-    }
-  } catch(e) {
-    nodesC.innerHTML = `<div class="mem-empty">Failed: ${esc(e.message)}</div>`;
-    edgesC.innerHTML = `<div class="mem-empty">Failed: ${esc(e.message)}</div>`;
+    body.innerHTML = hits.map(renderMemHit).join("");
+  } catch (err) {
+    body.innerHTML = `<div class="mem-empty">Search failed: ${esc(err.message)}</div>`;
   }
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// PROJECT INTELLIGENCE
-// ════════════════════════════════════════════════════════════════════════
-async function loadProjectIntel() {
-  try {
-    const res = await fetch(API + "/api/intelligence/summary");
-    if (!res.ok) return;
-    const data = await res.json();
-    
-    if ($("#intel-files")) $("#intel-files").textContent = data.indexed_files || 0;
-    if ($("#intel-symbols")) $("#intel-symbols").textContent = data.total_symbols || 0;
-    if ($("#intel-funcs")) $("#intel-funcs").textContent = data.functions || 0;
-    if ($("#intel-classes")) $("#intel-classes").textContent = data.types || 0;
-    
-    const depsC = $("#intel-deps");
-    if (depsC) {
-      if (data.packages > 0) {
-        depsC.innerHTML = `<div style="font-size: 13px; color: var(--text-dim);">
-          <div style="margin-bottom: 4px;"><strong>Packages:</strong> ${data.packages}</div>
-          <div style="margin-bottom: 4px;"><strong>Call Edges:</strong> ${data.call_edges}</div>
-          <div><strong>Language:</strong> <span class="kg-badge" style="background:var(--bg-panel);">${data.language}</span></div>
-        </div>`;
-      } else {
-        depsC.innerHTML = `<div class='mem-empty'>No dependency data available.</div>`;
-      }
-    }
-  } catch (e) {
-    console.error("Failed to load project intelligence:", e);
-  }
+// renderMemHit shows the signal that found each result. That is the whole
+// reason this view is worth having: it makes the fusion observable instead of
+// asserted, so a claim about the graph earning its keep can be watched.
+function renderMemHit(h) {
+  const sigs = String(h.signal || "").split("+").filter(Boolean);
+  const badges = sigs
+    .map((s) => `<span class="mem-tag" style="color:${MEM_SIGNAL_COLOR[s] || "var(--text-mute)"}">${esc(s)}</span>`)
+    .join(" ");
+  const when = h.timestamp ? fmtTime(h.timestamp) : "";
+  return `
+    <div class="mem-item" style="border-left: 2px solid var(--border); padding-left: 12px; margin-bottom: 14px;">
+      <div style="display:flex; justify-content:space-between; gap:12px; align-items:baseline;">
+        <div style="font-size:13px; color:var(--text);">${esc(h.goal || h.id || "(untitled)")}</div>
+        <div style="flex:none; font-size:10px; color:var(--text-mute);">${badges} ${esc(h.source || "")} ${when}</div>
+      </div>
+      ${h.snippet ? `<div style="font-size:12px; color:var(--text-dim); margin-top:4px;">${esc(h.snippet)}</div>` : ""}
+    </div>`;
 }
+
+function initMemorySearch() {
+  const form = document.getElementById("mem-search-form");
+  if (!form) return false;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = (document.getElementById("mem-q").value || "").trim();
+    if (q) searchMemory(q);
+  });
+  return true;
+}
+
+// The page fragment loads after this script, so wait for it the same way the
+// other tab modules do.
+(function () {
+  if (initMemorySearch()) return;
+  const obs = new MutationObserver(() => { if (initMemorySearch()) obs.disconnect(); });
+  obs.observe(document.body, { childList: true, subtree: true });
+})();

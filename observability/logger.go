@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -46,12 +47,25 @@ func Log() *Logger {
 	return disabledLogger
 }
 
-// InitLogger opens (or appends to) darkcode.log and stores it as the global
+// InitLogger opens (or appends to) the log at path and stores it as the global
 // logger. When console is true (CLI mode), human-readable lines are also
 // mirrored to stdout/stderr. A failure to open the file is non-fatal: the
 // logger still mirrors to the console.
-func InitLogger(console bool) {
-	l, err := NewLogger("darkcode.log")
+//
+// path is passed in rather than defaulted to "darkcode.log" because that was
+// relative to the working directory, which is the user's repository — so
+// pointing the agent at a project dropped a log file into it, and the agent
+// then listed that file back when asked what the project contained. Agent
+// state belongs with the rest of the agent's state. An empty path keeps the
+// old behaviour for callers that have nowhere better to put it.
+func InitLogger(console bool, path string) {
+	if path == "" {
+		path = "darkcode.log"
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	l, err := NewLogger(path)
 	if err != nil {
 		// Fall back to a console-only logger so boot diagnostics are not lost.
 		GlobalLogger = &Logger{console: console}

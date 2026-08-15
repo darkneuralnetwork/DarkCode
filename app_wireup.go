@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/darkcode/candidate"
@@ -13,10 +14,12 @@ import (
 	"github.com/darkcode/compression"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/ingest"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/observability"
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/permission"
@@ -24,13 +27,16 @@ import (
 	"github.com/darkcode/project"
 	"github.com/darkcode/provider"
 	"github.com/darkcode/provider/embedded"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/security"
 	"github.com/darkcode/server"
+	"github.com/darkcode/spill"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/tools/deterministic"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 )
 
 func (a *AppRunner) WireUp() {
@@ -46,7 +52,7 @@ func (a *AppRunner) WireUp() {
 
 func (a *AppRunner) initObservabilityAndSecurity() {
 	// 1. Boot Core Observability
-	observability.InitLogger(!a.Cfg.UIMode)
+	observability.InitLogger(!a.Cfg.UIMode, filepath.Join(defaultDarkcodeDir("logs"), "darkcode.log"))
 
 	// 2. Build the one process sandbox from config and report its status, so it
 	// is never a silent no-op. It's wired into the terminal tool in initTools.
@@ -66,8 +72,7 @@ func (a *AppRunner) initObservabilityAndSecurity() {
 
 	// 4. Discover and Load External Plugins
 	a.PluginHost = plugin.NewHost()
-	a.PluginLoader = plugin.NewLoader(a.PluginHost, "./plugins")
-	_ = a.PluginLoader.DiscoverAll()
+	a.loadExtensions()
 }
 
 // pingModelAsyncTimeout bounds a single connectivity probe — long enough to
@@ -136,6 +141,15 @@ func (a *AppRunner) initMemoryAndProjects() string {
 }
 
 func (a *AppRunner) initTools(memDir string) {
+	// The memory gateway comes first: every tool that remembers anything is
+	// handed it, so placement is one decision rather than one per caller.
+	rec, recErr := recall.New(a.MemSystem)
+	if recErr != nil {
+		fmt.Fprintf(os.Stderr, "Fatal: %v\n", recErr)
+		os.Exit(1)
+	}
+	a.Recall = rec
+
 	oldStore, err := memory.NewStore(filepath.Join(memDir, "memory.json"))
 	if err != nil {
 		oldStore = nil
@@ -156,19 +170,48 @@ func (a *AppRunner) initTools(memDir string) {
 		observability.Log().Info("shell commands run on "+backend.Name(), nil)
 	}
 	tools.RegisterBuiltinTools(a.Registry, oldStore, a.Router, a.Sandbox, backend)
-	tools.RegisterMemoryTool(a.Registry, tools.NewSemanticMemoryTool(oldStore, a.MemSystem))
+	memTool := tools.NewSemanticMemoryTool(oldStore, a.MemSystem)
+	memTool.Recall = rec
+	tools.RegisterMemoryTool(a.Registry, memTool)
 	tools.RegisterProjectTools(a.Registry, a.ProjectStore)
-	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG()))
+	a.Registry.Register(ingest.NewIngestTool(a.MemSystem, a.MemSystem.KG(), rec))
 
 	deterministic.RegisterAll(a.Registry)
+
+	// Oversized tool results are offloaded to disk rather than truncated away.
+	// A 200 KB file read used to reach the model as 4 KB with the remainder
+	// destroyed; now it arrives as a head/tail preview with a handle, and
+	// read_result pages through the rest. Failing to open the store is not
+	// fatal — without it the registry falls back to truncating, which is what
+	// happened before.
+	if st, err := spill.New(filepath.Join(memDir, "spill")); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: large tool results will be truncated rather than offloaded (%v)\n", err)
+	} else {
+		a.Registry.SetSpillStore(st)
+		tools.RegisterSpillTool(a.Registry, st)
+	}
+
+	// What the agent reads and writes is what it knows the state of. Recording
+	// the content hash per file is what lets the graph answer "which of my
+	// beliefs are about a version of this file that no longer exists" exactly,
+	// including for edits the agent made itself and has not committed.
+	if ws, err := os.Getwd(); err == nil {
+		mem := a.MemSystem
+		a.Registry.SetFileObserver(func(path, content string) {
+			mem.ObserveFile(ws, path, content)
+		})
+	}
 
 	// Register the KG re-sync tool and run an initial background sync so the
 	// graph holds typed symbol/import facts from boot. Async so a large
 	// workspace never delays startup.
 	deterministicKG := a.MemSystem.KG()
+	if w := recall.Graph(rec); w != nil {
+		deterministicKG = w
+	}
 	a.Registry.Register(deterministic.NewKGSyncTool(deterministicKG))
 	cwd, _ := os.Getwd()
-	if kg, ok := deterministicKG.(*memory.KnowledgeGraph); ok {
+	if kg, ok := a.MemSystem.KG().(*memory.KnowledgeGraph); ok {
 		// The health daemon watches structure in the background so a cycle or
 		// a coupling trend is noticed when it appears, not when somebody
 		// happens to run a report. It holds itself to a share of one core, so
@@ -324,6 +367,9 @@ func (a *AppRunner) initRouterAndModels() {
 		c.Effort = mc.ReasoningEffort
 		return c
 	}
+	// Persist it so the kernel's live model-reload (ReloadModels) can build
+	// clients through the same factory instead of importing llm itself.
+	a.createClient = createClient
 
 	for _, mc := range a.Cfg.Models {
 		t := core.ParseModelTier(mc.Tier)
@@ -604,6 +650,9 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	orchCfg.UseLocalForAux = a.Cfg.UseLocalForAux
 
 	a.Kernel = orchestrator.New(orchCfg, a.Router, a.Registry, a.MemSystem, a.Compressor, a.Emitter)
+	// Hand the kernel the client factory so ReloadModels can rebuild clients on
+	// a live config change without the orchestrator importing llm.
+	a.Kernel.SetClientFactory(a.createClient)
 	a.Recorder = tools.NewChangeRecorder()
 	a.Kernel.SetChangeRecorder(a.Recorder)
 
@@ -657,6 +706,72 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// the setting would be one nothing reads.
 	a.Kernel.SetDebate(a.Cfg.Debate)
 
+	// Same reason as debate, and more urgently: without this line the reviewer
+	// cannot run at all. SetReviewer had no caller outside tests, so 173 lines
+	// wired into the execute path were unreachable in a shipped binary.
+	a.Kernel.SetReviewer(a.Cfg.Reviewer)
+
+	// Placement is one decision. Without this the kernel writes the stores
+	// directly, which is correct but is what made it thirty-two decisions.
+	a.Kernel.SetRecall(a.Recall)
+
+	// Consolidation at the session boundary: the store is trimmed when a chat
+	// ends, which is the moment there is nothing in flight to disturb and the
+	// same boundary that already clears short-term memory. Registered before
+	// the hooks block so it runs whether or not any hook is configured.
+	a.MemSystem.OnNewSession(func() {
+		if n := a.MemSystem.Consolidate(a.Cfg.EpisodicMaxEntries); n > 0 {
+			fmt.Fprintf(os.Stderr, "Consolidated memory: forgot %d unused entries\n", n)
+		}
+	})
+
+	// Written-down procedure, loaded at startup rather than waiting for
+	// someone to type `/skills import`. The importer has existed all along;
+	// nothing called it, so a fresh install stayed ignorant of every runbook
+	// on the machine until a user knew the command existed.
+	a.importSkills()
+
+	// Now that the registry exists, the bundles loaded at startup can be
+	// connected: their tools registered, their commands offered by the console,
+	// their hooks folded in with the configured ones.
+	ext := a.connectExtensions()
+	a.ExtCommands = ext.Commands
+
+	// Lifecycle hooks: built once here and handed to each owner of a point.
+	// The registry owns the tool points because it owns tool execution; the
+	// kernel owns the compaction boundary; uiport carries turn_end for every
+	// surface (see app_postturn.go); memory announces the session boundary.
+	//
+	// A bad hooks block is a startup error rather than a warning: a hook filed
+	// under a misspelled point would never fire and never complain, which is
+	// exactly the silent-no-op failure this codebase has been bitten by before.
+	if h, err := hooks.New(mergeHooks(hookConfig(a.Cfg.Hooks), ext.Hooks)); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	} else if h != nil {
+		a.Hooks = h
+		h.SetLog(func(m string) { fmt.Fprintf(os.Stderr, "hook: %s\n", m) })
+		a.Registry.SetHooks(h)
+		a.Kernel.SetHooks(h)
+		a.MemSystem.OnNewSession(func() {
+			_ = h.Run(context.Background(), hooks.SessionStart, hooks.Context{})
+		})
+	}
+
+	// The auxiliary ladder in modelport reads this: with it on, summarising and
+	// classifying prefer a healthy local model before any metered one. It is
+	// the setting RouteAux used to consult.
+	a.Kernel.PreferLocalForAux(a.Cfg.UseLocalForAux)
+
+	// The one door from any surface into the kernel. Built here so every
+	// surface shares it and none can construct a request the others wouldn't.
+	port, err := uiport.New(a.Kernel, a.newPostTurnHooks()...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal: %v\n", err)
+		os.Exit(1)
+	}
+	a.Port = port
+
 	gate := a.Kernel.Gate()
 	gate.SetDenyRules(a.Cfg.DenyRules)
 	gate.SetAllowedTools(a.Policy.Tools.AllowOnly)
@@ -672,9 +787,17 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+			// An approval verdict is a closed question. It ran unbounded and
+			// at the model's default temperature, so the call that decides
+			// whether a dangerous tool runs could return an essay and could
+			// return a different answer to the same question twice. Classify
+			// is deterministic and short by policy.
+			_, maxTok, temp := modelport.PolicyFor(modelport.PurposeClassify)
 			resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-				Model:    model,
-				Messages: []core.Message{{Role: core.RoleUser, Content: permission.JudgePrompt(req)}},
+				Model:       model,
+				Messages:    []core.Message{{Role: core.RoleUser, Content: permission.JudgePrompt(req)}},
+				MaxTokens:   &maxTok,
+				Temperature: &temp,
 			})
 			if err != nil || resp == nil || len(resp.Choices) == 0 {
 				return false
@@ -726,7 +849,7 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	modeApprover := permission.NewModeAwareApprover(serverApprover)
 	gate.SetApprover(modeApprover.Approve)
 	a.Kernel.SetModeApprover(modeApprover)
-	a.Server = server.NewServer(a.Cfg, a.Registry, a.MemSystem, a.Emitter, a.Kernel, serverApprover, a.ProjectStore, a.SourceMgr)
+	a.Server = server.NewServer(a.Cfg, a.Registry, a.MemSystem, a.Emitter, a.Kernel, a.Port, serverApprover, a.ProjectStore, a.SourceMgr)
 }
 
 // localProviderID names the built-in provider that serves models running on
@@ -782,4 +905,153 @@ func (a *AppRunner) loadPolicy() {
 		fmt.Fprintf(os.Stderr, "policy: %s applied\n", path)
 		return
 	}
+}
+
+// hookConfig converts the persisted hook blocks into the shapes package hooks
+// validates. The two structs are identical on purpose: config does not import a
+// package that shells out, and hooks does not import config.
+func hookConfig(cfg map[string][]config.HookConfig) map[string][]hooks.Hook {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string][]hooks.Hook, len(cfg))
+	for point, list := range cfg {
+		for _, h := range list {
+			out[point] = append(out[point], hooks.Hook{Match: h.Match, Run: h.Run, Timeout: h.Timeout})
+		}
+	}
+	return out
+}
+
+// defaultSkillDirs are searched when the config names none: one per-user, one
+// per-workspace. Neither has to exist — a missing directory is the normal case
+// and is silently skipped, because "you have no runbooks" is not a warning.
+func defaultSkillDirs() []string {
+	var dirs []string
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".darkcode", "skills"))
+	}
+	return append(dirs, defaultDarkcodeDir("skills"))
+}
+
+// importSkills loads every configured skill directory into procedural memory.
+//
+// Failures are reported and never fatal. A malformed runbook should cost that
+// runbook, not the session — the same rule the directory walk already applies
+// to one unparseable file among twenty.
+func (a *AppRunner) importSkills() {
+	if a.MemSystem == nil {
+		return
+	}
+	dirs := a.Cfg.SkillDirs
+	if len(dirs) == 0 {
+		dirs = defaultSkillDirs()
+	}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		dir = expandHome(dir)
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		found, err := a.MemSystem.ImportSkills(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skills in %s: %v\n", dir, err)
+			continue
+		}
+		if n := memory.CountImported(found); n > 0 {
+			fmt.Fprintf(os.Stderr, "Loaded %d skill(s) from %s\n", n, dir)
+		}
+	}
+}
+
+// expandHome resolves a leading ~ so a config may write ~/.darkcode/skills.
+func expandHome(p string) string {
+	if !strings.HasPrefix(p, "~") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~"))
+}
+
+// defaultExtensionDirs are searched for bundles: one per-user, one
+// per-workspace, plus ./plugins for anything installed before extensions had a
+// home of their own.
+func defaultExtensionDirs() []string {
+	var dirs []string
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".darkcode", "extensions"))
+	}
+	return append(dirs, defaultDarkcodeDir("extensions"), "./plugins")
+}
+
+// loadExtensions discovers bundles and connects what they declare.
+//
+// The connecting is the point. The host has always loaded plugins and stored
+// them; nothing read the manifests back, so a bundle declaring three tools
+// loaded cleanly, listed in /plugins, and could not be called. Registering the
+// tools is what makes an extension an extension.
+//
+// A load failure is now reported. It used to be assigned to _, so a bundle that
+// failed its handshake was indistinguishable from one that was never there.
+func (a *AppRunner) loadExtensions() {
+	dirs := a.Cfg.ExtensionDirs
+	if len(dirs) == 0 {
+		dirs = defaultExtensionDirs()
+	}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		dir = expandHome(dir)
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		loader := plugin.NewLoader(a.PluginHost, dir)
+		if err := loader.DiscoverAll(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: extensions in %s: %v\n", dir, err)
+		}
+		a.PluginLoader = loader
+	}
+}
+
+// connectExtensions registers the loaded bundles' tools and returns their
+// commands and hooks. Split from loadExtensions because the registry and the
+// hook manager do not exist yet when the bundles are loaded.
+func (a *AppRunner) connectExtensions() tools.Extensions {
+	ext := tools.RegisterExtensions(a.Registry, a.PluginHost)
+	for _, r := range ext.Rejected {
+		fmt.Fprintf(os.Stderr, "Warning: extension: %s\n", r)
+	}
+	if n := len(ext.Tools); n > 0 {
+		fmt.Fprintf(os.Stderr, "Extensions: registered %d tool(s)\n", n)
+	}
+	return ext
+}
+
+// mergeHooks folds a bundle's hooks in with the user's own.
+//
+// The user's come first at each point, so a configured gate runs before an
+// extension's and can refuse without the extension ever executing. An
+// extension that could pre-empt the config would be an extension that can
+// disable the user's own guard.
+func mergeHooks(cfg map[string][]hooks.Hook, ext []tools.ExtensionHook) map[string][]hooks.Hook {
+	if len(ext) == 0 {
+		return cfg
+	}
+	if cfg == nil {
+		cfg = map[string][]hooks.Hook{}
+	}
+	for _, e := range ext {
+		cfg[e.Point] = append(cfg[e.Point], hooks.Hook{Match: e.Match, Run: e.Run, Timeout: e.Timeout})
+	}
+	return cfg
 }

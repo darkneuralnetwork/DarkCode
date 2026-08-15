@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/darkcode/core"
@@ -149,9 +151,37 @@ func TestPropagateConfidenceHopZeroIsLocal(t *testing.T) {
 
 // Outside a git repository there is no HEAD to compare against, so nothing is
 // reported stale rather than everything.
-func TestStaleFilesOutsideGitRepoReturnsNothing(t *testing.T) {
+// TestStaleFilesDoesNotNeedGit — REPURPOSED. This used to assert that
+// staleness returns nothing outside a git repository, which was true only
+// because the answer was computed by comparing a recorded commit to HEAD.
+// Staleness is content-based now, so it works in a directory that was never a
+// repository at all — and the old assertion would have passed for the wrong
+// reason regardless, since the seeded nodes carry no observed content.
+func TestStaleFilesDoesNotNeedGit(t *testing.T) {
 	kg := seedGraph(t)
-	if out := kg.StaleFiles(t.TempDir()); out != nil {
-		t.Errorf("StaleFiles outside a repo = %+v, want nil", out)
+	ws := t.TempDir() // deliberately not a repository
+
+	// Nothing observed yet: nothing stale.
+	if out := kg.StaleFiles(ws); len(out) != 0 {
+		t.Fatalf("unobserved files reported stale: %+v", out)
+	}
+
+	// Observe one, then change it on disk. No commits are involved anywhere.
+	path := filepath.Join(ws, "tracked.go")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = kg.AddNode(&core.KGNode{
+		ID: "file:tracked.go", Label: "tracked.go", Type: core.KGNodeFile,
+		Properties: map[string]string{fileHashProperty: ContentHash("v1")},
+		Confidence: 1.0,
+	})
+	if err := os.WriteFile(path, []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := kg.StaleFiles(ws); len(out) != 1 {
+		t.Errorf("StaleFiles = %d entries outside a repo, want 1 — staleness must "+
+			"not depend on git", len(out))
 	}
 }

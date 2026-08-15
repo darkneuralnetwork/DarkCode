@@ -12,8 +12,10 @@ import (
 
 	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/llm"
 	"github.com/darkcode/permission"
+	"github.com/darkcode/spill"
 	"github.com/darkcode/ui"
 )
 
@@ -42,6 +44,20 @@ type ToolEntry struct {
 	// fetches) and never mutates the filesystem/system. Chat mode offers only
 	// read-only tools so it can answer from the project without writing.
 	ReadOnly bool
+
+	// ReadOnlyWhen decides read-only-ness per CALL when a tool has both kinds
+	// of operation. nil means the static ReadOnly flag decides.
+	//
+	// A single flag cannot describe `pdf`: info and extract_text observe,
+	// while merge, split and rotate write new files. Flagged read-only it
+	// would let a Chat turn write; flagged otherwise — which is what shipped —
+	// a Chat turn cannot read a PDF at all, and the same was true of research
+	// and graph_query. That is how a "conversation" mode ends up unable to
+	// look anything up.
+	//
+	// The permission gate already classifies risk from the tool AND its
+	// arguments. This is the same idea for the read-only boundary.
+	ReadOnlyWhen func(args map[string]interface{}) bool
 }
 
 // Registry holds all registered tools. Thread-safe.
@@ -53,6 +69,19 @@ type Registry struct {
 	emitter  *ui.EventEmitter    // optional event emitter for file_change events
 	breaker  *toolBreaker        // per-tool circuit breaker (self-healing runtime)
 	ckpt     *checkpoint.Manager // optional pre-mutation snapshotter
+	// spill offloads oversized tool results to disk and leaves a preview plus a
+	// retrievable handle in the context. nil = fall back to truncation. The
+	// registry owns this because it owns tool execution: what a tool result
+	// looks like once it reaches the model is a property of running the tool,
+	// not of whichever loop happened to call it.
+	spill *spill.Store
+	// observeFile records what the agent has seen of a file so the knowledge
+	// graph knows which of its beliefs are about a version that no longer
+	// exists. nil = not recording. See memory.System.ObserveFile.
+	observeFile func(path, content string)
+	// hooks runs the user's configured commands around a tool call. nil = none
+	// configured, which is the common case and costs nothing.
+	hooks *hooks.Manager
 }
 
 // NewRegistry creates an empty tool registry.
@@ -205,6 +234,20 @@ func (r *Registry) IsReadOnly(name string) bool {
 	return false
 }
 
+// readOnlyCall reports whether THIS invocation only observes. Falls back to
+// the static flag, so a tool without ReadOnlyWhen behaves exactly as before —
+// and a nil entry is not read-only, because the safe default for "I cannot
+// tell" is to refuse in a read-only request.
+func (e *ToolEntry) readOnlyCall(args map[string]interface{}) bool {
+	if e == nil {
+		return false
+	}
+	if e.ReadOnlyWhen != nil {
+		return e.ReadOnlyWhen(args)
+	}
+	return e.ReadOnly
+}
+
 // ToolDef / FunctionDef mirror the llm.ToolSchema but live here so the
 // registry package doesn't depend on the llm package (avoids import cycles).
 type ToolDef struct {
@@ -322,8 +365,8 @@ func (r *Registry) snapshot(tool string) {
 // sub-agent cannot switch anything and would waste turns looking for the
 // control. Telling it the truth — that its role has no write authority — is
 // what makes it stop trying.
-func readOnlyDeny(ctx context.Context, name string, entry *ToolEntry) *ToolResult {
-	if IsReadOnlyContext(ctx) && !entry.ReadOnly {
+func readOnlyDeny(ctx context.Context, name string, entry *ToolEntry, args map[string]interface{}) *ToolResult {
+	if IsReadOnlyContext(ctx) && !entry.readOnlyCall(args) {
 		reason := core.ReadOnlyReason(ctx)
 		if reason == "" {
 			reason = "this is a read-only (Chat) request — switch to Build mode to modify files"
@@ -400,7 +443,7 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 	}
 
 	// Read-only policy + permission gate (shared with the direct-execute path).
-	if blocked := readOnlyDeny(ctx, call.Function.Name, entry); blocked != nil {
+	if blocked := readOnlyDeny(ctx, call.Function.Name, entry, args); blocked != nil {
 		result.Result = blocked
 		return result
 	}
@@ -420,6 +463,11 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 			Error: fmt.Sprintf("tool %q is temporarily unavailable (quarantined after repeated failures; retry in ~%s, or use a different approach)",
 				call.Function.Name, remaining.Round(time.Second)),
 		}
+		return result
+	}
+
+	if blocked := r.preToolHook(ctx, call.Function.Name, args); blocked != nil {
+		result.Result = blocked
 		return result
 	}
 
@@ -453,6 +501,8 @@ func (r *Registry) dispatchOne(ctx context.Context, call core.ToolCall) Dispatch
 	// Record what changed (files, commands, git ops) for the activity log
 	// and the inline after-query summary.
 	r.recordChange(ctx, call.Function.Name, args, res, beforePath, beforeContent, beforeExists, started)
+	r.noteFileObservation(ctx, call.Function.Name, args, res)
+	r.postToolHook(ctx, call.Function.Name, args, res)
 
 	return result
 }
@@ -699,7 +749,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 
 	// Read-only policy + permission gate (shared with the ReAct/DAG dispatch
 	// path) — the direct-execute surface must gate identically.
-	if blocked := readOnlyDeny(ctx, name, entry); blocked != nil {
+	if blocked := readOnlyDeny(ctx, name, entry, args); blocked != nil {
 		return blocked, nil
 	}
 	if denied := r.gateDeny(name, args); denied != nil {
@@ -710,6 +760,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	// HTP tool-execution surface can't hammer a quarantined tool.
 	if ok, remaining := r.breaker.allow(name); !ok {
 		return nil, fmt.Errorf("tool %s is temporarily unavailable (quarantined after repeated failures; retry in ~%s)", name, remaining.Round(time.Second))
+	}
+
+	if blocked := r.preToolHook(ctx, name, args); blocked != nil {
+		return blocked, nil
 	}
 
 	if !entry.ReadOnly {
@@ -732,6 +786,12 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	} else {
 		r.breaker.recordFailure(name)
 	}
+	// Both dispatch surfaces must record what was seen, for the same reason
+	// both must gate identically: a file read through /api/tools/execute is
+	// still a file the agent has looked at, and a belief formed on one path
+	// that the other cannot invalidate is worse than no belief.
+	r.noteFileObservation(ctx, name, args, result)
+	r.postToolHook(ctx, name, args, result)
 	return result, nil
 }
 
@@ -769,6 +829,79 @@ func (r *Registry) SetCheckpointer(m *checkpoint.Manager) {
 	r.mu.Unlock()
 }
 
+// SetFileObserver installs the hook that records file contents the agent has
+// seen. Called for reads AND writes: an agent that edits a file and does not
+// update what it believes about it is wrong about the thing it just changed.
+func (r *Registry) SetFileObserver(fn func(path, content string)) {
+	r.mu.Lock()
+	r.observeFile = fn
+	r.mu.Unlock()
+}
+
+// noteFileObservation reports a file's current contents to the observer. It
+// runs after a successful file tool call, reading from disk rather than from
+// the tool's output, because read_file returns numbered lines and write_file
+// returns a byte count — neither is the file.
+func (r *Registry) noteFileObservation(ctx context.Context, tool string, args map[string]interface{}, res *ToolResult) {
+	switch tool {
+	case "read_file", "write_file", "patch", "replace_file_content":
+	default:
+		return
+	}
+	if res == nil || !res.Success {
+		return
+	}
+	r.mu.RLock()
+	observe := r.observeFile
+	r.mu.RUnlock()
+	if observe == nil {
+		return
+	}
+	path, _ := args["path"].(string)
+	if path == "" {
+		return
+	}
+	path = expandPath(ctx, path)
+	// The tool has already run and the permission gate has already decided the
+	// model may look at this path. This read is separate: its result is
+	// persisted into the knowledge graph, so an approved one-off read of a file
+	// outside the workspace would become a durable belief about it. Confine the
+	// observation, not the tool. Fails closed — no workspace, no observation.
+	safe, err := withinWorkspace(ctx, path)
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(safe)
+	if err != nil {
+		return
+	}
+	observe(safe, string(data))
+}
+
+// SetSpillStore installs the store used to offload oversized tool results.
+// Without one, results are truncated and the overflow is lost — see the spill
+// package for why that was the largest avoidable source of both token waste
+// and lost information in the agent.
+func (r *Registry) SetSpillStore(s *spill.Store) {
+	r.mu.Lock()
+	r.spill = s
+	r.mu.Unlock()
+}
+
+// ObserveResult returns the text for a tool result as it should appear in the
+// model's context: unchanged when small, and a head/tail preview carrying a
+// read_result handle when large.
+//
+// Every path that turns a tool result into a message goes through here, so the
+// ReAct loop and a sub-agent cannot disagree about how much of a result the
+// model gets to see.
+func (r *Registry) ObserveResult(tool, output string) string {
+	r.mu.RLock()
+	st := r.spill
+	r.mu.RUnlock()
+	return spill.Observe(st, tool, output, spill.DefaultThreshold)
+}
+
 // SetEventEmitter installs an emitter used to broadcast file_change events.
 func (r *Registry) SetEventEmitter(em *ui.EventEmitter) {
 	r.mu.Lock()
@@ -780,4 +913,76 @@ func (r *Registry) SetEventEmitter(em *ui.EventEmitter) {
 // AllEntries returns all registered tool entries (for metadata queries).
 func (r *Registry) AllEntries() []*ToolEntry {
 	return r.List()
+}
+
+// readOnlyOperations builds a ReadOnlyWhen for tools that dispatch on a named
+// sub-command, where some sub-commands observe and others write. It reads
+// "operation" or "action", the two keys the built-in tools use.
+//
+// It answers false for an unrecognised or missing operation, so a new write
+// operation added later is refused in a read-only request until someone
+// deliberately lists it — the safe direction for a boundary nobody will
+// remember to revisit.
+func readOnlyOperations(observing ...string) func(map[string]interface{}) bool {
+	allowed := make(map[string]bool, len(observing))
+	for _, op := range observing {
+		allowed[op] = true
+	}
+	return func(args map[string]interface{}) bool {
+		op, _ := args["operation"].(string)
+		if op == "" {
+			op, _ = args["action"].(string)
+		}
+		return allowed[op]
+	}
+}
+
+// ============================================================================
+// LIFECYCLE HOOKS
+// ============================================================================
+
+// SetHooks installs the user's lifecycle hooks. Optional; nil disables them.
+//
+// The registry owns the tool points because it owns tool execution: a tool run
+// through /api/tools/execute is as much a tool run as one the loop dispatched,
+// and a gate that only one of the two surfaces honours is not a gate. Both
+// dispatch paths call preToolHook/postToolHook rather than inlining the logic,
+// so the two cannot drift the way the permission check nearly did.
+func (r *Registry) SetHooks(h *hooks.Manager) {
+	r.mu.Lock()
+	r.hooks = h
+	r.mu.Unlock()
+}
+
+// preToolHook runs the pre_tool hooks and returns a denial result when one
+// refused. A refusal is shaped like a permission denial because that is what it
+// is: the user said no in advance, in a config file rather than at a prompt.
+func (r *Registry) preToolHook(ctx context.Context, tool string, args map[string]interface{}) *ToolResult {
+	r.mu.RLock()
+	h := r.hooks
+	r.mu.RUnlock()
+	if !h.Configured(hooks.PreTool) {
+		return nil
+	}
+	err := h.Run(ctx, hooks.PreTool, hooks.Context{Tool: tool, File: hooks.FileArg(args)})
+	if err == nil {
+		return nil
+	}
+	return &ToolResult{Name: tool, Success: false, Error: err.Error()}
+}
+
+// postToolHook runs the post_tool hooks. It cannot fail the tool — the work is
+// already done, and failing it here would report a success as a failure.
+func (r *Registry) postToolHook(ctx context.Context, tool string, args map[string]interface{}, res *ToolResult) {
+	r.mu.RLock()
+	h := r.hooks
+	r.mu.RUnlock()
+	if !h.Configured(hooks.PostTool) {
+		return
+	}
+	_ = h.Run(ctx, hooks.PostTool, hooks.Context{
+		Tool:    tool,
+		File:    hooks.FileArg(args),
+		Success: res != nil && res.Success,
+	})
 }

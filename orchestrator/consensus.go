@@ -2,11 +2,10 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/darkcode/adjudicate"
 	"github.com/darkcode/core"
-	"github.com/darkcode/memory"
 )
 
 func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble string) (string, error) {
@@ -32,74 +31,42 @@ func (k *Kernel) runConsensus(ctx context.Context, userGoal string, preamble str
 	return k.adjudicateCtx(ctx, userGoal, consensus), nil
 }
 
-// adjudicate settles a consensus round on structural evidence rather than on
-// the synthesiser's judgement.
+// adjudicateCtx settles a consensus round through the adjudication component.
 //
-// Aggregating opinions cannot detect a confidently wrong contributor. The
-// graph can: each candidate's checkable claims — this symbol exists, it lives
-// in that file, this package imports that one — are verified, and a candidate
-// whose claims survive better than the synthesis replaces it.
-//
-// The synthesis keeps ties. It saw every contribution, so it is the right
-// default whenever the evidence does not actually distinguish the candidates.
-func (k *Kernel) adjudicate(consensus *core.ConsensusResult) string {
-	return k.adjudicateCtx(context.Background(), "", consensus)
-}
-
-// adjudicateCtx is adjudicate with the context and goal needed to fall back to
-// a debate round when the graph cannot decide.
+// The decision itself — check the claims against the graph, and only when
+// checking is silent let the two most divergent answers critique each other
+// once — lives in package adjudicate. The kernel supplies the pieces (model
+// manager, evidence, the bus to record on, the runtime toggle) and calls it,
+// rather than containing 375 lines of it.
 func (k *Kernel) adjudicateCtx(ctx context.Context, goal string, consensus *core.ConsensusResult) string {
-	kg, ok := k.memory.KG().(*memory.KnowledgeGraph)
-	if !ok || kg == nil || consensus == nil {
-		return consensus.Synthesized
+	if consensus == nil {
+		return ""
 	}
+	adj := adjudicate.New(k.models, k.data,
+		adjudicate.WithRecorder(critiqueBus{k}),
+		adjudicate.WithDebate(k.debateEnabled),
+		adjudicate.WithLog(func(m string) { k.log("consensus", m) }),
+	)
+	res := adj.Verdict(ctx, goal, consensus)
 
-	candidates := []string{consensus.Synthesized}
-	labels := []string{"synthesis"}
-	for _, c := range consensus.Contributions {
-		if strings.TrimSpace(c.Output) != "" {
-			candidates = append(candidates, c.Output)
-			labels = append(labels, c.Model)
-		}
+	// How the verdict was reached is emitted, not discarded.
+	//
+	// Everything but Answer used to be dropped here — the method, whether an
+	// exchange ran, and the transcript of it. So the one feature that makes
+	// multi-model worth its cost, the record of models checking each other, was
+	// computed on every consensus turn and thrown away. An exchange nobody can
+	// read is indistinguishable from one that never happened.
+	if k.emitter != nil {
+		k.emitter.EmitConsensus(map[string]interface{}{
+			"method":       res.Method,
+			"debated":      res.Debated,
+			"transcript":   res.Transcript,
+			"note":         res.Note,
+			"models":       len(consensus.Contributions),
+			"contributors": contributorNames(consensus),
+		}, consensus.Conflict)
 	}
-	if len(candidates) < 2 {
-		return consensus.Synthesized
-	}
-
-	best, supports := kg.AdjudicateCandidates(candidates)
-	if best < 0 || supports[0].Checked == 0 {
-		// Nothing checkable. This branch used to return the synthesis and move
-		// on, which is the one case where the models disagreeing is all the
-		// information there is — and where letting them answer each other is
-		// worth a call. Everything else is settled by evidence, which is both
-		// cheaper and better.
-		if consensus.Conflict {
-			if d := k.resolveByDebate(ctx, goal, consensus); d.Ran {
-				k.log("consensus", "Debate settled a conflict the graph could not check")
-				return d.Resolved
-			}
-		}
-		return consensus.Synthesized
-	}
-
-	// Report what the graph refuted in the answer we are about to return,
-	// so a surviving error is visible rather than silently authoritative.
-	chosen := consensus.Synthesized
-	if best != 0 && supports[best].Score() > supports[0].Score() {
-		chosen = candidates[best]
-		k.log("consensus", fmt.Sprintf(
-			"Adjudicated on structure: %s (%d/%d claims verified) over the synthesis (%d/%d)",
-			labels[best], supports[best].Verified, supports[best].Checked,
-			supports[0].Verified, supports[0].Checked))
-	}
-	if wrong := supports[best].Contradicted(); len(wrong) > 0 && best == 0 {
-		var lines []string
-		for _, c := range wrong {
-			lines = append(lines, "- "+c.Detail)
-		}
-		chosen += "\n\n_⚠ The code graph contradicts part of this answer:_\n" + strings.Join(lines, "\n")
-	}
-	return chosen
+	return res.Answer
 }
 
 // runConsensusOnOutput runs a consensus synthesis round on an already-produced
@@ -173,3 +140,15 @@ func (k *Kernel) mergeWithConsensus(ctx context.Context, results []*core.SubAgen
 // ============================================================================
 // EPISODIC MEMORY STORAGE
 // ============================================================================
+
+// contributorNames lists which models answered, so the interface can say who
+// took part rather than only how many.
+func contributorNames(c *core.ConsensusResult) []string {
+	out := make([]string, 0, len(c.Contributions))
+	for _, x := range c.Contributions {
+		if x.Error == "" && strings.TrimSpace(x.Output) != "" {
+			out = append(out, x.Model)
+		}
+	}
+	return out
+}

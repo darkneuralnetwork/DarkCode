@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/darkcode/core"
-	"github.com/darkcode/memory"
+	"github.com/darkcode/datasource"
+	"github.com/darkcode/recall"
 )
 
 // skill_extractor.go — the learning loop.
@@ -58,7 +59,7 @@ func (k *Kernel) extractSkill(goal string, results []*core.SubAgentResult, succe
 		if len(steps) > len(existing.Steps) {
 			existing.Steps = steps // keep the richer trace
 		}
-		_ = k.memory.ProceduralAdd(existing)
+		_ = k.remember(recall.Procedure{Skill: existing})
 		return
 	}
 
@@ -72,7 +73,7 @@ func (k *Kernel) extractSkill(goal string, results []*core.SubAgentResult, succe
 		SuccessRate: 1.0,
 		Metadata:    map[string]string{"tools": strings.Join(toolsUsed, ",")},
 	}
-	_ = k.memory.ProceduralAdd(skill)
+	_ = k.remember(recall.Procedure{Skill: skill})
 	k.log("improve", fmt.Sprintf("Extracted skill: %s (%d steps)", skillName, len(steps)))
 }
 
@@ -134,7 +135,7 @@ func (k *Kernel) recallSkill(goal string) string {
 	// here, so "worked 0 time(s), 0% success" would be both untrue and
 	// actively harmful — it teaches the model to distrust good guidance for
 	// the sole reason that it is new. Say which kind it is.
-	if s.Metadata["origin"] == memory.OriginImported {
+	if s.Metadata["origin"] == datasource.OriginImported {
 		fmt.Fprintf(&b, "## Relevant Written Procedure — %s\n", s.Name)
 		b.WriteString("_Authored guidance, not measured here")
 		if s.UseCount > 0 {
@@ -159,7 +160,7 @@ func (k *Kernel) recallSkill(goal string) string {
 	// unhelpful skill's success rate can fall on the next outcome.
 	now := time.Now()
 	s.LastUsed = &now
-	_ = k.memory.ProceduralAdd(s)
+	_ = k.remember(recall.Procedure{Skill: s})
 	return b.String()
 }
 
@@ -184,16 +185,6 @@ func keywordSet(s string) map[string]bool {
 	}
 	return out
 }
-
-// compressionMinHistory is the minimum STM length before the compressor is
-// invoked. Below this, the conversation is short enough that an LLM
-// summarization call costs more than it saves.
-const compressionMinHistory = 8
-
-// compressionMinGrowth is the minimum number of new messages since the last
-// compression before we compress again. Prevents re-compressing the same
-// window twice when two requests land while STM is between thresholds.
-const compressionMinGrowth = 4
 
 // compressionKeepRecent is how many of the most recent messages are kept
 // verbatim after compression (for conversational continuity: the compressed

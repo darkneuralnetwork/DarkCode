@@ -15,7 +15,7 @@ func TestApplyRequestOverrides_Brain(t *testing.T) {
 	}
 
 	// local → pin to local, then restore.
-	restore := deps.Kernel.ApplyRequestOverrides("", "", "", "", "local")
+	restore := mustOverride(deps.Kernel, "", "", "", "", "local")
 	if !r.ForceLocal() {
 		t.Fatal("brain=local should pin forceLocal=true")
 	}
@@ -26,7 +26,7 @@ func TestApplyRequestOverrides_Brain(t *testing.T) {
 
 	// Pin via config, then a cloud request should unpin for that request only.
 	r.SetForceLocal(true)
-	restore = deps.Kernel.ApplyRequestOverrides("", "", "", "", "cloud")
+	restore = mustOverride(deps.Kernel, "", "", "", "", "cloud")
 	if r.ForceLocal() {
 		t.Fatal("brain=cloud should unpin forceLocal for the request")
 	}
@@ -37,7 +37,7 @@ func TestApplyRequestOverrides_Brain(t *testing.T) {
 	r.SetForceLocal(false)
 
 	// empty brain leaves forceLocal unchanged.
-	restore = deps.Kernel.ApplyRequestOverrides("", "", "", "", "")
+	restore = mustOverride(deps.Kernel, "", "", "", "", "")
 	if r.ForceLocal() {
 		t.Fatal("brain='' should not change forceLocal")
 	}

@@ -105,6 +105,13 @@ type ImportedSkill struct {
 // when …", which is exactly what TriggerCond means, so it is carried into both
 // rather than invented.
 func ParseSkillFile(path string, content []byte) (*core.Skill, error) {
+	return parseSkillFile(path, content, maxImportedSteps)
+}
+
+// parseSkillFile is ParseSkillFile with the step budget exposed, so a directory
+// import can keep more candidates than it will finally store and let
+// dropSharedBoilerplate decide which of them were ever this file's own.
+func parseSkillFile(path string, content []byte, budget int) (*core.Skill, error) {
 	body := string(content)
 
 	m := frontmatterRe.FindStringSubmatch(body)
@@ -129,7 +136,7 @@ func ParseSkillFile(path string, content []byte) (*core.Skill, error) {
 		return nil, fmt.Errorf("no description in frontmatter")
 	}
 
-	steps := extractSteps(body[len(m[0]):])
+	steps := extractSteps(body[len(m[0]):], budget)
 	if len(steps) == 0 {
 		return nil, fmt.Errorf("no procedure found — headings and numbered lists are what become steps")
 	}
@@ -153,7 +160,7 @@ func ParseSkillFile(path string, content []byte) (*core.Skill, error) {
 // Headings are preferred: a well-formed skill puts each phase under one, and
 // they survive as an ordered list. A document with no such structure falls back
 // to its numbered items, which is the other way people write a procedure.
-func extractSteps(body string) []core.SkillStep {
+func extractSteps(body string, budget int) []core.SkillStep {
 	var actions []string
 
 	for _, h := range stepHeadingRe.FindAllStringSubmatch(body, -1) {
@@ -179,7 +186,7 @@ func extractSteps(body string) []core.SkillStep {
 			a = a[:maxStepAction] + "…"
 		}
 		steps = append(steps, core.SkillStep{Order: len(steps) + 1, Action: a})
-		if len(steps) >= maxImportedSteps {
+		if len(steps) >= budget {
 			break
 		}
 	}
@@ -225,7 +232,7 @@ func ImportSkillDir(dir string) ([]ImportedSkill, error) {
 			out = append(out, ImportedSkill{Source: path, Skipped: readErr.Error()})
 			return nil
 		}
-		skill, parseErr := ParseSkillFile(path, content)
+		skill, parseErr := parseSkillFile(path, content, candidateBudget)
 		if parseErr != nil {
 			out = append(out, ImportedSkill{Source: path, Skipped: parseErr.Error()})
 			return nil
@@ -238,8 +245,16 @@ func ImportSkillDir(dir string) ([]ImportedSkill, error) {
 	}
 	// Deterministic order, so two imports of the same directory agree.
 	sort.Slice(out, func(i, j int) bool { return out[i].Source < out[j].Source })
+	dropSharedBoilerplate(out)
 	return out, nil
 }
+
+// candidateBudget is how many steps are kept per file BEFORE the shared-text
+// pass runs. It has to exceed the preamble it is meant to see past: a
+// collection whose files open with thirty lines of identical scaffolding would
+// otherwise have every real step cut by the final cap before anything got a
+// chance to notice the scaffolding was shared.
+const candidateBudget = maxImportedSteps * 6
 
 // isSkillFile reports whether a filename is one of the conventional names for
 // a written skill.
@@ -322,4 +337,105 @@ func isNonProcedural(title string) bool {
 		}
 	}
 	return false
+}
+
+// dropSharedBoilerplate removes steps that most files in the collection share,
+// then trims each skill back to maxImportedSteps.
+//
+// # WHY THIS IS NEEDED
+//
+// Published skill collections put a long identical preamble at the top of every
+// file — how to invoke the harness, how to render a question, what to do when a
+// tool is unavailable. Read one file and it is context. Import forty and every
+// one of them stores the same procedure, because the preamble is longer than
+// the step budget and the file's actual subject never gets reached.
+//
+// This is not hypothetical. Two skills from one published collection — "ship"
+// and "review", which do entirely different jobs — produced byte-identical
+// twelve-step procedures, none of which came from either document's subject.
+// Storing those is worse than storing nothing: near-duplicate memories compete
+// with each other and with genuinely learned skills on every recall.
+//
+// # WHY SHAREDNESS AND NOT A WORD LIST
+//
+// The obvious fix is to blocklist the phrases seen so far, which works until
+// the next collection words its preamble differently. Repetition is the signal
+// that generalises: text this file shares with most of its siblings is the
+// collection's furniture, and text it does not is its own.
+//
+// A step surviving in only one file is kept even if it looks like boilerplate.
+// Being unique is exactly the evidence that it is that file's procedure.
+func dropSharedBoilerplate(found []ImportedSkill) {
+	var withSteps []*core.Skill
+	for i := range found {
+		if found[i].Skill != nil && len(found[i].Skill.Steps) > 0 {
+			withSteps = append(withSteps, found[i].Skill)
+		}
+	}
+	// One file has nothing to be shared with, and two is too small a sample to
+	// tell a shared preamble from a coincidence worth keeping.
+	if len(withSteps) < 3 {
+		for _, sk := range withSteps {
+			capSteps(sk)
+		}
+		return
+	}
+
+	files := map[string]int{}
+	for _, sk := range withSteps {
+		seen := map[string]bool{}
+		for _, st := range sk.Steps {
+			if seen[st.Action] {
+				continue // a repeat inside one file is still one file
+			}
+			seen[st.Action] = true
+			files[st.Action]++
+		}
+	}
+
+	for _, sk := range withSteps {
+		kept := sk.Steps[:0]
+		for _, st := range sk.Steps {
+			if isShared(files[st.Action], len(withSteps)) {
+				continue
+			}
+			st.Order = len(kept) + 1
+			kept = append(kept, st)
+		}
+		sk.Steps = kept
+		capSteps(sk)
+	}
+
+	// A file whose every step was shared has no procedure of its own left. Say
+	// so rather than storing an empty skill, which would look like a successful
+	// import of nothing.
+	for i := range found {
+		if found[i].Skill != nil && len(found[i].Skill.Steps) == 0 {
+			found[i].Skipped = "every step was boilerplate shared with the rest of the collection"
+			found[i].Skill = nil
+		}
+	}
+}
+
+// isShared reports whether a step appearing in n of total files is the
+// collection's furniture. Half is the line: a step in most of a collection
+// describes the collection, not the file.
+func isShared(n, total int) bool { return n >= 2 && n*2 >= total }
+
+func capSteps(sk *core.Skill) {
+	if len(sk.Steps) > maxImportedSteps {
+		sk.Steps = sk.Steps[:maxImportedSteps]
+	}
+}
+
+// CountImported reports how many of an import's files actually became skills,
+// so a caller can stay quiet when a directory held nothing importable.
+func CountImported(found []ImportedSkill) int {
+	n := 0
+	for _, f := range found {
+		if f.Skill != nil {
+			n++
+		}
+	}
+	return n
 }

@@ -206,6 +206,14 @@ type EpisodicEntry struct {
 	LessonsLearned []string  `json:"lessons_learned,omitempty"`
 	Vector         []float32 `json:"vector,omitempty"`
 	InjectedRecall string    `json:"injected_recall,omitempty"`
+	// UseCount and LastUsed record retrieval, which is the only evidence
+	// available that an entry ever helped. Consolidation decays an entry by
+	// disuse rather than age: a fix retrieved constantly is load-bearing
+	// whatever its date, and an age cutoff deletes exactly that entry while
+	// keeping last Tuesday's run that nobody has needed since. Zero on entries
+	// written before this existed, which reads correctly as "never used".
+	UseCount int       `json:"use_count,omitempty"`
+	LastUsed time.Time `json:"last_used,omitempty"`
 	// Replay is the answer-cache admission class, decided when the entry is
 	// written (memory.ClassifyReplay): stable | volatile | workspace | never.
 	// Deciding it at write time is the point — a reader comparing the new

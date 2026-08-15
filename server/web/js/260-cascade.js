@@ -132,3 +132,82 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 })();
+
+/* ── Consensus & debate ───────────────────────────────────────────────
+ *
+ * Restored deliberately. An earlier pass removed the consensus panel on the
+ * grounds that it read IDLE with every value a dash — which was true, and was
+ * the wrong conclusion: it read IDLE because the kernel computed the verdict
+ * and threw everything but the answer away. Multi-model consensus and the
+ * debate that settles a conflict are the reason this project pays for more
+ * than one model, so the fix was to emit the record, not to delete the panel.
+ *
+ * The consensus event now carries how the verdict was reached, whether an
+ * exchange ran, and its transcript.
+ */
+(function () {
+  const csHistory = [];
+
+  function set(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  }
+
+  function renderConsensus(evt) {
+    const d = (evt && typeof evt.content === "object") ? evt.content : {};
+    const conflict = evt.status === "conflict";
+
+    set("cs-model-count", d.models || 0);
+    set("cs-method", d.method || "—");
+    set("cs-conflict", conflict ? "yes" : "no");
+    set("cs-debated", d.debated ? "yes" : "no");
+
+    const live = document.getElementById("consensus-live");
+    if (live) {
+      live.textContent = conflict ? "● CONFLICT" : "● SETTLED";
+      live.style.color = conflict ? "var(--red, #ef4444)" : "var(--green, #22c55e)";
+    }
+
+    // The transcript is the point. Without it "debated: yes" is a claim.
+    const wrap = document.getElementById("cs-transcript-wrap");
+    const pre = document.getElementById("cs-transcript");
+    if (wrap && pre) {
+      if (d.transcript) { pre.textContent = d.transcript; wrap.hidden = false; }
+      else { wrap.hidden = true; }
+    }
+
+    csHistory.push({
+      at: new Date(evt.timestamp || Date.now()),
+      method: d.method || "—",
+      conflict,
+      debated: !!d.debated,
+      who: Array.isArray(d.contributors) ? d.contributors : [],
+    });
+    renderCsHistory();
+  }
+
+  function renderCsHistory() {
+    const el = document.getElementById("cs-history");
+    if (!el) return;
+    if (!csHistory.length) return;
+    el.innerHTML = csHistory.slice(-15).reverse().map((h) => `
+      <div style="border-left:3px solid ${h.conflict ? "var(--red,#ef4444)" : "var(--green,#22c55e)"}; padding-left:10px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:11px;">
+          <span style="color:var(--text)">decided by <b>${h.method}</b>${h.debated ? " after one exchange" : ""}</span>
+          <span style="color:var(--text-mute)">${h.at.toLocaleTimeString()}</span>
+        </div>
+        ${h.who.length ? `<div style="font-size:10px; color:var(--text-mute); margin-top:2px;">${h.who.join(" · ")}</div>` : ""}
+      </div>`).join("");
+  }
+
+  // Ride the existing event feed rather than opening a second stream.
+  const _prevAddEvent = window.addEvent;
+  if (typeof _prevAddEvent === "function") {
+    window.addEvent = function (evt) {
+      _prevAddEvent(evt);
+      if (evt && evt.type === "consensus") {
+        try { renderConsensus(evt); } catch (e) { console.error("consensus panel:", e); }
+      }
+    };
+  }
+})();

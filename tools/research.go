@@ -39,6 +39,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/security"
 )
@@ -444,8 +445,11 @@ func (t *ResearchTool) synthesise(ctx context.Context, query, digest string) str
 	if err != nil || client == nil {
 		return ""
 	}
+	// Bound the synthesis — it ran with no ceiling. From the one policy table.
+	_, maxTok, _ := modelport.PolicyFor(modelport.PurposeCompress)
 	resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Model: model,
+		Model:     model,
+		MaxTokens: &maxTok,
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: "You answer from the supplied sources only. " +
 				"Cite the [S1], [S2] tags for every claim. If the sources do not answer the " +

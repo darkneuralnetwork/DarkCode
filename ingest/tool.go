@@ -6,6 +6,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/tools"
 )
 
@@ -13,8 +14,9 @@ import (
 // new knowledge from a file, directory/repo, URL, or raw text. Ingested content
 // is chunked, embedded, and stored so it can be recalled later — including
 // offline via the local model.
-func NewIngestTool(mem *memory.System, kg core.KnowledgeGraphStore) *tools.ToolEntry {
+func NewIngestTool(mem *memory.System, kg core.KnowledgeGraphStore, rec *recall.Manager) *tools.ToolEntry {
 	ing := New(mem, kg)
+	ing.SetRecall(rec)
 	return &tools.ToolEntry{
 		Name: "ingest",
 		Description: "Learn from external material so it can be recalled later (including offline). " +

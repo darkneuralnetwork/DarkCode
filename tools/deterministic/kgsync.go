@@ -3,6 +3,7 @@ package deterministic
 import (
 	"context"
 	"fmt"
+	"github.com/darkcode/internal/repowalk"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -228,7 +229,7 @@ func syncOtherLanguages(ctx context.Context, root string, kg core.KnowledgeGraph
 			return ctx.Err()
 		}
 		if info.IsDir() {
-			if n := info.Name(); n != "." && (n == "vendor" || n == "node_modules" || n == ".git" || n == "target" || n == "__pycache__") {
+			if n := info.Name(); repowalk.SkipDir(n) {
 				return filepath.SkipDir
 			}
 			return nil

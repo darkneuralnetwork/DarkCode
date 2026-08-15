@@ -14,14 +14,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/llm"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/orchestrator"
+	"github.com/darkcode/planwork"
 )
 
 // summaryThreshold is the minimum raw context size (bytes) before the server
@@ -132,7 +133,7 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 		}
 		if planText != "" {
 			if wfText != "" {
-				planText = injectNodeStatus(planText, wfText)
+				planText = planwork.InjectNodeStatus(planText, wfText)
 			}
 			s.projects.SetPlan(projID, planText)
 			if s.emitter != nil {
@@ -155,6 +156,9 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 // specific reason (e.g. a clean quota message) instead of a generic error.
 func (s *Server) generatePlanWorkflow(ctx context.Context, client core.LLMClient, model, name, desc, ctxNote string) (plan, workflow string, genErr error) {
 	temp := 0.2
+	// Bound the reply — this plan and workflow generation ran with no ceiling. The
+	// number comes from the one policy table.
+	_, maxTok, _ := modelport.PolicyFor(modelport.PurposePlan)
 	sys := "You are an AI software architect. Output ONLY raw markdown, in TWO sections separated by a line containing exactly ===WORKFLOW===\n" +
 		"Section 1 = Implementation Plan: Goal Description, Proposed Changes, Verification Plan, and an Architecture section containing a ```mermaid\\ngraph TD``` whose node IDs are T1, T2, T3, ...\n" +
 		"Section 2 = Task Workflow: every step as \"- [ ] T<n>: <one-line approach>\" grouped under ## phase headings, with task IDs T1, T2, ... matching the mermaid node IDs."
@@ -165,6 +169,7 @@ func (s *Server) generatePlanWorkflow(ctx context.Context, client core.LLMClient
 			Model:       model,
 			Messages:    []core.Message{{Role: "system", Content: sys}, {Role: "user", Content: user}},
 			Temperature: &temp,
+			MaxTokens:   &maxTok,
 		})
 		if err != nil || len(resp.Choices) == 0 {
 			log.Printf("[server] plan/workflow call failed (attempt %d): %v", attempt, err)
@@ -179,32 +184,12 @@ func (s *Server) generatePlanWorkflow(ctx context.Context, client core.LLMClient
 			}
 			continue
 		}
-		plan, workflow = splitPlanWorkflow(strings.TrimSpace(resp.Choices[0].Message.Content))
+		plan, workflow = planwork.Split(strings.TrimSpace(resp.Choices[0].Message.Content))
 		if plan != "" || workflow != "" {
 			return plan, workflow, nil
 		}
 	}
 	return "", "", genErr
-}
-
-// splitPlanWorkflow tolerantly splits a combined plan+workflow response into
-// its two parts, preferring the explicit ===WORKFLOW=== delimiter and falling
-// back to the first checkbox section when the model omits it.
-func splitPlanWorkflow(text string) (plan, workflow string) {
-	for _, delim := range []string{"===WORKFLOW===", "=== WORKFLOW ===", "==WORKFLOW=="} {
-		if i := strings.Index(text, delim); i >= 0 {
-			return strings.TrimSpace(text[:i]), strings.TrimSpace(text[i+len(delim):])
-		}
-	}
-	// No delimiter: split at the section heading that precedes the first
-	// workflow checkbox, if any; otherwise treat the whole thing as the plan.
-	if idx := strings.Index(text, "- [ ]"); idx >= 0 {
-		if head := strings.LastIndex(text[:idx], "\n## "); head >= 0 {
-			return strings.TrimSpace(text[:head]), strings.TrimSpace(text[head:])
-		}
-		return strings.TrimSpace(text[:idx]), strings.TrimSpace(text[idx:])
-	}
-	return strings.TrimSpace(text), ""
 }
 
 // truncateForPrompt caps a string to ~maxChars for inclusion in an LLM prompt.
@@ -273,28 +258,12 @@ func (s *Server) amendPlanWorkflowSync(ctx context.Context, projID, query, oldPl
 			client, clientModel = lc, lm
 		}
 	}
-	temp := 0.2
+	// One implementation, shared with the console. This used to be a second
+	// copy of the same prompt; see planwork's package comment for what the two
+	// copies disagreed about.
+	plan, workflow := planwork.Amend(ctx, client, clientModel, query, oldPlan, oldWorkflow)
 
-	plan, workflow := oldPlan, oldWorkflow
-	sys := "You are an AI software architect. Rewrite a project's plan and workflow to reflect a new instruction, BEFORE any work is done. Output ONLY raw markdown in TWO sections separated by a line containing exactly ===WORKFLOW===\n" +
-		"Section 1 = the updated Implementation Plan: keep the ```mermaid\\ngraph TD``` architecture; node IDs T1,T2,... MUST match workflow task IDs; reuse existing IDs, add new ones only for new tasks; add an 'Open Questions' section if underspecified.\n" +
-		"Section 2 = the updated Task Workflow: \"- [ ] T<n>: ...\" (pending) / \"- [/] T<n>: ...\" (running — mark the task worked on next) / \"- [x] T<n>: ...\" (done); keep task IDs stable, never renumber."
-	user := fmt.Sprintf("Current Implementation Plan:\n%s\n\nCurrent Task Workflow:\n%s\n\nThe user just requested: %s", oldPlan, oldWorkflow, query)
-	if resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Model:       clientModel,
-		Messages:    []core.Message{{Role: "system", Content: sys}, {Role: "user", Content: user}},
-		Temperature: &temp,
-	}); err == nil && len(resp.Choices) > 0 {
-		np, nw := splitPlanWorkflow(strings.TrimSpace(resp.Choices[0].Message.Content))
-		if np != "" {
-			plan = np
-		}
-		if nw != "" {
-			workflow = nw
-		}
-	}
-
-	plan = injectNodeStatus(plan, workflow)
+	plan = planwork.InjectNodeStatus(plan, workflow)
 
 	if projID != "" && s.projects != nil {
 		_ = s.projects.SetPlan(projID, plan)
@@ -305,60 +274,4 @@ func (s *Server) amendPlanWorkflowSync(ctx context.Context, projID, query, oldPl
 		}
 	}
 	return plan, workflow
-}
-
-// parseWorkflowTaskStatuses extracts a task-ID → Mermaid classDef name map
-// ("done"/"running"/"pending") from a workflow's checklist lines.
-func parseWorkflowTaskStatuses(workflow string) map[string]string {
-	out := make(map[string]string)
-	for _, line := range strings.Split(workflow, "\n") {
-		m := workflowTaskLineRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		status := "pending"
-		switch m[1] {
-		case "x":
-			status = "done"
-		case "/":
-			status = "running"
-		}
-		out[m[2]] = status
-	}
-	return out
-}
-
-// injectNodeStatus styles the plan's mermaid fence so the architecture graph
-// reflects the workflow's task status (green=done, amber=running, gray=pending).
-// No-op if there's no mermaid fence or no ID'd task lines to map.
-func injectNodeStatus(plan, workflow string) string {
-	statuses := parseWorkflowTaskStatuses(workflow)
-	if len(statuses) == 0 {
-		return plan
-	}
-	return mermaidFenceRe.ReplaceAllStringFunc(plan, func(block string) string {
-		m := mermaidFenceRe.FindStringSubmatch(block)
-		if m == nil {
-			return block
-		}
-		body := strings.TrimRight(m[1], "\n")
-		var ids []string
-		for id := range statuses {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-
-		var sb strings.Builder
-		sb.WriteString("```mermaid\n")
-		sb.WriteString(body)
-		sb.WriteString("\n")
-		sb.WriteString("classDef done fill:#2ea043,stroke:#1a7f37,color:#fff\n")
-		sb.WriteString("classDef running fill:#d29922,stroke:#9e6a03,color:#fff\n")
-		sb.WriteString("classDef pending fill:#30363d,stroke:#8b949e,color:#c9d1d9\n")
-		for _, id := range ids {
-			fmt.Fprintf(&sb, "class %s %s\n", id, statuses[id])
-		}
-		sb.WriteString("```")
-		return sb.String()
-	})
 }

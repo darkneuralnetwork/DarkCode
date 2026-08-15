@@ -80,38 +80,11 @@
         <img src="/logo.png" alt="DarkCode Logo" style="height: 36px; width: auto; object-fit: contain; border-radius: 4px;" />
       </div>
 
-      <!-- Section dropdown: trigger shows the active section; click opens a
-           grouped menu of all sections. -->
-      <div class="nav-dropdown" id="nav-dropdown">
-        <button class="nav-dropdown-trigger" id="nav-dropdown-btn" type="button"
-                aria-haspopup="true" aria-expanded="false" title="Switch section">
-          <span class="nav-dropdown-icon" id="nav-dropdown-icon">💬</span>
-          <span class="nav-dropdown-label" id="nav-dropdown-label">Nexus (Chat & Workspace)</span>
-          <span class="nav-dropdown-caret">▾</span>
-        </button>
-        <div class="nav-dropdown-menu custom-scrollbar" id="nav-dropdown-menu" hidden>
-          <div class="nav-dropdown-group">
-            <div class="nav-dropdown-group-label">Nexus</div>
-            <button class="nav-dropdown-item active" data-tab="nexus" data-ico="⚡">⚡ Chat & Workspace</button>
-            <button class="nav-dropdown-item" data-tab="blueprint" data-ico="📐">📐 Blueprint (Plan & Workflow)</button>
-            <button class="nav-dropdown-item" data-tab="registry" data-ico="🔧">🔧 Tool Registry</button>
-          </div>
-          <div class="nav-dropdown-group">
-            <div class="nav-dropdown-group-label">Observability</div>
-            <button class="nav-dropdown-item" data-tab="cognition" data-ico="🧠">🧠 Memory &amp; Knowledge</button>
-            <button class="nav-dropdown-item" data-tab="telemetry" data-ico="📊">📊 Telemetry <span class="nav-badge" id="evt-badge" hidden>0</span></button>
-            <button class="nav-dropdown-item" data-tab="replay" data-ico="⏱">⏱ Execution Replay</button>
-            <button class="nav-dropdown-item" data-tab="changes" data-ico="↩">↩ Changes &amp; Rollback</button>
-            <button class="nav-dropdown-item" data-tab="cascade" data-ico="💸">💸 Cognition Cascade</button>
-          </div>
-          <div class="nav-dropdown-group">
-            <div class="nav-dropdown-group-label">System</div>
-            <button class="nav-dropdown-item" data-tab="config" data-ico="⚙️">⚙️ Configurations</button>
-          </div>
-        </div>
-      </div>
+      <!-- There is exactly one way to change page: the command palette. The
+           dropdown that used to sit here offered six sections while the palette
+           offered eleven, and the two lists had drifted apart. -->
 
-      <div class="header-right">
+      <div class="header-right" style="margin-left: auto;">
         <div class="loop-indicator" id="loop-indicator" title="Agentic Loop (ReAct) — toggle in Configurations" hidden>
           <span class="loop-ico">🔁</span>
           <span class="loop-label">Loop</span>
@@ -130,8 +103,9 @@
           <span class="conn-dot"></span>
           <span class="conn-label">Connecting…</span>
         </div>
-        <div class="kbd-hint" id="cmdk-hint" title="Open command palette">
+        <div class="kbd-hint" id="cmdk-hint" title="Change page — command palette">
           <span class="kbd">⌘K</span>
+          <span class="nav-badge" id="evt-badge" hidden>0</span>
         </div>
         <button type="button" id="chat-switch-cli" class="cli-btn" title="Switch to CLI">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
@@ -141,21 +115,28 @@
     </header>
 
     <!-- ═══ Page title breadcrumb (slim sub-row) ═══ -->
-    <div class="page-title-bar" style="display: none;">
-      <h2 id="page-title" class="gradient-text">Nexus (Chat & Workspace)</h2>
+    <!-- With the dropdown gone this is the only thing that names where you
+         are, so it is no longer hidden. -->
+    <div class="page-title-bar">
+      <h2 id="page-title" class="gradient-text">Studio (Chat &amp; Workspace)</h2>
     </div>
 
     <!-- ═══ Main ═══ -->
+    <!-- One panel per palette heading. loadComponents() fetches every data-src
+         at boot, so a page is one line here plus one file in pages/. -->
     <main class="main">
       <div class="content">
-        <section class="tab-panel active fade-in" id="tab-nexus" data-src="/pages/nexus.html"></section>
+        <section class="tab-panel active fade-in" id="tab-studio" data-src="/pages/studio.html"></section>
         <section class="tab-panel fade-in" id="tab-blueprint" data-src="/pages/blueprint.html"></section>
-        <section class="tab-panel fade-in" id="tab-registry" data-src="/pages/registry.html"></section>
-        <section class="tab-panel fade-in" id="tab-cognition" data-src="/pages/cognition.html"></section>
-        <section class="tab-panel fade-in" id="tab-telemetry" data-src="/pages/telemetry.html"></section>
+        <section class="tab-panel fade-in" id="tab-projects" data-src="/pages/projects.html"></section>
+        <section class="tab-panel fade-in" id="tab-memory" data-src="/pages/memory.html"></section>
+        <section class="tab-panel fade-in" id="tab-tools" data-src="/pages/tools.html"></section>
+        <section class="tab-panel fade-in" id="tab-events" data-src="/pages/events.html"></section>
+        <section class="tab-panel fade-in" id="tab-monitoring" data-src="/pages/monitoring.html"></section>
+        <section class="tab-panel fade-in" id="tab-status" data-src="/pages/status.html"></section>
+        <section class="tab-panel fade-in" id="tab-cascade" data-src="/pages/cascade.html"></section>
         <section class="tab-panel fade-in" id="tab-replay" data-src="/pages/replay.html"></section>
         <section class="tab-panel fade-in" id="tab-changes" data-src="/pages/changes.html"></section>
-        <section class="tab-panel fade-in" id="tab-cascade" data-src="/pages/cascade.html"></section>
         <section class="tab-panel fade-in" id="tab-config" data-src="/pages/config.html"></section>
       </div>
     </main>
@@ -349,38 +330,38 @@
 
   <!-- Frontend modules (loaded in dependency order). app.js is now a thin
        loader doc; the logic lives in /js/*.js. Zero build step — go:embed
-       web/* embeds these verbatim. Cache-busting ?v=8 forces a reload after
+       web/* embeds these verbatim. Cache-busting ?v=9 forces a reload after
        a binary rebuild (the server also sends no-store). -->
-  <script src="/js/00-core.js?v=8"></script>
-  <script src="/js/10-sse.js?v=8"></script>
-  <script src="/js/20-approvals.js?v=8"></script>
-  <script src="/js/30-tokens.js?v=8"></script>
+  <script src="/js/00-core.js?v=9"></script>
+  <script src="/js/10-sse.js?v=9"></script>
+  <script src="/js/20-approvals.js?v=9"></script>
+  <script src="/js/30-tokens.js?v=9"></script>
   <script src="/js/40-events.js?v=9"></script>
   <script src="/js/50-chat.js?v=9"></script>
-  <script src="/js/60-filetree.js?v=8"></script>
+  <script src="/js/60-filetree.js?v=9"></script>
   <script src="/js/70-attachments.js?v=9"></script>
   <script src="/js/75-verbs.js?v=1"></script>
-  <script src="/js/80-tools.js?v=8"></script>
-  <script src="/js/90-memory.js?v=8"></script>
+  <script src="/js/80-tools.js?v=9"></script>
+  <script src="/js/90-memory.js?v=9"></script>
   <script src="/js/100-projects.js?v=10"></script>
-  <script src="/js/110-status.js?v=8"></script>
-  <script src="/js/120-metrics.js?v=8"></script>
+  <script src="/js/110-status.js?v=9"></script>
+  <script src="/js/120-metrics.js?v=9"></script>
   <script src="/js/130-config.js?v=13"></script>
   <script src="/js/135-cfgsurface.js?v=2"></script>
-  <script src="/js/140-ui.js?v=8"></script>
+  <script src="/js/140-ui.js?v=9"></script>
   <script src="/js/150-events.js?v=11"></script>
-  <script src="/js/160-widgets.js?v=8"></script>
-  <script src="/js/170-init.js?v=8"></script>
-  <script src="/js/180-dirpicker.js?v=8"></script>
-  <script src="/js/190-model-fetch.js?v=8"></script>
-  <script src="/js/220-v2.js?v=8"></script>
-  <script src="/js/230-tail.js?v=8"></script>
-  <script src="/js/240-replay.js?v=8"></script>
-  <script src="/js/250-changes.js?v=8"></script>
-  <script src="/js/260-cascade.js?v=8"></script>
+  <script src="/js/160-widgets.js?v=9"></script>
+  <script src="/js/170-init.js?v=9"></script>
+  <script src="/js/180-dirpicker.js?v=9"></script>
+  <script src="/js/190-model-fetch.js?v=9"></script>
+  <script src="/js/220-v2.js?v=9"></script>
+  <script src="/js/230-tail.js?v=9"></script>
+  <script src="/js/240-replay.js?v=9"></script>
+  <script src="/js/250-changes.js?v=9"></script>
+  <script src="/js/260-cascade.js?v=9"></script>
   <script src="/js/270-blueprint.js?v=9"></script>
-  <script src="/js/280-reqlog.js?v=8"></script>
-  <script src="/js/290-plugins.js?v=8"></script>
-  <script src="/app.js?v=8"></script>
+  <script src="/js/280-reqlog.js?v=9"></script>
+  <script src="/js/290-plugins.js?v=9"></script>
+  <script src="/app.js?v=9"></script>
 </body>
 </html>

@@ -16,15 +16,22 @@
 package bench
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/darkcode/safeurl"
 )
 
 // Task is one benchmark case.
@@ -110,10 +117,21 @@ type Agent interface {
 	Run(ctx context.Context, workspace, prompt string) error
 }
 
-// BinaryAgent invokes a CLI in one-shot mode.
+// BinaryAgent drives the agent through its OpenAI-compatible HTTP surface.
+//
+// It used to shell out to `darkcode -q <prompt>`. That flag is gone: a
+// one-shot CLI mode was a fourth implementation of "run one turn" that
+// auto-approved every permission prompt, and the API is the non-interactive
+// path. Driving /v1 also means the benchmark exercises what a user actually
+// gets — the same request assembly, workspace confinement and post-turn work
+// as the browser — instead of a private code path that only the benchmark
+// used and that could therefore drift from the product without anyone noticing.
 type BinaryAgent struct {
 	Path string
-	Args []string // extra flags; the prompt is appended after -q
+	Args []string // extra flags passed to the server
+
+	// Port is the loopback port to serve on. Zero picks one per run.
+	Port int
 }
 
 // resolve makes the agent path absolute.
@@ -135,17 +153,112 @@ func (b BinaryAgent) resolve() (string, error) {
 	return filepath.Abs(b.Path)
 }
 
+// benchClient talks to the agent over loopback. It goes through safeurl like
+// every other client in the tree — the guarded dialer is what makes "no raw
+// http.Client outside safeurl" an invariant rather than a preference, and a
+// test harness is not a reason to put a hole in it.
+var benchClient = safeurl.SafeClient(0, true)
+
+// serverStartTimeout bounds how long we wait for the agent to accept requests.
+// Startup loads memory, the knowledge graph and possibly a local model, so it
+// is not instant; but a hang here would otherwise stall the whole run.
+const serverStartTimeout = 60 * time.Second
+
 func (b BinaryAgent) Run(ctx context.Context, workspace, prompt string) error {
 	path, err := b.resolve()
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", b.Path, err)
 	}
-	args := append(append([]string{}, b.Args...), "-q", prompt)
+
+	port := b.Port
+	if port == 0 {
+		port, err = freePort()
+		if err != nil {
+			return fmt.Errorf("no free port for the agent server: %w", err)
+		}
+	}
+
+	// cwd is the task workspace, which is what scopes path confinement — the
+	// agent refuses to write outside it, exactly as it would for a user.
+	args := append(append([]string{}, b.Args...),
+		"--gui", "--port", strconv.Itoa(port), "--safety", "relaxed")
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = workspace
-	out, err := cmd.CombinedOutput()
+	var log strings.Builder
+	cmd.Stdout, cmd.Stderr = &log, &log
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting the agent: %w", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	if err := waitReady(ctx, base, serverStartTimeout); err != nil {
+		return fmt.Errorf("%w: %s", err, lastLines(log.String(), 5))
+	}
+	if err := postTurn(ctx, base, prompt); err != nil {
+		return fmt.Errorf("%w: %s", err, lastLines(log.String(), 5))
+	}
+	return nil
+}
+
+// freePort asks the kernel for an unused loopback port. Tasks run one at a
+// time, but a hardcoded port would still collide with a developer's own
+// running instance — which listens on 12345 by default.
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, lastLines(string(out), 5))
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+func waitReady(ctx context.Context, base string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+		if resp, err := benchClient.Do(req); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("agent did not become ready within %s", timeout)
+}
+
+func postTurn(ctx context.Context, base, prompt string) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"model": "darkcode",
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := benchClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("agent request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("agent returned %s: %s", resp.Status, lastLines(string(out), 3))
 	}
 	return nil
 }

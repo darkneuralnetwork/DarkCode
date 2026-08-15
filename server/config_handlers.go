@@ -83,6 +83,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"enable_local_llm":  s.cfg.LocalEnabled(),
 		"background_work":   s.cfg.ResolvedBackgroundWork(),
 		"debate":            s.cfg.Debate,
+		"reviewer":          s.cfg.Reviewer,
 		"local_mode":        s.cfg.ResolvedLocalMode(),
 		"force_local":       s.cfg.ForceLocal(),
 		"local_model_role":  s.cfg.LocalModelRole,
@@ -129,6 +130,7 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		EnableLocalLLM *bool   `json:"enable_local_llm,omitempty"`
 		BackgroundWork *string `json:"background_work,omitempty"`
 		Debate         *bool   `json:"debate,omitempty"`
+		Reviewer       *bool   `json:"reviewer,omitempty"`
 		// LocalMode sets the three-plus-state local preference directly:
 		// "off" | "auto" | "on" | "force". "force" pins routing to the local
 		// model (no cloud fallback) and starts it on demand. Pointer so an
@@ -335,6 +337,12 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Debate = *req.Debate
 			if s.kernel != nil {
 				s.kernel.SetDebate(*req.Debate)
+			}
+		}
+		if req.Reviewer != nil {
+			s.cfg.Reviewer = *req.Reviewer
+			if s.kernel != nil {
+				s.kernel.SetReviewer(*req.Reviewer)
 			}
 		}
 		if req.BackgroundWork != nil {

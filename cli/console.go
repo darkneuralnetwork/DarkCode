@@ -32,7 +32,6 @@ import (
 	"github.com/darkcode/checkpoint"
 	"github.com/darkcode/config"
 	"github.com/darkcode/core"
-	"github.com/darkcode/llm"
 	"github.com/darkcode/memory"
 	"github.com/darkcode/metrics"
 	"github.com/darkcode/orchestrator"
@@ -41,6 +40,7 @@ import (
 	"github.com/darkcode/router"
 	"github.com/darkcode/tools"
 	"github.com/darkcode/ui"
+	"github.com/darkcode/uiport"
 	"github.com/darkcode/verb"
 )
 
@@ -48,8 +48,14 @@ var ErrSwitchToGUI = fmt.Errorf("switch to gui")
 
 // Console is the orchestrator-backed interactive terminal.
 type Console struct {
-	cfg           *config.Config
-	kernel        *orchestrator.Kernel
+	cfg    *config.Config
+	kernel *orchestrator.Kernel
+	// port is the one door into the kernel. The console used to call
+	// kernel.Execute directly with a context that never carried a workspace,
+	// which left path confinement inert for the whole interactive CLI.
+	port *uiport.Manager
+	// workspace is the directory this console is confined to: the process cwd.
+	workspace     string
 	mem           *memory.System
 	registry      *tools.Registry
 	emitter       *ui.EventEmitter
@@ -59,6 +65,10 @@ type Console struct {
 	projects      *project.Store
 	ckpt          *checkpoint.Manager
 	activeProject string
+
+	// extCommands are the slash commands loaded extension bundles offer,
+	// consulted just before the console reports an unknown command.
+	extCommands []tools.ExtensionCommand
 
 	// stickyVerb is the strategy every message uses until the user says
 	// otherwise ("" = none, and escalation decides per message).
@@ -105,10 +115,20 @@ type activityEntry struct {
 }
 
 // NewConsole creates an orchestrator-backed console.
-func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.System, registry *tools.Registry, emitter *ui.EventEmitter, recorder *tools.ChangeRecorder, sources *tools.SourceManager, projects *project.Store, activeProject string) *Console {
+func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, port *uiport.Manager, mem *memory.System, registry *tools.Registry, emitter *ui.EventEmitter, recorder *tools.ChangeRecorder, sources *tools.SourceManager, projects *project.Store, activeProject string) *Console {
+	// The console is confined to the directory it was started in. Resolved
+	// once here rather than per query so every turn in a session agrees.
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot resolve the working directory (%v); "+
+			"tool calls that write files will be refused\n", err)
+	}
+
 	c := &Console{
 		cfg:           cfg,
 		kernel:        kernel,
+		port:          port,
+		workspace:     wd,
 		mem:           mem,
 		registry:      registry,
 		emitter:       emitter,
@@ -123,18 +143,18 @@ func NewConsole(cfg *config.Config, kernel *orchestrator.Kernel, mem *memory.Sys
 
 	c.ckpt = kernel.Checkpoints()
 
-	rl, err := readline.NewEx(&readline.Config{
+	rl, rlErr := readline.NewEx(&readline.Config{
 		Prompt:          ">>> ",
 		HistoryFile:     filepath.Join(os.TempDir(), "darkcode_history"),
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
 		AutoComplete:    c.buildCompleter(),
 	})
-	if err == nil {
+	if rlErr == nil {
 		c.rl = rl
 	} else {
 		// Fallback in case of error (should be rare)
-		fmt.Fprintf(os.Stderr, "warning: readline init failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: readline init failed: %v\n", rlErr)
 	}
 
 	// Install the interactive terminal approval prompt for dangerous tool
@@ -561,14 +581,22 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// the web UI uses — the console reads the same table and the same rung
 	// chooser, so "what will this do" has one answer rather than three.
 	st := c.strategyForMessage(resolvedQuery)
-	loopOverride, toolsOverride := st.Loop, st.Tools
-	modeOverride, planOverride := st.Mode, st.Plan
-	restoreOverrides := c.kernel.ApplyRequestOverrides(modeOverride, "", loopOverride, toolsOverride, c.brain)
-	defer restoreOverrides()
-	restorePlan := c.kernel.ApplyPlanOverride(planOverride)
-	defer restorePlan()
 
-	result, err := c.kernel.Execute(reqCtx, resolvedQuery)
+	// One door. The console used to build the request itself and call
+	// kernel.Execute directly, and what it built never carried a workspace —
+	// so path confinement, which permits everything when the workspace is
+	// empty, was inert for every interactive session.
+	result, err := c.port.Execute(reqCtx, uiport.Request{
+		Query:     resolvedQuery,
+		Surface:   uiport.SurfaceCLI,
+		Workspace: c.workspace,
+		Project:   c.activeProject,
+		Mode:      st.Mode,
+		Brain:     c.brain,
+		Loop:      st.Loop,
+		Tools:     st.Tools,
+		Plan:      st.Plan,
+	})
 	close(done)
 	fmt.Print("\r" + ansiClearLine + "\r") // clear spinner
 
@@ -626,53 +654,6 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// prompt responsive and honors the sequential contract; the plan updates
 	// on the next Parallel request. (Retry + timeout are still applied in
 	// Parallel mode so a hanging/slow model can't linger for 300s.)
-	if c.activeProject != "" && c.projects != nil && c.kernel != nil && !c.kernel.SequentialMode() {
-		go func(projID, q, out string) {
-			// Wrap with retry/backoff (429/5xx) and bound the lifetime so a
-			// hanging model can't keep this goroutine alive for the full 300s
-			// HTTP timeout.
-			client := llm.WrapCloud(llm.NewClient(c.cfg.BaseURL, c.cfg.APIKey, c.cfg.Model), c.cfg.Provider, c.cfg.Model)
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			temp := 0.0
-
-			oldPlan, _ := c.projects.GetPlan(projID)
-			planPrompt := fmt.Sprintf("Here is the current Implementation Plan:\n%s\n\nUser asked: %s\nAgent did: %s\n\nRewrite the implementation plan to reflect the new state. Output ONLY the raw markdown plan.", oldPlan, q, out)
-			llmReq1 := &core.CompletionRequest{
-				Messages: []core.Message{
-					{Role: "system", Content: "You are an AI architect. Keep the plan concise and action-oriented. Only output valid markdown."},
-					{Role: "user", Content: planPrompt},
-				},
-				Temperature: &temp,
-			}
-			pResp, err := client.ChatCompletion(ctx, llmReq1)
-			if err == nil && len(pResp.Choices) > 0 {
-				planText := pResp.Choices[0].Message.Content
-				c.projects.SetPlan(projID, planText)
-				if c.emitter != nil {
-					c.emitter.EmitPlanUpdated(projID, planText)
-				}
-			}
-
-			oldWf, _ := c.projects.GetWorkflow(projID)
-			wfPrompt := fmt.Sprintf("Here is the current Workflow Architecture:\n%s\n\nUser asked: %s\nAgent did: %s\n\nRewrite the workflow architecture to reflect the new state. Output ONLY the raw markdown.", oldWf, q, out)
-			llmReq2 := &core.CompletionRequest{
-				Messages: []core.Message{
-					{Role: "system", Content: "You are an AI architect. Keep the workflow architecture concise. Only output valid markdown."},
-					{Role: "user", Content: wfPrompt},
-				},
-				Temperature: &temp,
-			}
-			wResp, err := client.ChatCompletion(ctx, llmReq2)
-			if err == nil && len(wResp.Choices) > 0 {
-				wfText := wResp.Choices[0].Message.Content
-				c.projects.SetWorkflow(projID, wfText)
-				if c.emitter != nil {
-					c.emitter.EmitWorkflowUpdated(projID, wfText)
-				}
-			}
-		}(c.activeProject, origQuery, result)
-	}
 }
 
 // recordActivity appends an event to the in-memory activity log used by /log.

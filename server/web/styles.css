@@ -279,52 +279,6 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .brand-compact .brand-icon { font-size: 16px; }
 .brand-compact .brand-text h1 { font-size: 15px; }
 
-/* Section dropdown (replaces the horizontal pill nav) */
-.nav-dropdown { position: relative; flex-shrink: 0; margin-left: auto; }
-.nav-dropdown-trigger {
-  display: flex; align-items: center; gap: 9px;
-  padding: 7px 14px; min-width: 180px; max-width: 260px;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  color: var(--text-main); font-size: 13px; font-weight: 600; font-family: var(--font-sans);
-  border-radius: 9px; cursor: pointer; transition: all 0.18s var(--ease);
-}
-.nav-dropdown-trigger:hover { border-color: var(--accent-dim); color: var(--text-bright); }
-.nav-dropdown-trigger[aria-expanded="true"] {
-  border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow);
-}
-.nav-dropdown-icon { font-size: 15px; filter: drop-shadow(0 0 5px var(--accent-glow)); }
-.nav-dropdown-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.nav-dropdown-caret { font-size: 11px; color: var(--text-mute); transition: transform 0.18s var(--ease); }
-.nav-dropdown-trigger[aria-expanded="true"] .nav-dropdown-caret { transform: rotate(180deg); color: var(--accent); }
-
-.nav-dropdown-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
-  min-width: 280px; max-height: 70vh; overflow-y: auto;
-  padding: 6px; background: var(--bg-panel-2); border: 1px solid var(--border-light);
-  border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px var(--accent-glow);
-  backdrop-filter: blur(14px);
-  animation: ddFade 0.14s var(--ease);
-}
-@keyframes ddFade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-.nav-dropdown-group { padding: 4px 0; }
-.nav-dropdown-group + .nav-dropdown-group { border-top: 1px solid var(--border); margin-top: 2px; padding-top: 6px; }
-.nav-dropdown-group-label {
-  font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px;
-  color: var(--text-mute); padding: 2px 10px 4px; font-weight: 800;
-}
-.nav-dropdown-item {
-  display: block; width: 100%; text-align: left;
-  padding: 8px 12px; background: transparent; border: none;
-  color: var(--text-dim); font-size: 13px; font-family: var(--font-sans); font-weight: 500;
-  border-radius: 7px; cursor: pointer; transition: all 0.14s var(--ease);
-  white-space: nowrap;
-}
-.nav-dropdown-item:hover { background: var(--bg-elevated); color: var(--text-bright); }
-.nav-dropdown-item.active {
-  background: var(--accent-glow); color: var(--accent-3); font-weight: 700;
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
 .header-right {
   display: flex; align-items: center; gap: 10px; flex-shrink: 1; min-width: 0;
   overflow-x: auto; overflow-y: hidden; white-space: nowrap;
@@ -1054,6 +1008,59 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .req-status-err { color: var(--red); font-weight: 700; }
 
 /* ════════════════════════════════════════════════════════════════════════
+   EXECUTION REPLAY — scrubbing a recorded run
+   ════════════════════════════════════════════════════════════════════════ */
+.rp-page { display: flex; flex-direction: column; gap: 20px; }
+.rp-head { display: flex; justify-content: space-between; align-items: center; }
+
+.rp-picker { padding: 16px 20px; display: flex; align-items: center; gap: 14px; }
+.rp-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-mute); font-weight: 800; }
+.rp-select { flex: 1; font-family: var(--font-mono); font-size: 12px; }
+
+.rp-player { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.rp-readout { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+/* A run's name is its goal, which can be several thousand characters of plan.
+   One line, clipped — the whole thing is in the detail pane below. */
+.rp-position {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: var(--text-bright);
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rp-meta { display: flex; gap: 14px; font-family: var(--font-mono); font-size: 11px; color: var(--text-mute); }
+
+/* The scrubber is the one control on the page, so it gets the accent and a
+   track that reads as "time already spent" to the left of the thumb. */
+.rp-slider { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 2px; background: var(--bg-panel-2); outline: none; cursor: pointer; }
+.rp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg-void);
+  box-shadow: 0 0 10px var(--accent-glow-strong); transition: transform 0.12s var(--ease-bounce);
+}
+.rp-slider::-webkit-slider-thumb:hover { transform: scale(1.25); }
+.rp-slider::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-void); cursor: pointer; }
+.rp-slider:focus-visible { box-shadow: 0 0 0 2px var(--accent-glow-strong); }
+
+.rp-transport { display: flex; justify-content: center; gap: 8px; }
+.rp-btn {
+  background: var(--bg-panel); color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 12px; font-size: 12px; cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, transform 0.12s var(--ease);
+}
+.rp-btn:hover { color: var(--accent-3); border-color: var(--border-glow); transform: translateY(-1px); }
+.rp-btn-play { color: var(--accent); border-color: var(--border-glow); min-width: 52px; }
+
+.rp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.rp-timeline-panel, .rp-detail-panel { padding: 20px; }
+.rp-timeline { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.rp-timeline > div { transition: background 0.12s, opacity 0.2s; }
+.rp-timeline > div:hover { background: var(--bg-elevated) !important; }
+.rp-detail {
+  max-height: 380px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--text-dim);
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px;
+}
+@media (max-width: 1000px) { .rp-split { grid-template-columns: 1fr; } }
+
+/* ════════════════════════════════════════════════════════════════════════
    CONFIG — Provider-driven model management
    ════════════════════════════════════════════════════════════════════════ */
 .cfg-panel { padding: 22px; border-radius: var(--radius-md); }
@@ -1183,10 +1190,7 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   .chart-grid { grid-template-columns: 1fr; }
   .chart-card.span-2, .chart-card.span-3 { grid-column: span 1; }
   .model-switcher { display: none; }
-  .kbd-hint { display: none; }
-}
-@media (max-width: 1180px) {
-  .nav-dropdown-label { max-width: 140px; }
+  /* .kbd-hint stays: it is the only way to change page. */
 }
 @media (max-width: 900px) {
   .live-meters { display: none; }
@@ -2425,3 +2429,59 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 @media (max-width: 640px) {
   .cfg-surface-row { grid-template-columns: 1fr; gap: 2px; }
 }
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   Nexus: quieter chrome.
+   Same palette throughout — these rules only reduce weight and motion, they
+   introduce no new colours. The page used to open on a pulsing icon, three
+   marketing pills and a heading; a chat window should open on an invitation.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  color: var(--text-mute);
+}
+.chat-empty-icon {
+  font-size: 30px;
+  color: var(--accent-3);
+  opacity: 0.75;
+  animation: none;            /* the pulse was the loudest thing on an idle page */
+}
+.chat-empty p {
+  font-size: 15px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+/* The composer is the one control that is always in use, so it gets the
+   focus ring and nothing else does. */
+.chat-input {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: border-color 120ms ease;
+}
+.chat-input:focus-within {
+  border-color: var(--accent-3);
+}
+
+/* Toolbar buttons recede until hovered. Six equally bright icons above a
+   conversation compete with the conversation. */
+.chat-toolbar .ct-btn {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+.chat-toolbar .ct-btn:hover,
+.chat-toolbar .ct-btn.active,
+.chat-toolbar .ct-btn:focus-visible {
+  opacity: 1;
+}
+
+/* A hidden workspace must actually take no space: [hidden] loses to the
+   pane's own display:flex without this. */
+#workspace-pane[hidden] { display: none !important; }

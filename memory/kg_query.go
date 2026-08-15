@@ -5,7 +5,9 @@ package memory
 // to neighbours, and versioning against the git commit a fact was read at.
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -137,19 +139,37 @@ func (kg *KnowledgeGraph) PropagateConfidence(id string, delta, decay float64, m
 	return changed
 }
 
-// StaleFiles returns the file nodes whose recorded commit differs from the
-// repository's current HEAD — the graph's honest answer to "which of my
-// beliefs predate the code as it stands now?".
+// StaleFiles returns the file nodes whose contents differ from what the agent
+// last saw — the graph's honest answer to "which of my beliefs are about a
+// version of this file that no longer exists?".
+//
+// It compares CONTENT, not the commit. Comparing the recorded commit to HEAD,
+// which is what this used to do, is wrong in both directions: one commit marks
+// every file stale including the ones it did not touch, and an uncommitted
+// edit marks nothing stale at all — so a file the agent had just edited itself
+// still read as current. Content answers exactly, and does not care whether the
+// change was committed.
+//
+// A file the agent has never read is not listed. Never-read is not stale; it
+// is unknown, and reporting it here would bury the files that genuinely
+// changed under every file in the repository.
 func (kg *KnowledgeGraph) StaleFiles(workspace string) []Match {
-	head := GitHead(workspace)
-	if head == "" {
-		return nil
-	}
 	var out []Match
 	for _, n := range kg.FindByType(core.KGNodeFile) {
-		if c := n.Properties["commit"]; c != "" && c != head {
+		seen := n.Properties[fileHashProperty]
+		if seen == "" {
+			continue // never observed; see above
+		}
+		data, err := os.ReadFile(filepath.Join(workspace, n.Label))
+		if err != nil {
 			m := toMatch(n)
-			m.Provenance = "indexed at " + short(c) + ", HEAD is " + short(head)
+			m.Provenance = "read as " + seen + ", now unreadable (moved or deleted)"
+			out = append(out, m)
+			continue
+		}
+		if now := ContentHash(string(data)); now != seen {
+			m := toMatch(n)
+			m.Provenance = "read as " + seen + ", now " + now
 			out = append(out, m)
 		}
 	}

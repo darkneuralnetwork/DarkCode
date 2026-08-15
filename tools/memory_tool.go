@@ -9,6 +9,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/recall"
 )
 
 // MemoryTool wraps the memory store for use as an agent tool.
@@ -23,6 +24,9 @@ import (
 type MemoryTool struct {
 	Store  *memory.Store
 	System *memory.System
+	// Recall is the memory gateway. nil writes the store directly, which is
+	// what this did before placement became one decision.
+	Recall *recall.Manager
 }
 
 // NewMemoryTool creates a tool backed by the legacy store only.
@@ -73,7 +77,7 @@ func (t *MemoryTool) Execute(ctx context.Context, args map[string]interface{}) *
 			if category == "" {
 				category = "memory"
 			}
-			if err := t.System.SemanticAdd(key, content, category, []string{"note", category}); err != nil {
+			if err := t.rememberNote(key, content, category); err != nil {
 				return &ToolResult{Name: "memory", Success: false, Error: err.Error()}
 			}
 			return &ToolResult{
@@ -271,4 +275,14 @@ func (t *MemoryTool) Schema() string {
 		},
 		"required": ["action"]
 	}`
+}
+
+// rememberNote writes a user-dictated note through the memory gateway, falling
+// back to the store when none is installed.
+func (t *MemoryTool) rememberNote(key, content, category string) error {
+	tags := recall.SortedTags([]string{"note", category})
+	if t.Recall != nil {
+		return t.Recall.Remember(recall.Note{Key: key, Content: content, Category: category, Tags: tags})
+	}
+	return t.System.SemanticAdd(key, content, category, tags)
 }

@@ -1,48 +1,72 @@
-<div class="replay-layout" style="display:flex;flex-direction:column;width:100%;height:100%;overflow-y:auto;background:var(--bg-void);padding:24px;gap:20px;">
+<!-- Execution replay — moving through a run after it finished.
 
-  <div class="glass-panel" style="padding:20px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 class="cfg-h3" style="margin:0;font-size:14px;text-transform:uppercase;">⏱ Execution Replay</h3>
-      <button class="fe-btn" id="rp-refresh">↻ Refresh</button>
+     The execution journal exists so a crashed DAG can resume without re-paying
+     for model calls it already made. The same ordered record answers a second
+     question afterwards: what did this run actually do, and where did it go
+     wrong. This page is the scrubber for it.
+
+     js/240-replay.js has always been complete and has always shipped; its
+     markup was deleted, so it had never once drawn. The ids below are the ones
+     that module queries, and rp-player / rp-timeline-panel / rp-detail-panel
+     are shown and hidden by it as a run is selected. -->
+<div class="status-content custom-scrollbar rp-page">
+
+  <div class="rp-head">
+    <div>
+      <h2 class="gradient-text" style="margin:0; font-size:24px;">Execution replay</h2>
+      <div style="font-size:12px; color:var(--text-mute); margin-top:4px;">
+        Scrub a recorded run. State is folded from the start each time, so moving
+        backwards is as accurate as moving forwards.
+      </div>
     </div>
-    <p style="color:var(--text-mute);font-size:12px;margin:0 0 12px;">
-      Every DAG run is journalled so a crash can resume it. The same record replays here —
-      scrub the timeline to see the state of the run at any point.
-    </p>
-    <select id="rp-run" style="width:100%;padding:8px;background:var(--bg-panel);color:var(--text);
-            border:1px solid var(--border);border-radius:6px;font-size:12px;">
-      <option value="">Loading runs…</option>
+    <button class="btn-glow" id="rp-refresh">Reload runs</button>
+  </div>
+
+  <div class="glass-panel rp-picker">
+    <label class="rp-label" for="rp-run">Run</label>
+    <select id="rp-run" class="custom-select rp-select">
+      <option value="">No recorded runs yet</option>
     </select>
   </div>
 
-  <div class="glass-panel" id="rp-player" style="padding:20px;display:none;">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-      <span id="rp-position" style="font-size:12px;color:var(--text-dim);">–</span>
-      <span id="rp-elapsed" style="font-size:11px;color:var(--text-mute);"></span>
+  <!-- ── Transport ─────────────────────────────────────────────────────── -->
+  <div class="glass-panel rp-player" id="rp-player" style="display:none;">
+    <div class="rp-readout">
+      <div class="rp-position" id="rp-position">—</div>
+      <div class="rp-meta">
+        <span id="rp-elapsed"></span>
+        <span id="rp-status"></span>
+      </div>
     </div>
 
-    <input type="range" id="rp-slider" min="0" max="0" value="0" step="1"
-           style="width:100%;accent-color:var(--accent);cursor:pointer;" />
+    <input type="range" class="rp-slider" id="rp-slider" min="0" max="0" value="0" step="1"
+           aria-label="Position in the run">
 
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px;">
-      <button class="fe-btn" id="rp-first" title="First event">⏮</button>
-      <button class="fe-btn" id="rp-prev" title="Previous">◀</button>
-      <button class="fe-btn" id="rp-play" title="Play">▶</button>
-      <button class="fe-btn" id="rp-next" title="Next">▶|</button>
-      <button class="fe-btn" id="rp-last" title="Last event">⏭</button>
-      <span id="rp-status" style="margin-left:auto;font-size:11px;"></span>
+    <div class="rp-transport">
+      <button class="rp-btn" id="rp-first" title="First event">⏮</button>
+      <button class="rp-btn" id="rp-prev" title="Previous event">◀</button>
+      <button class="rp-btn rp-btn-play" id="rp-play" title="Play or pause">▶</button>
+      <button class="rp-btn" id="rp-next" title="Next event">▶</button>
+      <button class="rp-btn" id="rp-last" title="Last event">⏭</button>
     </div>
   </div>
 
-  <div class="glass-panel" id="rp-detail-panel" style="padding:20px;display:none;flex:1;min-height:200px;">
-    <h4 class="cfg-h3" style="margin:0 0 10px;font-size:12px;text-transform:uppercase;">Event</h4>
-    <div id="rp-detail" style="font-family:var(--font-mono);font-size:12px;white-space:pre-wrap;
-         word-break:break-word;color:var(--text);"></div>
-  </div>
+  <!-- ── The run, and the event you are parked on ──────────────────────── -->
+  <div class="rp-split">
+    <div class="glass-panel rp-timeline-panel" id="rp-timeline-panel" style="display:none;">
+      <div class="chart-head" style="margin-bottom:12px;">
+        <h3>Timeline</h3>
+        <span class="chart-sub">click any step to jump</span>
+      </div>
+      <div class="rp-timeline custom-scrollbar" id="rp-timeline"></div>
+    </div>
 
-  <div class="glass-panel" id="rp-timeline-panel" style="padding:20px;display:none;">
-    <h4 class="cfg-h3" style="margin:0 0 10px;font-size:12px;text-transform:uppercase;">Timeline</h4>
-    <div id="rp-timeline" style="display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto;"></div>
+    <div class="glass-panel rp-detail-panel" id="rp-detail-panel" style="display:none;">
+      <div class="chart-head" style="margin-bottom:12px;">
+        <h3>This step</h3>
+      </div>
+      <pre class="rp-detail custom-scrollbar" id="rp-detail"></pre>
+    </div>
   </div>
 
 </div>

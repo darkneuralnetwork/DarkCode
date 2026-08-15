@@ -27,6 +27,10 @@ test: ## Run the test suite
 test-race: ## Run tests with the race detector
 	$(GO) test -race $(PKGS)
 
+.PHONY: eval
+eval: ## Print the retrieval scorecard (offline; no model calls, no keys)
+	$(GO) test ./eval/ -run TestRetrievalScorecard -v 2>&1 | sed -n '/corpus:/,/^--- /p'
+
 .PHONY: cover
 cover: ## Run tests and write a coverage profile
 	$(GO) test -coverprofile=coverage.out $(PKGS)
@@ -56,6 +60,23 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 		git --no-pager diff -- go.mod go.sum; exit 1; \
 	fi
 
+.PHONY: arch-check
+arch-check: ## Fail if a layering boundary regressed (see .arch-baseline)
+	@scripts/arch-check.sh
+
+.PHONY: arch-list
+arch-list: ## Show every site that currently crosses a layering boundary
+	@scripts/arch-check.sh --list
+
+.PHONY: leak-check
+leak-check: ## Prove the leak guard's rules all fire (self-test)
+	@scripts/leak-check.sh --self-test
+
+.PHONY: hooks
+hooks: ## Install the leak-guard git hooks (sets core.hooksPath)
+	@git config core.hooksPath .githooks
+	@echo "core.hooksPath -> .githooks (pre-commit, commit-msg, pre-push active)"
+
 .PHONY: bench
 bench: build ## Run the benchmark suite against the built binary
 	$(GO) run ./bench/cmd/benchrun -tasks bench/tasks -agent ./$(BINARY) -json bench-report.json
@@ -67,7 +88,7 @@ sbom: build ## Write the bill of materials read back out of the built binary
 	@echo "wrote SBOM.txt"
 
 .PHONY: ci
-ci: fmt-check vet build test-race ## The full gate CI enforces
+ci: fmt-check vet arch-check leak-check build test-race ## The full gate CI enforces
 
 .PHONY: clean
 clean: ## Remove build artifacts

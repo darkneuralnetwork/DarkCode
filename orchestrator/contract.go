@@ -153,17 +153,17 @@ const loopPlanMinComplexity = 4
 // active project always is: its plan and workflow are the user's stated
 // intent, and ignoring them is how "follow the blueprint" stops meaning
 // anything.
-func (k *Kernel) shouldPlanForLoop(goal string, complexity int, hasProjectGuidance bool) bool {
+func (k *Kernel) shouldPlanForLoop(ctx context.Context, goal string, complexity int, hasProjectGuidance bool) bool {
 	// An explicit /graph or /loop decides this outright — the user has said
 	// which shape of work they want, and second-guessing them from a
 	// complexity heuristic is how the verb stops meaning anything.
-	if force, set := k.planForced(); set {
+	if force, set := k.planForced(ctx); set {
 		return force
 	}
 	if hasProjectGuidance {
 		return true
 	}
-	if k.readOnlyForRequest() || k.toolsDisabledForRequest() {
+	if k.readOnlyForRequest(ctx) || k.toolsDisabledForRequest(ctx) {
 		return false // nothing to build, so nothing to verify
 	}
 	return complexity >= loopPlanMinComplexity

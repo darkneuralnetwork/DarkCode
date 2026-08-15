@@ -35,7 +35,11 @@ function connectSSE() {
     const el = $("#evt-live"); if (el) { el.textContent = "● PAUSED"; el.classList.add("paused"); }
   };
 
-  const types = ["task_update","agent_spawn","agent_complete","tool_execution","model_route","compression","final_output","skill_extract","memory_store","dag_update","consensus","token_usage","error","approval","plan_updated","workflow_updated","project_auto_created","chat_query","chat_response","sync_gui"];
+  // EventSource only delivers a named event to a listener registered for that
+  // exact name, so this list is the whole contract: a type missing here is
+  // broadcast by the server and dropped by the browser. Keep it in step with
+  // core.EventType.
+  const types = ["task_update","agent_spawn","agent_complete","tool_execution","model_route","compression","final_output","skill_extract","memory_store","dag_update","consensus","token_usage","error","approval","file_change","plan_updated","workflow_updated","chat_query","chat_response","sync_gui"];
   types.forEach((t) => {
     evtSource.addEventListener(t, (e) => {
       try {
@@ -43,18 +47,24 @@ function connectSSE() {
         if (t === "token_usage") { handleTokenUsage(data); return; }
         if (t === "approval") { handleApprovalEvent(data); return; }
         if (t === "sync_gui") { handleSyncGUI(); return; }
-        if (t === "project_auto_created") {
+        // Auto Mode announces a detected project as a task_update, not an
+        // event type of its own — server/chat_handler.go emits
+        // EmitTaskUpdate("project_auto_created", proj.ID, proj.Name), so the
+        // id arrives in `status` and the name in `content`. This used to
+        // listen for a "project_auto_created" event that the server never
+        // sends, so Auto Mode never activated the project it had just found.
+        if (t === "task_update" && data.task_id === "project_auto_created") {
           toast("success", "Auto Mode detected a project! Activating " + data.content);
-          setActiveProject(data.task);
+          setActiveProject(data.status);
           switchTab("blueprint");
           return;
         }
-        if (t === "plan_updated" && data.task === activeProjectId) {
+        if (t === "plan_updated" && data.task_id === activeProjectId) {
           const v = $("#workflow-plan-view");
           if (v) renderPlanBoard(data.content || "", v, "plan");
           return;
         }
-        if (t === "workflow_updated" && data.task === activeProjectId) {
+        if (t === "workflow_updated" && data.task_id === activeProjectId) {
           const v = $("#workflow-arch-view");
           if (v) renderPlanBoard(data.content || "", v, "workflow");
           return;

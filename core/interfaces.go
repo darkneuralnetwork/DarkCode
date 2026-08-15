@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrContextTooLong is the sentinel every provider maps a context-overflow
@@ -138,6 +139,15 @@ type MemoryStore interface {
 	ProceduralGet(name string) (*Skill, bool)
 	ProceduralAll() []*Skill
 
+	// STMTruncate drops all but the most recent n messages.
+	STMTruncate(n int)
+
+	// SessionEpoch is when the current session began. Entries older than it
+	// that are conversational (episodic, and the "task:"-keyed semantic facts
+	// written per Q&A) are a previous chat rather than durable knowledge, so
+	// retrieval filters them out. Zero means no session boundary is set.
+	SessionEpoch() time.Time
+
 	// Sub-systems
 	KG() KnowledgeGraphStore
 	Learning() LearningStore
@@ -189,6 +199,12 @@ type ToolRegistry interface {
 	LLMSchemas() interface{}
 	// LLMSchemasReadOnly returns only read-only tool schemas (Chat mode).
 	LLMSchemasReadOnly() interface{}
+
+	// ObserveResult renders a tool's output as it should appear in the model's
+	// context — whole when small, a preview with a retrieval handle when large.
+	// On the interface so every caller that builds a tool message agrees; they
+	// used to each truncate with their own constant and drop the remainder.
+	ObserveResult(tool, output string) string
 }
 
 // ============================================================================

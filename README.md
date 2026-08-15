@@ -337,8 +337,14 @@ darkcode
 # Web dashboard on http://localhost:12345
 darkcode --gui
 
-# One-shot, non-interactive
-darkcode -q "explain what cmd/root.go does"
+# Editor integration (Zed, VS Code, JetBrains) over the Agent Client Protocol
+darkcode --acp
+
+# Scripted / non-interactive: drive the OpenAI-compatible endpoint
+darkcode --gui --port 12345 &
+curl -s http://127.0.0.1:12345/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"darkcode","messages":[{"role":"user","content":"explain cmd/root.go"}]}'
 
 # Register a cloud model and go
 darkcode --add-model gpt-4o --provider openai --api-key sk-...

@@ -2,6 +2,13 @@ module github.com/darkcode
 
 go 1.24.0
 
+// The toolchain is pinned rather than floating because release.yml builds with
+// check-latest:false so a release stays reproducible, and the nightly runs
+// govulncheck. Those two pull in opposite directions: an old pin is
+// reproducible and vulnerable. This is the version that clears the called
+// stdlib advisories; raise it when govulncheck says to, not on a schedule.
+toolchain go1.26.6
+
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

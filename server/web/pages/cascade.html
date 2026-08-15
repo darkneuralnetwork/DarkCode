@@ -1,46 +1,46 @@
-<div class="cascade-layout custom-scrollbar" style="display:flex;flex-direction:column;width:100%;height:100%;overflow-y:auto;background:var(--bg-void);padding:24px;gap:20px;">
+<!-- Cognition cascade, consensus & debate — how the answer got decided.
 
-  <div class="glass-panel" style="padding:20px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 class="cfg-h3" style="margin:0;font-size:14px;text-transform:uppercase;">💸 Cognition Cascade</h3>
-      <button class="fe-btn" id="cs-refresh">↻ Refresh</button>
+     Both panels answer the same question from opposite ends. The cascade shows
+     which rung answered without a model call; consensus shows what happened
+     when several models did answer and disagreed. Together they account for
+     every decision the router made on your behalf. -->
+<div style="padding:20px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(460px, 1fr));">
+
+  <div class="glass-panel" id="tel-cascade-panel" style="padding:20px; grid-column:1 / -1;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <h3 style="margin:0;">💸 Cognition cascade</h3>
+      <button class="fe-btn xs" id="cs-refresh">Refresh</button>
     </div>
-    <p style="color:var(--text-mute);font-size:12px;margin:0;">
-      Before any paid model runs, a query descends a ladder of local answerers. A confident hit
-      answers for free. This is the record of how often that worked.
+    <p style="font-size:11px; color:var(--text-mute); margin:0 0 12px;">
+      A question descends smalltalk → deterministic → cache → graph → recall → llm.
+      Every rung that answers is a model call that did not happen.
     </p>
+    <div id="cs-rungs"><div class="mem-empty">No cascade activity recorded yet.</div></div>
   </div>
 
-  <div class="glass-panel" id="cs-headline-panel" style="padding:20px;">
-    <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:baseline;">
-      <div>
-        <div id="cs-avoided" style="font-size:30px;font-weight:600;color:var(--green, #22c55e);line-height:1.1;">–</div>
-        <div style="font-size:11px;color:var(--text-mute);text-transform:uppercase;">LLM calls avoided</div>
-      </div>
-      <div>
-        <div id="cs-rate" style="font-size:30px;font-weight:600;color:var(--accent);line-height:1.1;">–</div>
-        <div style="font-size:11px;color:var(--text-mute);text-transform:uppercase;">answered locally</div>
-      </div>
-      <div>
-        <div id="cs-total" style="font-size:30px;font-weight:600;color:var(--text-dim);line-height:1.1;">–</div>
-        <div style="font-size:11px;color:var(--text-mute);text-transform:uppercase;">queries recorded</div>
-      </div>
+  <div class="glass-panel" id="tel-consensus-panel" style="padding:20px; grid-column:1 / -1;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <h3 style="margin:0;">🤝 Consensus &amp; debate</h3>
+      <span id="consensus-live" style="font-size:11px; color:var(--text-mute);">● IDLE</span>
     </div>
-  </div>
-
-  <div class="glass-panel" style="padding:20px;">
-    <h4 class="cfg-h3" style="margin:0 0 10px;font-size:12px;text-transform:uppercase;">Rungs</h4>
-    <p style="color:var(--text-mute);font-size:11px;margin:0 0 12px;">
-      Each rung's answer threshold rises on its own when a locally-answered question gets re-asked.
-      Thresholds only ever move toward more escalation — a confidently wrong local answer costs
-      more than an extra API call.
+    <p style="font-size:11px; color:var(--text-mute); margin:0 0 14px;">
+      When models disagree, the knowledge graph is checked first — that settles it for zero extra
+      calls. Only when the graph cannot check the claims do the two most divergent answers
+      critique each other, once. The exchange is recorded below.
     </p>
-    <div id="cs-rungs" style="display:flex;flex-direction:column;gap:6px;"></div>
-  </div>
 
-  <div class="glass-panel" style="padding:20px;flex:1;min-height:180px;">
-    <h4 class="cfg-h3" style="margin:0 0 10px;font-size:12px;text-transform:uppercase;">Recent Decisions</h4>
-    <div id="cs-log" style="display:flex;flex-direction:column;gap:2px;max-height:320px;overflow-y:auto;"></div>
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:14px;">
+      <div><div class="kpi-label">MODELS</div><div class="kpi-value" id="cs-model-count">0</div></div>
+      <div><div class="kpi-label">DECIDED BY</div><div class="kpi-value" id="cs-method">—</div></div>
+      <div><div class="kpi-label">CONFLICT</div><div class="kpi-value" id="cs-conflict">—</div></div>
+      <div><div class="kpi-label">DEBATED</div><div class="kpi-value" id="cs-debated">—</div></div>
+    </div>
+
+    <div id="cs-transcript-wrap" hidden>
+      <div style="font-size:11px; color:var(--text-dim); margin-bottom:6px;">Exchange transcript</div>
+      <pre id="cs-transcript" class="custom-scrollbar" style="max-height:240px; overflow:auto; font-size:11px; line-height:1.5; background:var(--bg-deep); border:1px solid var(--border); border-radius:8px; padding:12px; white-space:pre-wrap;"></pre>
+    </div>
+    <div id="cs-history"><div class="mem-empty">No consensus rounds yet. Enable consensus routing and debate in Configuration.</div></div>
   </div>
 
 </div>

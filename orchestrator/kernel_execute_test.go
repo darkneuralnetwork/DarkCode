@@ -49,29 +49,36 @@ func (p *promptRecorder) sawPrompt(substr string) bool {
 	return false
 }
 
-func TestExecuteDispatchGeneralMode(t *testing.T) {
+// TestExecuteDispatchConversationalMode — a conversational turn keeps its
+// tools and skips the fan-out.
+//
+// This test used to assert the opposite: that the turn took a path with NO
+// tools at all. That was the wrong saving. The cost being avoided was the DAG
+// and its worker pipeline, not the ability to look something up, and a turn
+// that cannot check anything answers more confidently rather than more
+// cheaply. It stays a single call when nothing needs reading.
+func TestExecuteDispatchConversationalMode(t *testing.T) {
 	rec := &promptRecorder{}
 	client := &fakeLLMClient{name: "fake", respFunc: rec.respFunc}
 	deps := newTestKernel(t, client)
 
-	// chat_mode="general" disables tools for the request.
-	restore := deps.Kernel.ApplyRequestOverrides("", "", "", "off", "")
+	ctx, restore := deps.Kernel.ApplyRequestOverrides(context.Background(), "", "", "", "off", "")
 	defer restore()
 
-	// Concrete indicator ("implement") keeps it out of the clarification gate;
-	// general mode then takes the no-tools path before any trivial/DAG branch.
-	out, err := deps.Kernel.Execute(context.Background(), "explain how to implement HTTP caching")
+	out, err := deps.Kernel.Execute(ctx, "explain how to implement HTTP caching")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if out == "" {
 		t.Fatal("expected a non-empty answer")
 	}
-	if !rec.sawPrompt("General (conversational) mode") {
-		t.Error("expected the general-mode (no-tools) path to be taken")
+	// The expensive part is what must not happen.
+	if rec.sawPrompt("Planning Engine") {
+		t.Error("a conversational turn decomposed into a task graph")
 	}
-	if rec.sawPrompt("Planning Engine") || rec.sawPrompt("Agentic Loop (ReAct)") {
-		t.Error("general mode must not enter the DAG or loop paths")
+	// And the turn must be read-only: no mutating tool may be offered.
+	if !deps.Kernel.readOnlyForRequest(ctx) {
+		t.Error("a conversational turn was not read-only, so it could write files")
 	}
 }
 
@@ -80,10 +87,10 @@ func TestExecuteDispatchLoopMode(t *testing.T) {
 	client := &fakeLLMClient{name: "fake", respFunc: rec.respFunc}
 	deps := newTestKernel(t, client)
 
-	restore := deps.Kernel.ApplyRequestOverrides("", "", "on", "on", "")
+	ctx, restore := deps.Kernel.ApplyRequestOverrides(context.Background(), "", "", "on", "on", "")
 	defer restore()
 
-	out, err := deps.Kernel.Execute(context.Background(), "add a retry helper to the http client")
+	out, err := deps.Kernel.Execute(ctx, "add a retry helper to the http client")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -160,11 +167,11 @@ func TestExecuteConfidentRecallShortCircuit(t *testing.T) {
 	client := &fakeLLMClient{name: "fake", responses: []string{"HTTP caching stores responses to avoid refetching."}}
 	deps := newTestKernel(t, client)
 
-	restore := deps.Kernel.ApplyRequestOverrides("", "", "", "off", "") // general mode (no tools → cacheable)
+	ctx, restore := deps.Kernel.ApplyRequestOverrides(context.Background(), "", "", "", "off", "") // general mode (no tools → cacheable)
 	defer restore()
 
 	q := "explain how to implement HTTP caching in detail please"
-	first, err := deps.Kernel.Execute(context.Background(), q)
+	first, err := deps.Kernel.Execute(ctx, q)
 	if err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
@@ -173,7 +180,7 @@ func TestExecuteConfidentRecallShortCircuit(t *testing.T) {
 		t.Fatal("first Execute should have called the LLM")
 	}
 
-	second, err := deps.Kernel.Execute(context.Background(), q)
+	second, err := deps.Kernel.Execute(ctx, q)
 	if err != nil {
 		t.Fatalf("second Execute: %v", err)
 	}
@@ -223,10 +230,10 @@ func TestExecuteCostGovernorWarnProceeds(t *testing.T) {
 		PerSessionUSD: 1.0, Action: metrics.BudgetActionWarn,
 	}))
 
-	restore := deps.Kernel.ApplyRequestOverrides("", "", "", "off", "") // general mode, cheap path
+	ctx, restore := deps.Kernel.ApplyRequestOverrides(context.Background(), "", "", "", "off", "") // general mode, cheap path
 	defer restore()
 
-	out, err := deps.Kernel.Execute(context.Background(), "explain how to implement a feature")
+	out, err := deps.Kernel.Execute(ctx, "explain how to implement a feature")
 	if err != nil {
 		t.Fatalf("warn mode should proceed, got error: %v", err)
 	}

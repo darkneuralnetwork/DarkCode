@@ -7,6 +7,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/dag"
+	"github.com/darkcode/modelport"
 	"github.com/darkcode/plan"
 )
 
@@ -203,14 +204,16 @@ func (k *Kernel) executeDAG(ctx context.Context, d *dag.DAG, goal string) ([]*co
 			})
 		}
 
-		// Execute all ready tasks concurrently (or serially, in Sequential mode).
+		// Decide the parallelism for THIS wave from what is true now — how
+		// much independent work there is, whether the model is local, and
+		// whether the provider has recently said no — and push it into the
+		// executor. It used to read a fixed number that never reached the
+		// executor at all. See orchestrator/concurrency.go.
+		decision := k.resolveConcurrency(len(configs))
 		if k.emitter != nil && len(configs) > 1 {
-			mode := "parallel"
-			if k.resolveSequential() {
-				mode = "sequential"
-			}
 			k.emitter.EmitTaskUpdate("executor", "running",
-				fmt.Sprintf("Running %d tasks in %s", len(configs), mode))
+				fmt.Sprintf("Running %d tasks, %d at a time (%s)",
+					len(configs), decision.Limit, decision.Reason))
 		}
 
 		results := k.executor.ExecuteAll(ctx, configs)
@@ -320,16 +323,10 @@ func (k *Kernel) mergeResults(ctx context.Context, results []*core.SubAgentResul
 	}
 
 	// Use reasoning model to synthesize
-	client, modelName, err := k.router.Route(core.ModelTierReasoning, 8, goal)
-	if err != nil {
-		// Fallback: just concatenate
-		return sb.String(), nil
-	}
-
-	temp := 0.5
-	maxTok := 4000
-	req := &core.CompletionRequest{
-		Model: modelName,
+	ans, err := k.models.Complete(ctx, modelport.Ask{
+		Purpose:    modelport.PurposeSynthesize,
+		Complexity: 8,
+		Goal:       goal,
 		Messages: []core.Message{
 			{
 				Role:    core.RoleSystem,
@@ -340,18 +337,10 @@ func (k *Kernel) mergeResults(ctx context.Context, results []*core.SubAgentResul
 				Content: sb.String(),
 			},
 		},
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-
-	resp, err := client.ChatCompletion(ctx, req)
-	if err != nil {
+		MaxTokens: 4000,
+	})
+	if err != nil || strings.TrimSpace(ans.Text) == "" {
 		return sb.String(), nil // fallback to raw concatenation
 	}
-
-	if len(resp.Choices) > 0 {
-		return resp.Choices[0].Message.Content, nil
-	}
-
-	return sb.String(), nil
+	return ans.Text, nil
 }

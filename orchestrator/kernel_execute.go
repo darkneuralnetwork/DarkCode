@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/darkcode/compression"
 	"github.com/darkcode/core"
+	"github.com/darkcode/hooks"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/loop"
 	"github.com/darkcode/plan"
@@ -187,7 +187,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Checked BEFORE the cognition cascade so a cached answer can never
 	// swallow an "approve", and only in tool-enabled modes (General/Chat
 	// requests pass through untouched — the pending plan stays pending).
-	if !k.toolsDisabledForRequest() && !k.readOnlyForRequest() {
+	if !k.toolsDisabledForRequest(ctx) && !k.readOnlyForRequest(ctx) {
 		if out, handled, err := k.handlePendingPlan(ctx, userGoal); handled {
 			return out, err
 		}
@@ -211,24 +211,26 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Step 2: Compress context (if enabled and history is long enough to be
 	// worth an LLM call). Running compression on every request — including a
 	// trivial single-turn "what is 2+2" — adds latency and cost for no benefit,
-	// so we skip it until the STM window has accumulated meaningful history.
+	// so it runs only once the conversation genuinely crowds the window.
 	if k.cfg.CompressContext && k.compressor != nil {
 		stm := k.memory.STMGet()
-		// Compress when EITHER there's enough message-count growth (the
-		// original heuristic) OR the STM already exceeds ~60% of the primary
-		// client's window (Part 3 token-budget trigger). The token trigger
-		// catches a single giant turn that would overflow a small (local)
-		// window even at message #2 — the message-count rule alone never fired
-		// for it.
-		overTokenBudget := false
-		if win := k.primaryContextWindow(); win > 0 {
-			if compression.EstimateTokens(stm) > win*60/100 {
-				overTokenBudget = true
-			}
-		}
-		countGrown := len(stm) >= compressionMinHistory && len(stm)-k.lastCompressedLen >= compressionMinGrowth
-		if countGrown || (overTokenBudget && len(stm) >= 2) {
-			k.log("compress", "Compressing context")
+		// One trigger, and it is about tokens. This used to fire on a message
+		// COUNT as well — eight messages, grown by four — which is unrelated to
+		// how full the window is: eight short turns can be a few hundred tokens
+		// and it would still spend a model call summarising them. See
+		// compaction.go.
+		window := k.primaryContextWindow()
+		used := k.compressor.EstimateTokens(stm)
+		if shouldCompact(len(stm), used, window) {
+			k.log("compress", fmt.Sprintf("Compacting context: %d tokens used of a %d window (threshold %d)",
+				used, window, compactionThreshold(window)))
+			// pre_compact fires while the messages about to be summarised are
+			// still whole. After this point they are a briefing, and whatever
+			// a hook wanted to keep is already gone.
+			_ = k.hooks.Run(ctx, hooks.PreCompact, hooks.Context{
+				Goal:   userGoal,
+				Detail: fmt.Sprintf("%d tokens of a %d window", used, window),
+			})
 			snapshot, err := k.compressor.Compress(ctx, stm, userGoal)
 			if err == nil && snapshot != nil {
 				k.log("compress", fmt.Sprintf("Context compressed: %d→%d tokens (ratio: %.1f%%)",
@@ -237,9 +239,8 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 				if k.emitter != nil {
 					k.emitter.EmitCompression(snapshot.OriginalTokens, snapshot.CompressedTokens)
 				}
-				briefing := compression.SnapshotToMessages(snapshot)
+				briefing := k.compressor.SnapshotToMessages(snapshot)
 				k.memory.STMCompress(briefing, compressionKeepRecent)
-				k.lastCompressedLen = len(k.memory.STMGet())
 			}
 		}
 	}
@@ -260,7 +261,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	k.mu.Lock()
 	hasProjectGuidance := k.projectPlan != "" || k.projectWorkflow != ""
 	k.mu.Unlock()
-	if !k.toolsDisabledForRequest() &&
+	if !k.toolsDisabledForRequest(ctx) &&
 		classifyGoalIntent(userGoal, k.memory.STMGet(), hasProjectGuidance) == intentVagueAction {
 		k.log("plan", "Request has no actionable subject — requesting clarification")
 		clarification := "I can help, but your request doesn't name anything to act on. Tell me what you'd like me to work on — the goal or subject, plus any constraints or examples."
@@ -276,7 +277,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// model can read/search the project and web to answer, but can never write
 	// files or run commands. Output goes to the reply. This is what makes Chat
 	// "answer, don't build" while still seeing the project.
-	if k.readOnlyForRequest() {
+	if k.readOnlyForRequest(ctx) {
 		k.log("plan", "Chat mode (read-only tools) — answer without writing")
 		return k.executeChatReadOnly(ctx, userGoal, recallBlock)
 	}
@@ -285,19 +286,20 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// this request (chat_mode=="general"), take a lightweight single-LLM-call
 	// path with NO tools offered. This is pure conversation: no DAG, no worker
 	// agents, no approval popups, no tool overhead. It is intentionally taken
-	// BEFORE the loop/DAG/consensus-trivial branches so General mode never
-	// offers tools even if the master loop toggle is on or consensus is set.
-	if k.toolsDisabledForRequest() {
-		k.log("plan", "General mode (tools disabled) — direct conversational path")
-		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
-	}
-
-	// Step 3.055: Cost guard — an obvious general question takes the single-call
-	// no-tools path instead of the worker+web_search pipeline (several LLM calls
-	// for a one-call answer), unless Loop mode or an active project wants tools.
-	if !k.loopEnabledForRequest() && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
-		k.log("plan", "Obvious general question — direct conversational path (no tools)")
-		return k.executeDirectNoTools(ctx, userGoal, recallBlock)
+	// Step 3.055: Cost guard — an obvious general question goes to a single
+	// worker rather than the DAG, which would spend several calls to answer
+	// something worth one. Unless Loop mode or an active project wants more.
+	//
+	// It used to go to a path with NO tools, and that was the wrong saving.
+	// Asked "what is in this directory", the agent replied that it could not
+	// see the files — it had been given no way to look. A question being
+	// conversational says nothing about whether answering it needs the web, a
+	// PDF or a glance at the repo. The cost being avoided was the DAG, not the
+	// tools, so the tools stay and only the fan-out goes: one worker, read-only
+	// scope, model decides whether to call anything.
+	if !k.loopEnabledForRequest(ctx) && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
+		k.log("plan", "Obvious general question — read-only tools, no fan-out")
+		return k.executeChatReadOnly(ctx, userGoal, recallBlock)
 	}
 
 	// Step 3.5: Agentic Loop — optional ReAct execution. When enabled, delegate
@@ -305,7 +307,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// consensus mode is on with multiple models, a synthesis round follows,
 	// grounded in the loop's tool trace so reviewers can't claim the agent
 	// lacked tool access.
-	if k.loopEnabledForRequest() && k.agenticLoop != nil {
+	if k.loopEnabledForRequest(ctx) && k.agenticLoop != nil {
 		k.log("loop", "Agentic loop (ReAct) enabled — running Sense-Think-Act cycle")
 		stm := k.memory.STMGet()
 		var history []core.Message
@@ -343,7 +345,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 			}
 		}
 
-		if contract == nil && k.shouldPlanForLoop(userGoal, complexity, hasProjectGuidance) {
+		if contract == nil && k.shouldPlanForLoop(ctx, userGoal, complexity, hasProjectGuidance) {
 			depth := decidePlanDepth(userGoal, complexity, hasProjectGuidance, k.planDepthCfg())
 			if g, perr := k.deepPlan(ctx, k.injectRecall(userGoal, recallBlock), depth); perr == nil {
 				g.Goal = userGoal

@@ -196,9 +196,12 @@ function updateLoopIndicator(on) {
   ind.classList.toggle("on", !!on);
   const lbl = ind.querySelector(".loop-label");
   if (lbl) lbl.textContent = on ? "Loop: ON" : "Loop: OFF";
+  // The chat-mode picker is gone; the loop is a property of every turn now,
+  // not a mode you select, so the tooltip says what the toggle does rather
+  // than pointing at a control that no longer exists.
   ind.title = on
-    ? "Agentic Loop (ReAct) is ON — the Loop chat mode is available"
-    : "Agentic Loop (ReAct) is OFF — toggle in Configurations to enable the Loop chat mode";
+    ? "Agentic Loop (ReAct) is ON — the agent reasons and uses tools across multiple turns"
+    : "Agentic Loop (ReAct) is OFF — the agent answers in a single turn; enable it in Configurations";
 }
 
 // renderExecutionProfile marks the active segment of the Execution Profile

@@ -19,18 +19,21 @@ function toast(type, message, duration) {
 // ════════════════════════════════════════════════════════════════════════
 // COMMAND PALETTE
 // ════════════════════════════════════════════════════════════════════════
+// The Navigate group is the only way to change page, so every entry here must
+// name a panel that exists in index.html. Order and labels follow NAV_META.
 const cmdItems = [
-  { group: "Navigate", icon: "💬", label: "Studio", hint: "studio", action: () => switchTab("studio") },
-  { group: "Navigate", icon: "📡", label: "Live Events", hint: "events", action: () => switchTab("events") },
-  { group: "Navigate", icon: "📊", label: "Monitoring Dashboard", hint: "monitor", action: () => switchTab("monitoring") },
-  { group: "Navigate", icon: "⚙️", label: "Configuration & Models", hint: "config", action: () => switchTab("config") },
-  { group: "Navigate", icon: "🔧", label: "Tool Registry", hint: "tools", action: () => switchTab("tools") },
-  { group: "Navigate", icon: "🧠", label: "6-Tier Memory", hint: "memory", action: () => switchTab("memory") },
+  { group: "Navigate", icon: "💬", label: "Studio (Chat & Workspace)", hint: "studio chat workspace", action: () => switchTab("studio") },
+  { group: "Navigate", icon: "📐", label: "Blueprint (Plan & Workflow)", hint: "blueprint plan workflow tasks", action: () => switchTab("blueprint") },
   { group: "Navigate", icon: "📁", label: "Projects", hint: "projects", action: () => switchTab("projects") },
-  { group: "Navigate", icon: "🔵", label: "System Telemetry", hint: "status", action: () => switchTab("status") },
+  { group: "Navigate", icon: "🧠", label: "6-Tier Memory", hint: "memory recall", action: () => switchTab("memory") },
+  { group: "Navigate", icon: "🔧", label: "Tool Registry", hint: "tools mcp", action: () => switchTab("tools") },
+  { group: "Navigate", icon: "📡", label: "Live Events", hint: "events stream", action: () => switchTab("events") },
+  { group: "Navigate", icon: "📊", label: "Monitoring Dashboard", hint: "monitor charts tokens cost", action: () => switchTab("monitoring") },
+  { group: "Navigate", icon: "🔵", label: "System Telemetry", hint: "status audit learning", action: () => switchTab("status") },
+  { group: "Navigate", icon: "💸", label: "Cognition Cascade", hint: "cascade savings consensus debate", action: () => switchTab("cascade") },
+  { group: "Navigate", icon: "⏱", label: "Execution Replay", hint: "replay timeline scrub", action: () => switchTab("replay") },
   { group: "Navigate", icon: "↩", label: "Changes & Rollback", hint: "diff undo rollback changes", action: () => switchTab("changes") },
-  { group: "Navigate", icon: "💸", label: "Cognition Cascade", hint: "cascade savings cost", action: () => switchTab("cascade") },
-  { group: "Navigate", icon: "⏱", label: "Execution Replay", hint: "replay timeline", action: () => switchTab("replay") },
+  { group: "Navigate", icon: "⚙️", label: "Configuration & Models", hint: "config models providers", action: () => switchTab("config") },
   { group: "Actions", icon: "⚡", label: "Add LLM Model", hint: "add model", action: () => { switchTab("config"); setTimeout(() => { const addBtn = document.querySelector('#cfg-mc-toggle .cfg-mc-btn[data-view="add"]'); if (addBtn) addBtn.click(); $("#cfg-provider")?.focus(); }, 300); } },
   { group: "Actions", icon: "🔄", label: "Refresh Metrics", hint: "refresh", action: () => { loadMetrics(); toast("info", "Metrics refreshed"); } },
   { group: "Actions", icon: "🗑️", label: "Reset Metrics", hint: "reset", action: () => { $("#mon-reset")?.click(); } },
@@ -230,3 +233,49 @@ function fmtDur(ms) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════
+// WORKSPACE PANE
+// ════════════════════════════════════════════════════════════════════════
+//
+// The file tree is useful when you are watching the agent edit, and it is
+// 320px of permanent furniture the rest of the time. Hiding it is the single
+// biggest thing that makes this read as a chat window rather than an IDE.
+//
+// The choice persists: a pane you have to re-hide on every reload is a pane
+// that is effectively not hideable.
+
+const WORKSPACE_KEY = "dc.workspace.hidden";
+
+function setWorkspaceHidden(hidden) {
+  const pane = document.getElementById("workspace-pane");
+  const btn = document.getElementById("workspace-toggle");
+  if (pane) pane.hidden = hidden;
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(!hidden));
+    btn.title = hidden ? "Show the workspace (Ctrl+B)" : "Hide the workspace (Ctrl+B)";
+    btn.classList.toggle("active", !hidden);
+  }
+  try { localStorage.setItem(WORKSPACE_KEY, hidden ? "1" : "0"); } catch (e) { /* private mode */ }
+}
+
+function toggleWorkspace() {
+  const pane = document.getElementById("workspace-pane");
+  setWorkspaceHidden(pane ? !pane.hidden : false);
+}
+
+function initWorkspaceToggle() {
+  let hidden = false;
+  try { hidden = localStorage.getItem(WORKSPACE_KEY) === "1"; } catch (e) { /* private mode */ }
+  setWorkspaceHidden(hidden);
+  document.getElementById("workspace-toggle")?.addEventListener("click", toggleWorkspace);
+  // Ctrl+B is the sidebar toggle everywhere else; honour it here too, but not
+  // while the user is typing a B into the composer.
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "b") return;
+    const t = e.target;
+    if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+    e.preventDefault();
+    toggleWorkspace();
+  });
+}

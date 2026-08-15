@@ -189,7 +189,7 @@ async function saveProject() {
       setActiveProject(savedData.id);
       // Loop mode lands on chat (so the user can immediately start a loop);
       // project mode lands on the workflow tab (shows the seeded plan).
-      switchTab(pendingMode === "loop" ? "nexus" : "blueprint");
+      switchTab(pendingMode === "loop" ? "studio" : "blueprint");
       if (pendingMode === "loop") {
         toast("info", "Loop Mode active — project ready. The ReAct loop runs for each message.");
       }

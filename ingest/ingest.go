@@ -19,6 +19,7 @@ import (
 
 	"github.com/darkcode/core"
 	"github.com/darkcode/memory"
+	"github.com/darkcode/recall"
 	"github.com/darkcode/safeurl"
 	"github.com/darkcode/tools/deterministic"
 )
@@ -55,7 +56,14 @@ func (s *Stats) addErr(format string, a ...interface{}) {
 type Ingester struct {
 	mem *memory.System
 	kg  core.KnowledgeGraphStore // optional; enables code-structure indexing
+	// rec is the memory gateway. nil writes the store directly, which is what
+	// this did before placement became one decision.
+	rec *recall.Manager
 }
+
+// SetRecall installs the memory gateway so ingested chunks are placed by the
+// same rules as everything else the agent learns.
+func (in *Ingester) SetRecall(m *recall.Manager) { in.rec = m }
 
 // New builds an Ingester over the given memory system. kg may be nil (then code
 // is still stored as searchable text chunks, just not graph-indexed).
@@ -203,7 +211,7 @@ func (in *Ingester) storeChunks(source, category, content string, st *Stats) int
 	for i, c := range chunks {
 		key := fmt.Sprintf("ingest:%s:%s#%d", category, source, i)
 		tags := []string{category, "ingested", base}
-		if err := in.mem.SemanticAdd(key, c, category, tags); err != nil {
+		if err := in.remember(key, c, category, tags); err != nil {
 			st.addErr("%s#%d: %v", source, i, err)
 			continue
 		}
@@ -211,4 +219,16 @@ func (in *Ingester) storeChunks(source, category, content string, st *Stats) int
 	}
 	st.Chunks += stored
 	return stored
+}
+
+// remember writes one ingested chunk as a Note through the gateway, falling
+// back to the store when none is installed.
+func (in *Ingester) remember(key, content, category string, tags []string) error {
+	if in.rec != nil {
+		return in.rec.Remember(recall.Note{
+			Key: key, Content: content, Category: category,
+			Tags: recall.SortedTags(tags),
+		})
+	}
+	return in.mem.SemanticAdd(key, content, category, tags)
 }

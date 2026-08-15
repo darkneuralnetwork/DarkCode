@@ -1,0 +1,139 @@
+# Security: the checks that answer "is what we ship safe to ship".
+#
+# WHY A SEPARATE FILE
+#
+# ci.yml answers "does this change work". These answer "is this change, or the
+# tree it lands in, dangerous" — and they have a different failure economics.
+# A vulnerable dependency is not caused by the PR that trips over it, so these
+# also run on a schedule: a repository can go from clean to vulnerable with
+# nobody touching it. The nightly run caught exactly that and stayed red for
+# five days because it was buried in a job that also runs a flake hunt.
+#
+# THE FOUR LAYERS, AND WHY EACH IS NOT REDUNDANT
+#
+#   leak-check.sh   this project's own rules — vendor names in branches and
+#                   filenames, AI attribution in commit messages, files outside
+#                   the path allowlist. Nothing off the shelf knows these.
+#                   Runs in ci.yml, where it gates the merge.
+#   gitleaks        secret detection with ~150 maintained provider rules, over
+#                   FULL HISTORY. leak-check only scans the diff, so a key
+#                   committed and later deleted is invisible to it and still
+#                   public forever. This repository is public; that is the
+#                   whole argument.
+#   govulncheck     Go-specific and call-graph aware: it reports a CVE only if
+#                   the vulnerable symbol is actually reachable from our code.
+#                   That is why it is a gate and Dependabot is a mailbox.
+#   CodeQL          taint analysis for the injection classes a linter cannot
+#                   see. Free on public repositories.
+#
+# GitHub's own push protection is enabled on this repo and is a fifth layer,
+# but it only sees pushes to GitHub. gitleaks in CI also covers a mirror, a
+# fork, and history rewritten before it ever reached the remote.
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 04:00 UTC, an hour after nightly, so a failure here is attributable to
+    # this file rather than to whatever nightly was doing.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+# Least privilege by default. Jobs that need more say so themselves.
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth 0 is the point of this job. A shallow clone would scan the
+      # tip and miss every key that was committed and then removed — which is
+      # the only interesting case, because a key still in the tip is one grep
+      # away and one already deleted feels handled and is not.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The released binary rather than gitleaks-action: the action requires a
+      # licence key for organisation accounts, which would turn a security gate
+      # into a billing dependency. Version and checksum are pinned; a tarball
+      # that does not match is a supply-chain event, not a flake.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL "$url" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      - name: Scan full history
+        run: ./gitleaks git . --redact --verbose --exit-code 1
+
+      # The working tree as well: gitleaks git only sees committed objects, so
+      # an uncommitted file staged by a workflow would slip past it.
+      - name: Scan the working tree
+        run: ./gitleaks dir . --redact --verbose --exit-code 1
+
+  vulnerabilities:
+    name: Reachable vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Reachability is what makes this a gate rather than noise. Before the
+      # toolchain pin this reported 36 called stdlib advisories and the nightly
+      # had been red for five days; the fix was one line in go.mod, which is
+      # exactly the kind of finding a gate is supposed to force.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # to file findings in the Security tab
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          languages: go
+          # security-extended over the default pack: this program executes
+          # shell commands, walks the filesystem and fetches URLs on behalf of
+          # a model. The extra queries are precisely the taint paths that
+          # matter for an agent.
+          queries: security-extended
+
+      # Autobuild would work, but the real build is one line and building the
+      # thing we actually ship is what we want analysed.
+      - name: Build
+        run: go build ./...
+
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          category: /language:go

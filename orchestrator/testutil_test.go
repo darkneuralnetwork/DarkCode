@@ -12,7 +12,6 @@ package orchestrator
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -148,31 +147,12 @@ func newTestKernelWithMode(t *testing.T, mode core.RoutingMode, client *fakeLLMC
 	return &testKernelDeps{Kernel: k, Router: rtr, Registry: reg, Memory: mem, Client: client}
 }
 
-// fakeTool registers a trivial always-succeeding tool with the registry, for
-// tests that need a DAG/loop path to actually exercise tool dispatch.
-func registerFakeTool(reg *tools.Registry, name string) {
-	reg.Register(&tools.ToolEntry{
-		Name:        name,
-		Description: "test tool",
-		Parameters:  tools.MustParseSchema(`{"type":"object","properties":{}}`),
-		Handler: func(ctx context.Context, args map[string]interface{}) *tools.ToolResult {
-			return &tools.ToolResult{Name: name, Success: true, Output: "tool ran"}
-		},
-	})
-}
-
-// waitGroupTimeout runs wg.Wait() with a timeout, failing the test instead of
-// hanging forever if a cancellation test's goroutines don't exit promptly.
-func waitGroupTimeout(t *testing.T, wg *sync.WaitGroup, d time.Duration) {
-	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(d):
-		t.Fatal("timed out waiting for goroutines to finish")
-	}
+// mustOverride adapts ApplyRequestOverrides for the tests that only assert on
+// shared router/gate state (mode, safety, brain). Those settings still live on
+// the router and gate, so the returned context carries nothing they need and
+// discarding it is correct. Tests about the per-request flags must NOT use
+// this — they need the context. See override_isolation_test.go.
+func mustOverride(k *Kernel, mode, safety, loop, tools, brain string) func() {
+	_, restore := k.ApplyRequestOverrides(context.Background(), mode, safety, loop, tools, brain)
+	return restore
 }

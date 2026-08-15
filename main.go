@@ -24,7 +24,6 @@ func main() {
 	cli.EnableTerminalColors()
 
 	var (
-		query       string
 		model       string
 		toolsFlag   bool
 		statusFlag  bool
@@ -42,8 +41,6 @@ func main() {
 		debugFlag   bool
 	)
 
-	flag.StringVar(&query, "q", "", "Single query (non-interactive mode)")
-	flag.StringVar(&query, "query", "", "Single query (non-interactive mode)")
 	flag.StringVar(&model, "m", "", "Override model")
 	flag.StringVar(&model, "model", "", "Override model")
 	flag.BoolVar(&toolsFlag, "tools", false, "List registered tools and exit")
@@ -139,7 +136,7 @@ func main() {
 
 	// Validate config - warn if API key missing but allow tool to start
 	if err := cfg.Validate(); err != nil {
-		if !uiMode && !guiFlag && query == "" {
+		if !uiMode && !guiFlag {
 			// Interactive CLI mode and API key is missing. Run wizard!
 			config.RunInteractiveSetup(cfg)
 		} else {
@@ -154,12 +151,12 @@ func main() {
 	}
 
 	// === ORCHESTRATOR MODE ===
-	runOrchestrator(cfg, query, statusFlag, portFlag, guiFlag, acpFlag, bindAddr)
+	runOrchestrator(cfg, statusFlag, portFlag, guiFlag, acpFlag, bindAddr)
 }
 
-// runOrchestrator wires the full 6-layer system and runs the query.
-func runOrchestrator(cfg *config.Config, query string, statusOnly bool, portFlag string, guiFlag, acpFlag bool, bindAddr string) {
-	runner := NewAppRunner(cfg, query, statusOnly, portFlag, guiFlag, bindAddr)
+// runOrchestrator wires the full system and hands control to a surface.
+func runOrchestrator(cfg *config.Config, statusOnly bool, portFlag string, guiFlag, acpFlag bool, bindAddr string) {
+	runner := NewAppRunner(cfg, statusOnly, portFlag, guiFlag, bindAddr)
 	runner.WireUp()
 	if acpFlag {
 		runner.RunACP()
@@ -334,7 +331,6 @@ Usage:
   darkcode [flags]
 
 Flags:
-  -q, --query TEXT       Run a single query (non-interactive)
   -m, --model NAME       Override the model
   --mode MODE            Routing mode: single, escalation, consensus
   --safety LEVEL         Safety level: strict, normal, relaxed
