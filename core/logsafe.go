@@ -19,10 +19,11 @@ import "strings"
 // writes a second line that reads exactly like a real one. Replacing the
 // terminators with an escape keeps the value legible while making it
 // impossible for it to end its own line.
-func LogSafe(s string) string {
-	if !strings.ContainsAny(s, "\r\n") {
-		return s
-	}
-	r := strings.NewReplacer("\r\n", "\\n", "\n", "\\n", "\r", "\\r")
-	return r.Replace(s)
-}
+// The replacer is package-level and every value goes through it. An earlier
+// version returned the input unchanged when it contained no terminator, which
+// was a branch on which the untrusted value reached the output having passed
+// through nothing — CodeQL was right to keep reporting it, and the saving was
+// never worth having on a logging path.
+var logLineBreaks = strings.NewReplacer("\r\n", "\\n", "\n", "\\n", "\r", "\\r")
+
+func LogSafe(s string) string { return logLineBreaks.Replace(s) }
