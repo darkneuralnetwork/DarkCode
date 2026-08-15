@@ -106,6 +106,9 @@ type ReActLoop struct {
 	// fan-out and sub-agent calls, so a limit was checked once and then
 	// exceeded several times over inside the run it was meant to bound.
 	budget func() error
+	// repoRules is the repo's rules file content (config.Config.RepoRules),
+	// appended to the system prompt when non-empty.
+	repoRules string
 }
 
 // New creates a ReAct loop wired to the model router, tool registry, and event
@@ -138,6 +141,10 @@ func (l *ReActLoop) SetModels(m *modelport.Manager) {
 // It returns an error rather than a bool so the reason reaches the user: "the
 // run stopped" without saying why reads as the agent giving up.
 func (l *ReActLoop) SetBudgetCheck(fn func() error) { l.budget = fn }
+
+// SetRepoRules installs the repo's rules file content, appended to the
+// system prompt on every turn while it's set.
+func (l *ReActLoop) SetRepoRules(rules string) { l.repoRules = rules }
 
 // BudgetCheckInstalled reports whether a spend check is wired. It exists so a
 // caller can prove the wiring rather than assume it: the check is installed on
@@ -748,6 +755,11 @@ func (l *ReActLoop) systemPrompt() string {
 	b.WriteString("- Prefer parallel tool calls when actions are independent (they execute concurrently).\n")
 	b.WriteString("- Be concise in intermediate thoughts; reserve detail for the final answer.\n")
 	b.WriteString("- If a tool result says \"permission denied by user\" with feedback, honour that steer and change your approach accordingly.\n")
+	if l.repoRules != "" {
+		b.WriteString("\n## Project Rules\n")
+		b.WriteString(l.repoRules)
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

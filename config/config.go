@@ -13,6 +13,12 @@ import (
 
 // Config holds all agent configuration.
 type Config struct {
+	// RepoRules is the content of the repo's rules file (AGENTS.md,
+	// .darkcode/RULES.md, or CLAUDE.md — first found), loaded fresh from the
+	// working directory at every Load. Not persisted: it always reflects the
+	// file on disk, never a stale copy from a saved config.
+	RepoRules string `json:"-"`
+
 	// --- Single model (backward compatible) ---
 	Model         string  `json:"model"`
 	Provider      string  `json:"provider"`
@@ -548,6 +554,9 @@ func Load() (*Config, error) {
 		if os.IsNotExist(err) {
 			// Try environment variables as fallback
 			applyEnv(cfg)
+			if wd, wderr := os.Getwd(); wderr == nil {
+				cfg.RepoRules = loadRepoRules(wd)
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config: %w", err)
@@ -610,6 +619,10 @@ func Load() (*Config, error) {
 	// but surface portability/logic problems to stderr so they aren't silent.
 	if verr := cfg.Validate(); verr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: config validation: %v\n", verr)
+	}
+
+	if wd, err := os.Getwd(); err == nil {
+		cfg.RepoRules = loadRepoRules(wd)
 	}
 
 	return cfg, nil

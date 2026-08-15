@@ -384,6 +384,14 @@ func (k *Kernel) SetClientFactory(fn func(config.ModelConfig) core.LLMClient) {
 	k.newClient = fn
 }
 
+// SetRepoRules forwards the repo's rules file content (config.Config.RepoRules)
+// to the agentic loop, which appends it to the system prompt.
+func (k *Kernel) SetRepoRules(rules string) {
+	if k.agenticLoop != nil {
+		k.agenticLoop.SetRepoRules(rules)
+	}
+}
+
 // SetCheckpoints installs the workspace snapshotter, both on the tool registry
 // (which takes the pre-mutation snapshot) and on the kernel, so every surface
 // can offer rollback from one owner.

@@ -653,6 +653,7 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// Hand the kernel the client factory so ReloadModels can rebuild clients on
 	// a live config change without the orchestrator importing llm.
 	a.Kernel.SetClientFactory(a.createClient)
+	a.Kernel.SetRepoRules(a.Cfg.RepoRules)
 	a.Recorder = tools.NewChangeRecorder()
 	a.Kernel.SetChangeRecorder(a.Recorder)
 
