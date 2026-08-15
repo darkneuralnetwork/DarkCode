@@ -1,6 +1,6 @@
 module github.com/darkcode
 
-go 1.24.0
+go 1.25.0
 
 // The toolchain is pinned rather than floating because release.yml builds with
 // check-latest:false so a release stays reproducible, and the nightly runs
@@ -13,7 +13,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/chzyer/readline v1.5.1
-	golang.org/x/sys v0.36.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
