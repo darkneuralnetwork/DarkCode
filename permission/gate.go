@@ -160,6 +160,9 @@ type Gate struct {
 
 	// denyRules refuse matching calls ahead of every permissive path.
 	denyRules []DenyRule
+	// testLockRules is the optional test/CI write-lock preset, kept separate
+	// from denyRules so toggling it never clobbers the user's own rules.
+	testLockRules []DenyRule
 	// allowedTools, when non-empty, is a whitelist; anything unlisted is
 	// refused regardless of level or prior session approval.
 	allowedTools []string
@@ -279,6 +282,11 @@ func (g *Gate) deniedByRule(tool string, args map[string]interface{}) (DenyRule,
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, r := range g.denyRules {
+		if r.matches(tool, args) {
+			return r, true
+		}
+	}
+	for _, r := range g.testLockRules {
 		if r.matches(tool, args) {
 			return r, true
 		}

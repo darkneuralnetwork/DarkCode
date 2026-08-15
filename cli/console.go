@@ -65,6 +65,9 @@ type Console struct {
 	projects      *project.Store
 	ckpt          *checkpoint.Manager
 	activeProject string
+	// testLock mirrors the gate's test/CI write-lock state for /lock-tests'
+	// no-argument status report — the gate itself doesn't expose a getter.
+	testLock bool
 
 	// extCommands are the slash commands loaded extension bundles offer,
 	// consulted just before the console reports an unknown command.
@@ -841,6 +844,37 @@ func (c *Console) printPermissions(args []string) {
 	fmt.Printf("  %-18s %s\n", paint(cGray, "session allows"), paint(cBlue, fmtNum(stats.SessionAll)))
 	fmt.Printf("  %-18s %s\n", paint(cGray, "session denies"), paint(cRed, fmtNum(stats.SessionDeny)))
 	fmt.Printf("\n  %s /permissions reset to clear session decisions\n", paint(cGray, ""))
+}
+
+// handleLockTests toggles the test/CI write lock: `/lock-tests on` denies
+// writes to test files and CI config for the rest of the session (without
+// disturbing any deny rules the user configured separately); `/lock-tests
+// off` restores them. Bare `/lock-tests` reports the current state.
+func (c *Console) handleLockTests(args []string) {
+	if c.gate == nil {
+		fmt.Println(paint(cGray, "  permission gate not installed."))
+		return
+	}
+	if len(args) == 0 {
+		state := paint(cGray, "off")
+		if c.testLock {
+			state = paint(cGreen, "on")
+		}
+		fmt.Printf("  test/CI write lock: %s %s\n", state, paint(cGray, "(/lock-tests on|off)"))
+		return
+	}
+	switch args[0] {
+	case "on":
+		c.gate.SetTestLock(true)
+		c.testLock = true
+		fmt.Println(paint(cGreen, "✓") + paint(cGray, " test files and CI config are now read-only for tool writes."))
+	case "off":
+		c.gate.SetTestLock(false)
+		c.testLock = false
+		fmt.Println(paint(cGreen, "✓") + paint(cGray, " test/CI write lock disabled."))
+	default:
+		fmt.Println(paint(cRed, "✗") + paint(cGray, " usage: /lock-tests on|off"))
+	}
 }
 
 // printUsageDelta prints a compact usage summary for the requests made since
