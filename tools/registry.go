@@ -862,6 +862,14 @@ func (r *Registry) noteFileObservation(ctx context.Context, tool string, args ma
 		return
 	}
 	path = expandPath(ctx, path)
+	// The tool has already run and the permission gate has already decided the
+	// model may look at this path. This read is separate: its result is
+	// persisted into the knowledge graph, so an approved one-off read of a file
+	// outside the workspace would become a durable belief about it. Confine the
+	// observation, not the tool. Fails closed — no workspace, no observation.
+	if err := withinWorkspace(ctx, path); err != nil {
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return

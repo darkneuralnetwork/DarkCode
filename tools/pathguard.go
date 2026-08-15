@@ -34,9 +34,27 @@ import (
 // That is precisely the case not to trust. A guard whose default is to permit
 // is not a guard.
 func confineWrite(ctx context.Context, resolved string) error {
+	if err := withinWorkspace(ctx, resolved); err != nil {
+		return err
+	}
+	return nil
+}
+
+// withinWorkspace is the containment test itself, separated from confineWrite
+// so a read path can ask the same question.
+//
+// Reads are deliberately NOT confined — the permission gate decides what the
+// user is willing to let the agent look at, and confining reads to the
+// workspace would break reading a config in $HOME that the user approved.
+// Persisting what was read is a different question with a different answer:
+// noteFileObservation feeds file contents into the knowledge graph, where they
+// outlive the turn the user approved. CodeQL flagged that read as
+// go/path-injection and it was right — an approved one-off look at
+// ~/.ssh/config should not become a durable belief.
+func withinWorkspace(ctx context.Context, resolved string) error {
 	ws := CurrentWorkspace(ctx)
 	if ws == "" {
-		return fmt.Errorf("refusing to write %q: this request carries no active workspace, "+
+		return fmt.Errorf("refusing %q: this request carries no active workspace, "+
 			"so path confinement cannot be enforced", resolved)
 	}
 	wsAbs, err := filepath.Abs(ws)

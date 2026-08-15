@@ -137,15 +137,22 @@ func TestBothDispatchPathsRecordFileObservations(t *testing.T) {
 			var got []string
 			r.SetFileObserver(func(p, content string) { got = append(got, p) })
 
+			// The context carries dir as the workspace because observations are
+			// now confined to it (see observation_confinement_test.go). Every
+			// real request already arrives this way — uiport.go:192 sets the
+			// key — so a bare context here was a test artifact, and the parity
+			// property this test exists for is unaffected: both paths still
+			// have to record the same observation for the same file.
+			ctx := withWorkspace(dir)
 			args := map[string]interface{}{"path": path}
 			if viaDispatchAll {
 				raw, _ := json.Marshal(args)
-				r.DispatchAll(context.Background(), []core.ToolCall{{
+				r.DispatchAll(ctx, []core.ToolCall{{
 					ID: "1", Type: "function",
 					Function: core.FunctionCall{Name: "read_file", Arguments: string(raw)},
 				}})
 			} else {
-				if _, err := r.Execute(context.Background(), "read_file", args); err != nil {
+				if _, err := r.Execute(ctx, "read_file", args); err != nil {
 					t.Fatalf("Execute: %v", err)
 				}
 			}
