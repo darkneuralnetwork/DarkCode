@@ -88,3 +88,40 @@ func TestFileObservationIsConfinedToWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// TestChangeSnapshotIsConfinedToWorkspace covers the same exposure on the
+// change-record path (CodeQL #51/#52/#53).
+//
+// captureFileBefore runs BEFORE the tool does, so it read whatever path the
+// model named regardless of whether the write was about to be refused.
+// write_file and patch both call confineWrite, so the write itself never lands
+// outside the workspace — but the before-snapshot of the file was captured
+// into the change record and shown in the Changes tab anyway. A refused
+// write_file to a file outside the workspace disclosed its contents.
+func TestChangeSnapshotIsConfinedToWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secrets.txt")
+	if err := os.WriteFile(outside, []byte("token=hunter2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, content, existed := captureFileBefore(withWorkspace(ws),
+		"write_file", map[string]interface{}{"path": outside})
+	if strings.Contains(content, "hunter2") {
+		t.Fatalf("a file outside the workspace was snapshotted into a change record: %q", content)
+	}
+	if existed {
+		t.Fatal("an out-of-workspace file was reported as captured")
+	}
+
+	// An in-workspace file must still be snapshotted, or rollback breaks.
+	inWS := filepath.Join(ws, "real.txt")
+	if err := os.WriteFile(inWS, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, content, existed = captureFileBefore(withWorkspace(ws),
+		"write_file", map[string]interface{}{"path": inWS})
+	if !existed || content != "original" {
+		t.Fatalf("an in-workspace snapshot broke: existed=%v content=%q", existed, content)
+	}
+}

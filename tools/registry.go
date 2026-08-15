@@ -517,6 +517,19 @@ func denySuffix(req permission.ApprovalRequest) string {
 
 // captureFileBefore reads the current content of the file that a file-mutating
 // tool is about to touch. Returns (path, content, existed).
+// readIfWithinWorkspace reads a file only when it is inside the active
+// workspace, returning empty otherwise. The after-snapshot has the same
+// exposure as the before-snapshot in captureFileBefore: it runs on a
+// model-supplied path and its result is displayed and stored.
+func readIfWithinWorkspace(ctx context.Context, path string) string {
+	safe, err := withinWorkspace(ctx, path)
+	if err != nil {
+		return ""
+	}
+	b, _ := os.ReadFile(safe)
+	return string(b)
+}
+
 func captureFileBefore(ctx context.Context, tool string, args map[string]interface{}) (string, string, bool) {
 	if tool != "write_file" && tool != "patch" {
 		return "", "", false
@@ -526,6 +539,18 @@ func captureFileBefore(ctx context.Context, tool string, args map[string]interfa
 		return "", "", false
 	}
 	path = expandPath(ctx, path)
+	// This runs BEFORE the tool does, so it reads whatever path the model
+	// named whether or not the write is about to be refused. write_file and
+	// patch both call confineWrite, so a target outside the workspace never
+	// gets written — but without this the before-snapshot of that file was
+	// still captured into the change record and shown in the Changes tab.
+	// Confining the snapshot to the same subtree the write is confined to
+	// keeps the two policies identical.
+	safe, cerr := withinWorkspace(ctx, path)
+	if cerr != nil {
+		return path, "", false
+	}
+	path = safe
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return path, "", false
@@ -556,24 +581,24 @@ func (r *Registry) recordChange(ctx context.Context, tool string, args map[strin
 		if path == "" {
 			path = expandPath(ctx, str(args["path"]))
 		}
-		after, _ := os.ReadFile(path)
+		after := readIfWithinWorkspace(ctx, path)
 		c.Kind = core.ChangeFileModify
 		if !beforeExists {
 			c.Kind = core.ChangeFileCreate
 		}
 		c.Path = path
 		c.Before = beforeContent
-		c.After = string(after)
+		c.After = after
 	case "patch":
 		path := beforePath
 		if path == "" {
 			path = expandPath(ctx, str(args["path"]))
 		}
-		after, _ := os.ReadFile(path)
+		after := readIfWithinWorkspace(ctx, path)
 		c.Kind = core.ChangeFileModify
 		c.Path = path
 		c.Before = beforeContent
-		c.After = string(after)
+		c.After = after
 	case "terminal":
 		c.Kind = core.ChangeCommand
 		c.Command = str(args["command"])
