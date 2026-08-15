@@ -34,10 +34,8 @@ import (
 // That is precisely the case not to trust. A guard whose default is to permit
 // is not a guard.
 func confineWrite(ctx context.Context, resolved string) error {
-	if err := withinWorkspace(ctx, resolved); err != nil {
-		return err
-	}
-	return nil
+	_, err := withinWorkspace(ctx, resolved)
+	return err
 }
 
 // withinWorkspace is the containment test itself, separated from confineWrite
@@ -51,20 +49,29 @@ func confineWrite(ctx context.Context, resolved string) error {
 // outlive the turn the user approved. CodeQL flagged that read as
 // go/path-injection and it was right — an approved one-off look at
 // ~/.ssh/config should not become a durable belief.
-func withinWorkspace(ctx context.Context, resolved string) error {
+//
+// It returns the path it actually validated, and callers that go on to touch
+// the file MUST use that return rather than the string they passed in. The two
+// differ: what is checked here is absolute and symlink-resolved, so a link
+// inside the workspace pointing at /etc passes the check under its own name and
+// would be opened under the target's. Validating one string and operating on
+// another is the whole shape of a TOCTOU, and it is also the reason a taint
+// tracker cannot see this function as a barrier — the value it follows never
+// passed through the check.
+func withinWorkspace(ctx context.Context, resolved string) (string, error) {
 	ws := CurrentWorkspace(ctx)
 	if ws == "" {
-		return fmt.Errorf("refusing %q: this request carries no active workspace, "+
+		return "", fmt.Errorf("refusing %q: this request carries no active workspace, "+
 			"so path confinement cannot be enforced", resolved)
 	}
 	wsAbs, err := filepath.Abs(ws)
 	if err != nil {
-		return fmt.Errorf("cannot resolve workspace root: %w", err)
+		return "", fmt.Errorf("cannot resolve workspace root: %w", err)
 	}
 	wsAbs = resolveSymlinks(wsAbs)
 	target, err := filepath.Abs(resolved)
 	if err != nil {
-		return fmt.Errorf("cannot resolve target path: %w", err)
+		return "", fmt.Errorf("cannot resolve target path: %w", err)
 	}
 	// Resolve symlinks so a link inside the workspace pointing at, say, /etc
 	// can't smuggle a write outside it. filepath.Abs only collapses "..".
@@ -73,9 +80,11 @@ func withinWorkspace(ctx context.Context, resolved string) error {
 	// neither ".." nor starts with "../".
 	rel, err := filepath.Rel(wsAbs, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path %q is outside the active workspace %q (blocked by path confinement)", resolved, wsAbs)
+		return "", fmt.Errorf("path %q is outside the active workspace %q (blocked by path confinement)", resolved, wsAbs)
 	}
-	return nil
+	// Rejoining from the workspace root rather than returning `target` keeps the
+	// result rooted at a value the check just constrained.
+	return filepath.Join(wsAbs, rel), nil
 }
 
 // resolveSymlinks returns p with symlinks resolved. A write target usually

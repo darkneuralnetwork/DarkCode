@@ -70,4 +70,21 @@ func TestFileObservationIsConfinedToWorkspace(t *testing.T) {
 	if len(observed) != 0 {
 		t.Fatalf("a request with no workspace must not record an observation, got %v", observed)
 	}
+
+	// A symlink inside the workspace pointing outside it. The first version of
+	// this guard checked the symlink-resolved path and then read the string it
+	// was handed, so this case passed the check under its own name and was
+	// opened under the target's — the containment was decorative for exactly
+	// the input designed to defeat it.
+	observed = nil
+	link := filepath.Join(ws, "innocent.txt")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	r.noteFileObservation(ctx, "read_file", map[string]interface{}{"path": link}, ok)
+	for _, o := range observed {
+		if strings.Contains(o, "hunter2") {
+			t.Fatalf("a symlink escaped confinement and was observed: %q", o)
+		}
+	}
 }

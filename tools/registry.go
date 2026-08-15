@@ -867,14 +867,15 @@ func (r *Registry) noteFileObservation(ctx context.Context, tool string, args ma
 	// persisted into the knowledge graph, so an approved one-off read of a file
 	// outside the workspace would become a durable belief about it. Confine the
 	// observation, not the tool. Fails closed — no workspace, no observation.
-	if err := withinWorkspace(ctx, path); err != nil {
-		return
-	}
-	data, err := os.ReadFile(path)
+	safe, err := withinWorkspace(ctx, path)
 	if err != nil {
 		return
 	}
-	observe(path, string(data))
+	data, err := os.ReadFile(safe)
+	if err != nil {
+		return
+	}
+	observe(safe, string(data))
 }
 
 // SetSpillStore installs the store used to offload oversized tool results.
