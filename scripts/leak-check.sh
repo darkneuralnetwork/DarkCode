@@ -88,7 +88,7 @@ SECRET_FILE='(^|/)\.env(\.|$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|ke
 # this set is either misplaced or a stray draft. Keep in step with the tree.
 ALLOWED_TOP='acp|adjudicate|agents|attach|bench|candidate|capability|checkpoint|cli|compression|concurrency|config|core|ctxengine|dag|datasource|debugger|docs|eval|hooks|ingest|intelligence|internal|llm|loop|memory|metrics|modelport|observability|orchestrator|permission|plan|planwork|plugin|project|provider|recall|router|safeurl|scheduler|scripts|security|selfheal|server|spill|tools|ui|uiport|verb|\.github|\.githooks'
 # Top-level files that are allowed to exist (not under a directory).
-ALLOWED_FILE='app\.go|app_acp\.go|app_cli\.go|app_gui\.go|app_postturn\.go|app_wireup\.go|main\.go|build\.sh|Makefile|Dockerfile|\.dockerignore|go\.mod|go\.sum|README\.md|CONTRIBUTING\.md|LICENSE|SIGNING-KEY\.asc|\.gitignore|\.arch-baseline'
+ALLOWED_FILE='app\.go|app_acp\.go|app_cli\.go|app_gui\.go|app_postturn\.go|app_wireup\.go|main\.go|build\.sh|Makefile|Dockerfile|\.dockerignore|go\.mod|go\.sum|README\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|SIGNING-KEY\.asc|\.gitignore|\.gitleaks\.toml|\.arch-baseline'
 
 # ------------------------------------------------------------ check funcs ---
 # Each prints one line per violation to stdout and nothing when clean, so the

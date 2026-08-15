@@ -1,0 +1,32 @@
+# Dependabot: keep the two things this repository actually depends on current.
+#
+# Go modules and GitHub Actions, weekly. Not daily — four direct dependencies
+# do not move that fast, and a PR nobody reads on Tuesday is the same as no PR.
+#
+# This is a mailbox, not a gate. govulncheck in .github/workflows/security.yml
+# is the gate, because it reports a CVE only when our code can reach the
+# vulnerable symbol. Dependabot tells you a newer version exists; govulncheck
+# tells you the old one is a problem. Both are useful and they are not the
+# same signal.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      # Lowercase, no scope suffix: it has to pass the same commit-msg hook and
+      # read like the rest of the history.
+      prefix: "bump"
+
+  # The workflows pin every action by commit SHA, which is the safe form and
+  # also the unreadable one — nothing tells you a pinned SHA has gone stale.
+  # This is what makes pinning maintainable rather than a slow rot.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "bump"

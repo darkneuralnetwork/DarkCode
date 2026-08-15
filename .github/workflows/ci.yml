@@ -2,9 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main, "hardening/**"]
+    # Every branch, not a named few. The old list was [main, "hardening/**"],
+    # so a 62-commit branch was pushed and nothing ran — the gate was only
+    # reached at pull-request time, which is the last moment it is useful.
+    branches: ["**"]
   pull_request:
     branches: [main]
+
+# The default token is broad. Nothing in this workflow writes to the
+# repository, so it gets read and no more; a job that needs a scope asks for it.
+permissions:
+  contents: read
 
 # Cancel superseded runs on the same ref.
 concurrency:
@@ -15,10 +23,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -61,7 +69,7 @@ jobs:
     # range scan and the origin/main base are both available.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Prove every guard rule fires
@@ -80,8 +88,8 @@ jobs:
           - { goos: windows, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true

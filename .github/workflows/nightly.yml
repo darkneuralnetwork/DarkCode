@@ -8,6 +8,9 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch: # so a maintainer can run it on demand
 
+permissions:
+  contents: read
+
 concurrency:
   group: nightly
   cancel-in-progress: true
@@ -16,8 +19,8 @@ jobs:
   regression:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -52,7 +55,9 @@ jobs:
           fi
           echo "reproducible: $(sha256sum /tmp/a | cut -d' ' -f1)"
 
-      - name: Vulnerability scan
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
+      # The vulnerability scan used to live here and is now in
+      # .github/workflows/security.yml, where it also gates pull requests. It
+      # was the reason this job was red for five days: a security failure
+      # buried in a workflow named "Nightly", next to a flake hunt, reads as
+      # flake and gets ignored. A finding should land in the workflow named
+      # for it.

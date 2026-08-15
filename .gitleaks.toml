@@ -1,0 +1,41 @@
+# gitleaks configuration.
+#
+# The default ruleset, plus the narrowest possible allowlist. A secret scanner
+# that is muted broadly is worse than none, because it reports clean and is
+# believed — so this file names two paths and one reason, and everything else
+# in the repository is scanned with the stock rules.
+#
+# WHAT IS ALLOWED, AND WHY
+#
+# Both exempt files are the FIXTURES OF SECRET-DETECTION CODE. They must
+# contain secret-shaped strings or they cannot test anything:
+#
+#   security/secrets_test.go  the table driving SecretScanner.HasSecret. Its
+#                             cases are the vendors' own published example
+#                             keys and plain alphabet sequences — read the
+#                             file, they are not quoted here because
+#                             scripts/leak-check.sh scans this one and is
+#                             right to. If gitleaks stops matching them, the
+#                             project's own scanner has a gap; the finding is
+#                             the point of the file.
+#
+#   scripts/leak-check.sh     the guard's --self-test asserts each rule fires,
+#                             which requires a fake key to fire on. The script
+#                             already excludes itself from its own content
+#                             scan for this exact reason; this is the same
+#                             exemption for the second tool.
+#
+# Neither file is exempt from review. If a real key is ever pasted into one of
+# them, no scanner will catch it — that is the cost of the exemption, and it is
+# why the list is two entries and not a directory.
+title = "darkcode"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixtures of the project's own secret-detection code"
+paths = [
+  '''^security/secrets_test\.go$''',
+  '''^scripts/leak-check\.sh$''',
+]

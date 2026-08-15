@@ -63,3 +63,23 @@ multi_debate.txt
 # Left untracked and unignored, so a blanket add would sweep it in.
 /ui/html/
 .gstack/
+
+# Runtime configuration written beside the source. THIS IS THE ONE THAT MATTERS:
+# extra/.config holds a live provider api_key, and it was protected only by
+# .git/info/exclude — which lives in one checkout and travels nowhere. A fresh
+# clone leaves it unignored, and this repository is public. Found by running
+# gitleaks over the working tree, which is the reason that job exists.
+/extra/
+/.config/
+/darkcode.config
+/old_ui/
+/ungit/
+/testing/
+/frontend/
+
+# Scratch left beside the source by earlier sessions. Untracked and unignored
+# until now, which is the same one-blanket-add hazard as everything above.
+/app.py
+/error.txt
+/websittttee/
+/webssiiittteeee/
