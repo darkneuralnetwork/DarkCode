@@ -39,6 +39,7 @@ coverage.out
 # project deliberately keeps out of its history.
 DARKCODE_VS_HERMES_AGENT.md
 AGENT_LANDSCAPE_*.md
+/text.txt
 THESIS.md
 HANDOFF_PROMPT.md
 NEXT_SESSION_PROMPT.md
