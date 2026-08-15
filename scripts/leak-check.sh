@@ -14,7 +14,11 @@
 # convenience: it fails fast on the developer's machine. This same script run
 # in CI (.github/workflows/ci.yml, job `leak-guard`) is the guarantee: a commit
 # made with --no-verify, or on a machine with no hook installed, still cannot
-# merge. Both call the SAME rules here, so the two layers cannot drift.
+# merge. Both call the SAME rules here — every check function runs in every
+# mode. They differ only in SCOPE: the hooks see the staged set or the push
+# range, CI additionally sweeps every tracked file. That asymmetry is
+# deliberate; a rule running in one mode and not the other is not, and was the
+# defect that let four new top-level packages pass pre-push and fail CI.
 #
 # WHAT IT DOES NOT DO
 #
@@ -82,7 +86,7 @@ SECRET_FILE='(^|/)\.env(\.|$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|ke
 
 # Top-level paths a tracked file is allowed to live under. A new file outside
 # this set is either misplaced or a stray draft. Keep in step with the tree.
-ALLOWED_TOP='acp|agents|attach|bench|candidate|capability|checkpoint|cli|compression|concurrency|config|core|ctxengine|dag|debugger|docs|ingest|intelligence|internal|llm|loop|memory|metrics|modelport|observability|orchestrator|permission|plan|planwork|plugin|project|provider|recall|router|safeurl|scheduler|scripts|security|selfheal|server|spill|tools|ui|uiport|verb|\.github|\.githooks'
+ALLOWED_TOP='acp|adjudicate|agents|attach|bench|candidate|capability|checkpoint|cli|compression|concurrency|config|core|ctxengine|dag|datasource|debugger|docs|eval|hooks|ingest|intelligence|internal|llm|loop|memory|metrics|modelport|observability|orchestrator|permission|plan|planwork|plugin|project|provider|recall|router|safeurl|scheduler|scripts|security|selfheal|server|spill|tools|ui|uiport|verb|\.github|\.githooks'
 # Top-level files that are allowed to exist (not under a directory).
 ALLOWED_FILE='app\.go|app_acp\.go|app_cli\.go|app_gui\.go|app_postturn\.go|app_wireup\.go|main\.go|build\.sh|Makefile|Dockerfile|\.dockerignore|go\.mod|go\.sum|README\.md|CONTRIBUTING\.md|LICENSE|SIGNING-KEY\.asc|\.gitignore|\.arch-baseline'
 
@@ -165,6 +169,7 @@ run_staged() {
   files="$(git diff --cached --name-only --diff-filter=AM)"
   v+="$(check_branch "$(current_branch)")"$'\n'
   v+="$(printf '%s\n' "$files" | check_filenames)"$'\n'
+  v+="$(printf '%s\n' "$files" | check_paths)"$'\n'
   v+="$(git diff --cached --diff-filter=AM -- . "$SELF_EXCLUDE" | grep -E '^\+' | check_secrets_content)"$'\n'
   fail_if "$(printf '%s' "$v" | grep -c . >/dev/null; printf '%s' "$v" | grep .)"
 }
@@ -183,6 +188,11 @@ run_push() {
   if [ -n "$range" ]; then
     files="$(git diff --name-only --diff-filter=AM "$range")"
     v+="$(printf '%s\n' "$files" | check_filenames)"$'\n'
+    # The path allowlist runs here too. It used to run only in --ci, so a new
+    # top-level package passed pre-push and then failed the leak-guard job —
+    # four of them did. A hook that says clean where CI says refuse is worse
+    # than no hook.
+    v+="$(printf '%s\n' "$files" | check_paths)"$'\n'
     v+="$(git log --format='%B' "$range" | check_commit_msg /dev/stdin 2>/dev/null || true)"$'\n'
     v+="$(git diff "$range" -- . "$SELF_EXCLUDE" | grep -E '^\+' | check_secrets_content)"$'\n'
     # attribution over each message in the range
