@@ -121,13 +121,58 @@ func isLocalhostOrigin(o string) bool {
 	return false
 }
 
+// isLoopbackHost reports whether a Host header names this machine.
+//
+// The port is not checked — the listener already decides that — but the
+// hostname must be one the browser could only have reached by resolving to
+// loopback legitimately. A bare IPv6 host arrives bracketed; SplitHostPort
+// unwraps it, and its failure means there was no port at all, so the whole
+// value is the host.
+func isLoopbackHost(host string) bool {
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	h = strings.Trim(h, "[]")
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 // csrfMiddleware blocks drive-by cross-origin requests. The server is always
 // bound to 127.0.0.1, so there is no remote attacker and no bearer token is
 // needed — but a malicious website (evil.com) open in the user's browser can
 // still issue fetch() calls to localhost. Any /api/* request (except
 // /api/health) carrying a non-loopback Origin header is rejected.
+//
+// # ORIGIN IS NOT ENOUGH, AND THIS IS WHY THE HOST CHECK IS HERE
+//
+// Origin alone leaves DNS rebinding wide open, which SECURITY.md lists as in
+// scope for this server. The attack does not send a foreign Origin — it
+// removes the need for one:
+//
+//	evil.com resolves to the attacker, serves a page, and re-resolves to
+//	127.0.0.1 on a short TTL. The page then fetches http://evil.com:12345/api/…
+//	The browser considers that SAME-ORIGIN with the page it is running, so it
+//	sends no Origin header at all, `origin != ""` is false, and the request
+//	arrives at a handler that will read and write files.
+//
+// The request still has to carry `Host: evil.com`, because that is the name
+// the browser dialled. Requiring the Host to be loopback is what closes it, and
+// it is the standard defence precisely because the attacker cannot forge it
+// without giving up the rebind.
 func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every path, not just /api/: the UI itself is worth protecting, and a
+		// rebound page loading it is the first step to driving it.
+		if r.Host != "" && !isLoopbackHost(r.Host) {
+			writeError(w, http.StatusForbidden, "blocked: this server only answers to a loopback host name")
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/health" {
 			if origin := r.Header.Get("Origin"); origin != "" && !isLocalhostOrigin(origin) {
 				writeError(w, http.StatusForbidden, "blocked: cross-origin requests are not allowed")

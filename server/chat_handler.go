@@ -353,7 +353,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				}
 			}()
 			if err := s.projects.AppendRawContext(projID, fmt.Sprintf("## User\n%s\n\n## Assistant\n%s\n", q, out)); err != nil {
-				log.Printf("[server] failed to append to raw context: %v", err)
+				log.Printf("[server] failed to append to raw context: %v", core.LogSafe(err.Error()))
 			}
 			s.maybeRewriteProjectContext(projID)
 		}(req.Project, req.Query, output)

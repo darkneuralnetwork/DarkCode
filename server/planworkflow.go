@@ -125,7 +125,7 @@ func (s *Server) seedProjectPlanWorkflow(projID, name, description, ctxBody stri
 			if genErr != nil {
 				reason = "Plan/workflow generation failed: " + genErr.Error() + " — click Regenerate to retry"
 			}
-			log.Printf("[server] plan/workflow generation produced nothing for %s: %v", projID, genErr)
+			log.Printf("[server] plan/workflow generation produced nothing for %s: %v", core.LogSafe(projID), core.LogSafe(genErr.Error()))
 			if s.emitter != nil {
 				s.emitter.EmitTaskUpdate("blueprint", "error", reason)
 			}

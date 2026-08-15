@@ -484,7 +484,34 @@ func (s *Store) Delete(id string) error {
 
 // --- internal helpers (must be called with the appropriate lock held) ---
 
-func (s *Store) dir(id string) string            { return filepath.Join(s.root, id) }
+func (s *Store) dir(id string) string { return filepath.Join(s.root, safeSegment(id)) }
+
+// safeSegment reduces a project id to a single path component, so no id can
+// address anything outside the store root.
+//
+// Ids that this package MAKES are safe: newID emits slug + "-" + six hex, and
+// slugify's charset is [a-z0-9-] with no separator in it. Ids it RECEIVES were
+// not checked at all, and they arrive from outside — /api/chat takes
+// req.Project straight from the request body and hands it to Get, GetPlan and
+// GetWorkflow, each of which reaches dir() below. filepath.Join collapses "..",
+// so an id of "../../../../etc" resolved to /etc and SetContext would have
+// written its context.md there. CodeQL flagged fifteen sinks in this file for
+// exactly that reason.
+//
+// Cleaning against "/" first means the traversal is resolved and then discarded
+// rather than trusted: "../../etc/passwd" becomes "/etc/passwd" becomes
+// "passwd", a harmless name inside the root. A legitimate id has no separator
+// and comes back unchanged.
+func safeSegment(id string) string {
+	seg := filepath.Base(filepath.Clean("/" + id))
+	if seg == "/" || seg == "." || seg == ".." || seg == string(filepath.Separator) {
+		// No usable name. Return something that cannot collide with a real
+		// project so the caller's ReadFile fails as "not found" rather than
+		// landing on the store root itself.
+		return "invalid-project-id"
+	}
+	return seg
+}
 func (s *Store) metaPath(id string) string       { return filepath.Join(s.dir(id), "project.json") }
 func (s *Store) contextPath(id string) string    { return filepath.Join(s.dir(id), "context.md") }
 func (s *Store) rawContextPath(id string) string { return filepath.Join(s.dir(id), "context_raw.md") }

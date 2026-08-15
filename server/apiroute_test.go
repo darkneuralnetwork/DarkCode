@@ -29,7 +29,7 @@ func TestUnroutedAPIPathsReturnJSON404(t *testing.T) {
 	} {
 		t.Run(path, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+			h.ServeHTTP(w, loopbackRequest("GET", path))
 
 			if w.Code != http.StatusNotFound {
 				t.Errorf("status = %d, want 404 (got %q)", w.Code, w.Header().Get("Content-Type"))
@@ -53,7 +53,7 @@ func TestNonAPIPathsStillReachTheSPA(t *testing.T) {
 	h := newTestServer(&config.Config{}).Handler()
 	for _, path := range []string{"/", "/some/client/route"} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		h.ServeHTTP(w, loopbackRequest("GET", path))
 		if w.Code != http.StatusOK {
 			t.Errorf("%s status = %d, want 200 — client routes must not 404", path, w.Code)
 		}
