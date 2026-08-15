@@ -353,7 +353,7 @@ func (r *Registry) snapshot(tool string) {
 		return
 	}
 	if _, err := ckpt.Snapshot(tool, "before "+tool); err != nil {
-		log.Printf("checkpoint: snapshot before %s failed: %v", tool, err)
+		log.Printf("checkpoint: snapshot before %s failed: %v", core.LogSafe(tool), core.LogSafe(err.Error()))
 	}
 }
 
