@@ -1,0 +1,25 @@
+<!-- Live events — the raw stream, unaggregated.
+
+     Every other observability page summarises. This one does not: it is the
+     ordered record of what the orchestrator emitted, which is the only view
+     that answers "what is it doing right now, this second". -->
+<div style="padding:20px; display:flex; flex-direction:column; height:100%; box-sizing:border-box;">
+
+  <div class="glass-panel" id="tel-events-panel" style="padding:20px; display:flex; flex-direction:column; flex:1; min-height:0;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h3 style="margin:0;">📡 Live events</h3>
+      <div style="display:flex; gap:10px; align-items:center; font-size:11px; color:var(--text-mute);">
+        <span id="evt-live">● LIVE</span>
+        <span id="evt-count">0</span>
+        <label style="display:inline-flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="evt-autoscroll" checked> Auto-scroll
+        </label>
+        <button class="fe-btn xs" id="evt-clear">Clear</button>
+      </div>
+    </div>
+    <div class="events-list custom-scrollbar" id="events-list" style="flex:1; overflow-y:auto;">
+      <div class="events-empty">Waiting for the first event…</div>
+    </div>
+  </div>
+
+</div>

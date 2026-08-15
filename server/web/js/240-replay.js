@@ -125,7 +125,8 @@
                   opacity:${past ? 1 : 0.32};
                   background:${i === position ? 'var(--bg-panel)' : 'transparent'};">
                   <span style="color:${s.color};width:12px;">${s.icon}</span>
-                  <span style="color:var(--text-mute);width:56px;">${e.kind.replace('node_', '')}</span>
+                  <span style="color:var(--text-mute);width:56px;flex:none;overflow:hidden;
+                        text-overflow:ellipsis;">${e.kind.replace('node_', '')}</span>
                   <span style="color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;
                         white-space:nowrap;">${escapeHTML(String(label).slice(0, 80))}</span>
                 </div>`;

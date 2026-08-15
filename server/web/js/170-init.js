@@ -102,7 +102,7 @@ async function init() {
   await splashPromise;
   
   // Ensure the default tab is active
-  switchTab("telemetry");
+  switchTab("studio");
 }
 
 // init() is invoked from app.js (the last-loaded module) so that every

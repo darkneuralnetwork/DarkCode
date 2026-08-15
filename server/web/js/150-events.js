@@ -817,7 +817,7 @@ function attachEventListeners() {
     }
     // Number keys 1-9 + 0 → switch tabs (when not typing in an input)
     if (e.key >= "0" && e.key <= "9" && !["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) {
-      const tabs = ["nexus","blueprint","registry","telemetry","config"];
+      const tabs = Object.keys(NAV_META);
       const idx = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
       if (tabs[idx]) switchTab(tabs[idx]);
     }
