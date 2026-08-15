@@ -87,6 +87,9 @@ func TestCSRFAllowsTheUIAndDirectClients(t *testing.T) {
 				reached = true
 			}))
 			req := httptest.NewRequest("POST", "/api/chat", nil)
+			// httptest defaults Host to example.com, which the rebinding
+			// check now refuses. A real client always dials loopback.
+			req.Host = "localhost:12345"
 			if origin != "" {
 				req.Header.Set("Origin", origin)
 			}
@@ -114,6 +117,7 @@ func TestCSRFExemptsHealthOnly(t *testing.T) {
 			reached = true
 		}))
 		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "localhost:12345"
 		req.Header.Set("Origin", "https://evil.com")
 		h.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -182,4 +186,82 @@ func TestRateLimiterExemptsHealthAndEvents(t *testing.T) {
 			t.Errorf("%s was rate limited", exempt)
 		}
 	}
+}
+
+// TestCSRFBlocksDNSRebinding covers the hole the Origin check could never see.
+//
+// A rebinding attacker does not send a foreign Origin — they remove the need
+// for one. evil.com serves a page, re-resolves to 127.0.0.1 on a short TTL,
+// and the page fetches http://evil.com:12345/api/…. The browser treats that as
+// SAME-ORIGIN with the page, so it sends no Origin header at all and the
+// `origin != ""` guard never fires. What the request must still carry is
+// Host: evil.com, because that is the name the browser dialled.
+//
+// Against the Origin-only middleware every case below reaches the handler.
+func TestCSRFBlocksDNSRebinding(t *testing.T) {
+	s := newTestServer(&config.Config{Model: "gpt-4o"})
+
+	blocked := map[string]string{
+		"rebound host, no Origin at all": "evil.com:12345",
+		"rebound host without a port":    "evil.com",
+		"a LAN address is not loopback":  "192.168.1.10:12345",
+		"public IP dialled directly":     "203.0.113.9:12345",
+		"loopback-looking but is not":    "127.0.0.1.evil.com:12345",
+	}
+	for name, host := range blocked {
+		t.Run(name, func(t *testing.T) {
+			reached := false
+			h := s.csrfMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+			}))
+			// Deliberately no Origin header: that is the whole point.
+			req := httptest.NewRequest("POST", "/api/workspace/file", nil)
+			req.Host = host
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if reached {
+				t.Errorf("a request for Host %q reached the handler", host)
+			}
+			if w.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", w.Code)
+			}
+		})
+	}
+
+	// The real UI must keep working, including the loopback forms a browser
+	// and a direct client actually send.
+	for name, host := range map[string]string{
+		"the UI's own host": "localhost:12345",
+		"dotted loopback":   "127.0.0.1:12345",
+		"another loopback":  "127.0.0.53:12345",
+		"IPv6 loopback":     "[::1]:12345",
+		"no port":           "localhost",
+	} {
+		t.Run(name, func(t *testing.T) {
+			reached := false
+			h := s.csrfMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest("GET", "/api/status", nil)
+			req.Host = host
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if !reached {
+				t.Errorf("Host %q was blocked; status %d", host, w.Code)
+			}
+		})
+	}
+}
+
+// loopbackRequest builds a request the way a real client reaches this server.
+//
+// httptest.NewRequest defaults Host to example.com, which csrfMiddleware now
+// refuses as a DNS-rebinding attempt. Every test that drives the full handler
+// stack needs a Host the server would actually be dialled on, and saying so
+// once beats a literal in each fixture.
+func loopbackRequest(method, path string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.Host = "localhost:12345"
+	return r
 }
