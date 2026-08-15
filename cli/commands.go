@@ -72,6 +72,7 @@ var commandRegistry = []cmdInfo{
 	{"/plugins", "Tools & System", "List loaded plugins"},
 	{"/pipeline", "Tools & System", "Show the verification pipeline"},
 	{"/permissions", "Tools & System", "Show permission-gate settings"},
+	{"/lock-tests", "Tools & System", "/lock-tests on|off — deny writes to test files and CI config"},
 
 	// Observability
 	{"/monitor", "Observability", "Open the live monitoring dashboard"},

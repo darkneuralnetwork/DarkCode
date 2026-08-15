@@ -400,6 +400,9 @@ func (c *Console) handleSlash(input string) bool {
 	case "/permissions", "/perms":
 		c.printPermissions(parts[1:])
 
+	case "/lock-tests":
+		c.handleLockTests(parts[1:])
+
 	default:
 		// An extension bundle may own this name. Checked here rather than in the
 		// switch above because built-ins win: a bundle must not be able to
