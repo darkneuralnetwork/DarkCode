@@ -183,6 +183,9 @@ type LearningStore interface {
 	RecordFeedback(fb LearningFeedback) error
 	GetStats() map[string]interface{}
 	GetAllStrategies() []*LearnedStrategy
+	// SuggestStrategy returns the best-matching learned strategy for a goal's
+	// task type, or nil if none has proven successful yet.
+	SuggestStrategy(goal string) *LearnedStrategy
 }
 
 // AuditStore abstracts the audit trail.

@@ -188,9 +188,17 @@ func (k *Kernel) getRecallBlock(goal string) string {
 	// the model sees facts and precedent as distinct kinds of evidence.
 	if skill := k.recallSkill(goal); skill != "" {
 		if block == "" {
-			return skill
+			block = skill
+		} else {
+			block += "\n" + skill
 		}
-		block += "\n" + skill
+	}
+	if strategy := k.recallStrategy(goal); strategy != "" {
+		if block == "" {
+			block = strategy
+		} else {
+			block += "\n" + strategy
+		}
 	}
 	return block
 }

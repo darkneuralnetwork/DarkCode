@@ -164,6 +164,40 @@ func (k *Kernel) recallSkill(goal string) string {
 	return b.String()
 }
 
+// recallStrategy returns the learned strategy for this goal's task type,
+// rendered for prompt injection, or "" when none has proven successful yet.
+//
+// This is the other half of RecordFeedback/maybeExtractStrategy (see
+// memory/learning.go): that path computes which tools and agents worked for
+// a task type, but until this, nothing ever consulted it — the agent
+// re-derived the same preference from scratch on every task of that type
+// instead of reusing what it had already learned. Mirrors recallSkill just
+// above: a coarser, task-type-level precedent alongside the goal-level one.
+func (k *Kernel) recallStrategy(goal string) string {
+	if k.memory == nil || k.memory.Learning() == nil {
+		return ""
+	}
+	s := k.memory.Learning().SuggestStrategy(goal)
+	if s == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Learned Strategy for %s tasks\n", s.TaskType)
+	fmt.Fprintf(&b, "_Worked %d/%d time(s) before. Adapt it; don't follow it blindly._\n", s.SuccessCount, s.SuccessCount+s.FailCount)
+	if len(s.PreferredTools) > 0 {
+		fmt.Fprintf(&b, "Preferred tools: %s\n", strings.Join(s.PreferredTools, ", "))
+	}
+	if len(s.PreferredAgents) > 0 {
+		names := make([]string, len(s.PreferredAgents))
+		for i, a := range s.PreferredAgents {
+			names[i] = string(a)
+		}
+		fmt.Fprintf(&b, "Preferred agents: %s\n", strings.Join(names, ", "))
+	}
+	return b.String()
+}
+
 // skillStopWords are too common to carry meaning in a goal.
 var skillStopWords = map[string]bool{
 	"the": true, "a": true, "an": true, "and": true, "or": true, "to": true,
