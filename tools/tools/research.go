@@ -44,6 +44,15 @@ import (
 	"github.com/darkcode/kernel/modelport"
 )
 
+// toolsModelManager is a routerless modelport.Manager shared by every tool in
+// this package that synthesises an LLM answer over already-fetched content
+// (research.go's synthesise, web.go's WebSearch summarization). Each of
+// those already has its own client-selection logic (a core.ModelRouter
+// field, sometimes with LoRA-mount wrapping around the specific client) —
+// this Manager is only ever reached via CompleteWith, never Complete, so a
+// nil router is fine; see modelport.New's doc comment.
+var toolsModelManager, _ = modelport.New(nil)
+
 // ResearchTool answers a question from several sources in one call.
 type ResearchTool struct {
 	HTTPClient *http.Client
@@ -445,11 +454,13 @@ func (t *ResearchTool) synthesise(ctx context.Context, query, digest string) str
 	if err != nil || client == nil {
 		return ""
 	}
-	// Bound the synthesis — it ran with no ceiling. From the one policy table.
-	_, maxTok, _ := modelport.PolicyFor(modelport.PurposeCompress)
-	resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Model:     model,
-		MaxTokens: &maxTok,
+	// CompleteWith applies PurposeCompress's shared ceiling (1200 tokens,
+	// same number PolicyFor gave this call before) AND its temperature
+	// (0.1) — this call used to route to Fast tier with no temperature
+	// pinned at all, a drift from what the policy table says PurposeCompress
+	// should use; CompleteWith closes that gap rather than reproducing it.
+	ans, err := toolsModelManager.CompleteWith(ctx, client, model, modelport.Ask{
+		Purpose: modelport.PurposeCompress,
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: "You answer from the supplied sources only. " +
 				"Cite the [S1], [S2] tags for every claim. If the sources do not answer the " +
@@ -458,10 +469,10 @@ func (t *ResearchTool) synthesise(ctx context.Context, query, digest string) str
 			{Role: core.RoleUser, Content: "Question: " + query + "\n\nSources:\n" + digest},
 		},
 	})
-	if err != nil || resp == nil || len(resp.Choices) == 0 {
+	if err != nil || ans == nil {
 		return ""
 	}
-	return strings.TrimSpace(resp.Choices[0].Message.Content)
+	return strings.TrimSpace(ans.Text)
 }
 
 // RegisterResearchTool adds the research tool to the registry.
