@@ -1,0 +1,21 @@
+# Architectural boundary baselines. See scripts/arch-check.sh.
+# These are CEILINGS: a count may fall, never rise. Ratchet down as
+# the migration removes violations. A boundary at 0 is enforced.
+# Regenerate with: scripts/arch-check.sh --update
+
+# LLM calls outside the model layer (llm/, router/, provider/, modelport/)
+llm-calls 13
+# Memory mutations outside the memory layer (memory/, core/, recall/)
+memory-writes 24
+# Kernel entry points outside the UI manager
+kernel-entry 0
+# Concrete implementation packages imported by orchestrator
+orchestrator-impl-imports 0
+# HTTP clients constructed outside safeurl/
+raw-http-clients 0
+# Manager packages whose constructor nothing calls
+unwired-managers 0
+# Model calls that send no MaxTokens
+unbounded-completions 0
+# Exported Kernel setters that nothing outside tests calls
+unwired-kernel-setters 0

@@ -1,0 +1,86 @@
+<!-- Tool Registry — what the agent can actually do.
+
+     Three questions, three panels: where tools come from (sources), what is
+     currently loaded (the grid), and how to add more (the form, plus the
+     plugin manifests found in the workspace). -->
+<div class="registry-layout" style="display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; background: var(--bg-void); padding: 24px; gap: 24px;">
+
+  <div style="display: flex; justify-content: space-between; align-items: center;">
+    <h2 class="gradient-text" style="margin: 0; font-size: 24px;">Tool Registry</h2>
+    <div style="display: flex; gap: 8px;">
+      <span class="evt-live" id="tools-src-live">● LIVE</span>
+      <button class="btn-glow" id="tools-refresh">Refresh</button>
+      <button class="btn-glow max-btn" data-target="registry-layout">⛶ Maximize</button>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; flex: 1; overflow: hidden;">
+    
+    <!-- Sources List -->
+    <div class="glass-panel" style="display: flex; flex-direction: column; overflow: hidden;">
+      <div class="fe-header" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 16px 20px;">
+        <span class="fe-title" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim);">Tool Sources</span>
+      </div>
+      <div class="custom-scrollbar" style="padding: 20px; flex: 1; overflow-y: auto;">
+        <p style="font-size: 12px; color: var(--text-mute); margin-top: 0; margin-bottom: 20px;">
+          Connect external MCP servers or local ITF definitions.
+        </p>
+        <div id="tools-sources-list" class="models-list"></div>
+      </div>
+    </div>
+
+    <!-- Tools Grid -->
+    <div class="glass-panel" style="display: flex; flex-direction: column; overflow: hidden;">
+      <div class="fe-header" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 16px 20px;">
+        <span class="fe-title" style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim);">Available Tools</span>
+      </div>
+      <div class="tools-content custom-scrollbar" style="padding: 20px; flex: 1; overflow-y: auto;">
+        <div class="tools-list" id="tools-grid" style="display: flex; flex-direction: column; gap: 10px;"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Connect Source Form -->
+  <div class="glass-panel" style="padding: 20px;">
+    <h3 class="cfg-h3" style="margin-bottom: 16px;">Add Tool Source</h3>
+    <form id="tool-source-form" style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
+      <div class="cfg-field" style="flex: 1; min-width: 200px;">
+        <label>Source Type</label>
+        <select id="ts-type" class="custom-select">
+          <option value="mcp_stdio">MCP Server (stdio)</option>
+          <option value="mcp_http">MCP Server (HTTP)</option>
+          <option value="internal">Internal Tool Format (ITF)</option>
+        </select>
+      </div>
+      <div class="cfg-field" style="flex: 1; min-width: 200px;">
+        <label>Name</label>
+        <input type="text" id="ts-name" class="glass-input" placeholder="e.g. filesystem" required>
+      </div>
+      <div class="cfg-field" id="ts-cmd-group" style="flex: 2; min-width: 300px;">
+        <label>Command / URL / Path</label>
+        <input type="text" id="ts-cmd" class="glass-input" placeholder="e.g. npx -y @modelcontextprotocol/server-filesystem /tmp" required>
+      </div>
+      <button type="submit" class="btn-glow" id="ts-submit">Add & Connect</button>
+    </form>
+  </div>
+
+  <!--
+    Discovered plugins. A plugin drops a JSON manifest into the workspace's
+    plugins/ directory and registers capabilities from it; the loader has
+    always read them and /api/plugins has always listed them, but nothing
+    displayed the result, so a manifest that failed to appear looked exactly
+    like a manifest that loaded fine.
+  -->
+  <div class="glass-panel" style="padding: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h3 class="cfg-h3" style="margin: 0;">Plugins</h3>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span class="stat-value" id="plugins-stats" style="font-size: 11px; color: var(--text-dim);">—</span>
+        <button class="btn-glow" id="plugins-refresh" style="padding: 4px 10px; font-size: 11px;">Rescan</button>
+      </div>
+    </div>
+    <div id="plugins-list" class="models-list"></div>
+  </div>
+
+</div>

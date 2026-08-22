@@ -1,0 +1,46 @@
+<!-- Cognition cascade, consensus & debate — how the answer got decided.
+
+     Both panels answer the same question from opposite ends. The cascade shows
+     which rung answered without a model call; consensus shows what happened
+     when several models did answer and disagreed. Together they account for
+     every decision the router made on your behalf. -->
+<div style="padding:20px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(460px, 1fr));">
+
+  <div class="glass-panel" id="tel-cascade-panel" style="padding:20px; grid-column:1 / -1;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <h3 style="margin:0;">💸 Cognition cascade</h3>
+      <button class="fe-btn xs" id="cs-refresh">Refresh</button>
+    </div>
+    <p style="font-size:11px; color:var(--text-mute); margin:0 0 12px;">
+      A question descends smalltalk → deterministic → cache → graph → recall → llm.
+      Every rung that answers is a model call that did not happen.
+    </p>
+    <div id="cs-rungs"><div class="mem-empty">No cascade activity recorded yet.</div></div>
+  </div>
+
+  <div class="glass-panel" id="tel-consensus-panel" style="padding:20px; grid-column:1 / -1;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <h3 style="margin:0;">🤝 Consensus &amp; debate</h3>
+      <span id="consensus-live" style="font-size:11px; color:var(--text-mute);">● IDLE</span>
+    </div>
+    <p style="font-size:11px; color:var(--text-mute); margin:0 0 14px;">
+      When models disagree, the knowledge graph is checked first — that settles it for zero extra
+      calls. Only when the graph cannot check the claims do the two most divergent answers
+      critique each other, once. The exchange is recorded below.
+    </p>
+
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:14px;">
+      <div><div class="kpi-label">MODELS</div><div class="kpi-value" id="cs-model-count">0</div></div>
+      <div><div class="kpi-label">DECIDED BY</div><div class="kpi-value" id="cs-method">—</div></div>
+      <div><div class="kpi-label">CONFLICT</div><div class="kpi-value" id="cs-conflict">—</div></div>
+      <div><div class="kpi-label">DEBATED</div><div class="kpi-value" id="cs-debated">—</div></div>
+    </div>
+
+    <div id="cs-transcript-wrap" hidden>
+      <div style="font-size:11px; color:var(--text-dim); margin-bottom:6px;">Exchange transcript</div>
+      <pre id="cs-transcript" class="custom-scrollbar" style="max-height:240px; overflow:auto; font-size:11px; line-height:1.5; background:var(--bg-deep); border:1px solid var(--border); border-radius:8px; padding:12px; white-space:pre-wrap;"></pre>
+    </div>
+    <div id="cs-history"><div class="mem-empty">No consensus rounds yet. Enable consensus routing and debate in Configuration.</div></div>
+  </div>
+
+</div>

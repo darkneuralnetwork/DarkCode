@@ -1,0 +1,1 @@
+{"prompt": "Rename the function Greet to Welcome across every file in this Go module, updating all call sites. `go build ./...` must still succeed.", "timeout_seconds": 400}

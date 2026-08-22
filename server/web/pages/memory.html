@@ -1,0 +1,39 @@
+<!-- Memory — a retrieval surface, not a listing.
+
+     The previous version opened by fetching every tier plus the whole
+     knowledge graph and rendering fifty rows of it. On a real repository that
+     is 16 MB, and the tab hung the browser on open. Paginating the dump would
+     only have made a smaller dump.
+
+     Memory here IS a retrieval system, so the interface asks it questions
+     through the same hybrid retriever the agent uses. Nothing loads a store on
+     open: the counts say how much there is, and everything else is a search. -->
+
+<div style="max-width: 900px; margin: 0 auto; padding: 24px;">
+
+  <div class="glass-panel" style="padding: 20px;">
+    <h3 style="margin: 0 0 4px;">🧠 Memory</h3>
+    <p style="font-size: 12px; color: var(--text-mute); margin: 0 0 16px;">
+      Ask what the agent knows. Runs the same keyword + vector + graph retrieval the agent
+      runs, and shows which signal found each result.
+    </p>
+
+    <form id="mem-search-form" style="display: flex; gap: 8px;">
+      <input id="mem-q" type="text" autocomplete="off"
+             placeholder="e.g. why did the knowledge graph get so large"
+             style="flex: 1; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 13px;">
+      <button type="submit" class="btn-glow primary" style="padding: 0 18px;">Search</button>
+    </form>
+
+    <!-- Counts, not contents. Cheap to compute and it is the only thing worth
+         showing before a question has been asked. -->
+    <div id="mem-counts" style="display: flex; flex-wrap: wrap; gap: 18px; margin-top: 16px; font-size: 11px; color: var(--text-dim);"></div>
+  </div>
+
+  <div class="glass-panel" id="mem-results-panel" style="padding: 20px; margin-top: 16px;">
+    <div id="mem-results">
+      <div class="mem-empty">Search to see what the agent remembers.</div>
+    </div>
+  </div>
+
+</div>

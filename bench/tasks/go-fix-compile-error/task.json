@@ -1,0 +1,1 @@
+{"prompt": "The Go program in this directory does not compile. Fix it so that `go build ./...` succeeds. Do not change what the program prints.", "timeout_seconds": 300}

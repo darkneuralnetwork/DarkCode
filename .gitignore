@@ -1,0 +1,86 @@
+# Build output & binaries
+/darkcode
+/dist/
+/build/
+/binaries/
+*.exe
+*.deb
+*.tar.gz
+*.zip
+
+# Test & coverage
+coverage.out
+
+# Logs
+*.log
+
+# OS & editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Working notes and drafts kept beside the source but not part of it
+*_NOTES.md
+*_DRAFT.md
+
+# Agent state written beside the source when memory_dir/projects_dir are left at
+# their cwd-relative defaults: memory stores, the knowledge graph, spilled tool
+# results, checkpoints. This was excluded via .git/info/exclude, which is local
+# and does not travel — so a fresh clone would leave all of it untracked in the
+# working tree, and one `git add -A` would publish a session's conversation.
+/.darkcode/
+
+# Working notes, drafts and comparison material kept beside the source but not
+# part of it. These are untracked AND were not ignored, so a single `git add -A`
+# would publish them — and some carry a vendor name in the filename, which this
+# project deliberately keeps out of its history.
+DARKCODE_VS_HERMES_AGENT.md
+AGENT_LANDSCAPE_*.md
+/text.txt
+THESIS.md
+HANDOFF_PROMPT.md
+NEXT_SESSION_PROMPT.md
+project_detail.md
+detail_*.md
+*_prompt.md
+multi_debate.txt
+/mywebssssite/
+
+# Agent tooling scratch: editor state, nested worktrees, session logs. Same
+# reasoning as /.darkcode/ above — these were excluded only through
+# .git/info/exclude, which lives in one checkout and travels nowhere, so a
+# fresh clone would leave the lot untracked and one blanket add would publish
+# it. Nested worktrees under .claude/ have already cost this repository twice:
+# they broke two boundary scanners and put 364,481 cross-worktree edges into
+# the knowledge graph.
+.claude/
+.aider*
+.cursor/
+
+# Stray, unreferenced asset dir (the embedded web assets live in server/web/).
+# Left untracked and unignored, so a blanket add would sweep it in.
+/ui/html/
+.gstack/
+
+# Runtime configuration written beside the source. THIS IS THE ONE THAT MATTERS:
+# extra/.config holds a live provider api_key, and it was protected only by
+# .git/info/exclude — which lives in one checkout and travels nowhere. A fresh
+# clone leaves it unignored, and this repository is public. Found by running
+# gitleaks over the working tree, which is the reason that job exists.
+/extra/
+/.config/
+/darkcode.config
+/old_ui/
+/ungit/
+/testing/
+/frontend/
+
+# Scratch left beside the source by earlier sessions. Untracked and unignored
+# until now, which is the same one-blanket-add hazard as everything above.
+/app.py
+/error.txt
+/websittttee/
+/webssiiittteeee/
