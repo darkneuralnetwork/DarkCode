@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,6 +43,7 @@ type SubAgent struct {
 	registry  core.ToolRegistry
 	emitter   *ui.EventEmitter
 	errMgr    ErrorHandler
+	models    *modelport.Manager
 	messages  []core.Message
 	startTime time.Time
 }
@@ -54,6 +54,7 @@ type AgentFactory struct {
 	registry core.ToolRegistry
 	emitter  *ui.EventEmitter
 	errMgr   ErrorHandler
+	models   *modelport.Manager
 }
 
 // NewAgentFactory creates a factory for spawning sub-agents.
@@ -66,8 +67,24 @@ func NewAgentFactory(rtr core.ModelRouter, reg core.ToolRegistry, emitter *ui.Ev
 	}
 }
 
+// SetModels installs the shared *modelport.Manager (the same one the
+// kernel's other completion paths use, so PreferLocal etc. stay consistent)
+// spawned agents dispatch completions through. Mirrors loop.ReActLoop's
+// SetModels. Optional: Spawn falls back to a routerless Manager when none
+// is set, since a SubAgent already picks its own client via routeForSlot and
+// CompleteWith never needs to route.
+func (f *AgentFactory) SetModels(m *modelport.Manager) {
+	if m != nil {
+		f.models = m
+	}
+}
+
 // Spawn creates a new sub-agent with the given configuration.
 func (f *AgentFactory) Spawn(ctx context.Context, cfg core.SubAgentConfig) (*SubAgent, error) {
+	models := f.models
+	if models == nil {
+		models, _ = modelport.New(nil)
+	}
 	agent := &SubAgent{
 		ID:        nextAgentID(),
 		Role:      cfg.Role,
@@ -77,6 +94,7 @@ func (f *AgentFactory) Spawn(ctx context.Context, cfg core.SubAgentConfig) (*Sub
 		registry:  f.registry,
 		emitter:   f.emitter,
 		errMgr:    f.errMgr,
+		models:    models,
 		startTime: time.Now(),
 	}
 
@@ -216,12 +234,6 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 		var llmErr error
 
 		for attempt := 0; attempt < 2; attempt++ {
-			temp := 0.7
-			// Bound the reply. This ran on every worker turn with no ceiling,
-			// so the limit was whatever the provider defaults to — usually the
-			// rest of the context window. The number comes from the one policy
-			// table rather than being invented here again.
-			_, maxTok, _ := modelport.PolicyFor(modelport.PurposeExecute)
 			var schemas []llm.ToolSchema
 			if offerTools {
 				// Scoped by role: a research or critic agent is never even
@@ -231,45 +243,44 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 			// Hard context-fit guarantee before dispatch (Part 3 contract):
 			// worker history grows with each tool turn, so fit to the
 			// receiving client's effective window to prevent a local-model
-			// "context window exceeded" fatal mid-task.
+			// "context window exceeded" fatal mid-task. CompleteWith fits
+			// again internally before building its own request, but that
+			// fit is local to the call — it doesn't feed back into a.messages,
+			// so this assignment is what keeps the PERSISTED history trimmed
+			// turn over turn, not just the one request being sent right now.
 			a.messages = compression.FitClient(a.messages, client, 0, len(schemas))
-			req := &llm.CompletionRequest{
-				Model:       modelName,
-				Messages:    a.messages,
-				Temperature: &temp,
-				MaxTokens:   &maxTok,
-				Tools:       schemas, // nil once the tool budget is spent → forces a final answer
-			}
 
-			resp, llmErr = client.ChatCompletionStream(ctx, req, &llm.StreamCallbacks{
-				OnContent: func(chunk string) {
-					if a.emitter != nil {
-						a.emitter.Emit(core.EventTaskUpdate, chunk,
-							ui.WithTaskID(a.ID), ui.WithStatus("streaming"),
-							ui.WithAgent(string(a.Role)))
-					}
-				},
-				OnToolCall: func(tc core.ToolCall) {
-					if a.emitter != nil {
-						a.emitter.EmitToolExecution(tc.Function.Name, "requested", tc.Function.Arguments)
-					}
+			// CompleteWith applies PurposeExecute's shared ceiling/temperature
+			// (this ran with no ceiling before — whatever the provider
+			// defaulted to, usually the rest of the context window), tags the
+			// call log with purpose="execute", and already retries once on a
+			// context overflow that slips past the FitClient estimate above
+			// (tokenizer drift) — the hand-rolled overflow ladder this loop
+			// used to have is gone, not duplicated.
+			var ans *modelport.Answer
+			ans, llmErr = a.models.CompleteWith(ctx, client, modelName, modelport.Ask{
+				Purpose:  modelport.PurposeExecute,
+				Messages: a.messages,
+				Tools:    schemas, // nil once the tool budget is spent → forces a final answer
+				Stream: &llm.StreamCallbacks{
+					OnContent: func(chunk string) {
+						if a.emitter != nil {
+							a.emitter.Emit(core.EventTaskUpdate, chunk,
+								ui.WithTaskID(a.ID), ui.WithStatus("streaming"),
+								ui.WithAgent(string(a.Role)))
+						}
+					},
+					OnToolCall: func(tc core.ToolCall) {
+						if a.emitter != nil {
+							a.emitter.EmitToolExecution(tc.Function.Name, "requested", tc.Function.Arguments)
+						}
+					},
 				},
 			})
-
-			// Recovery ladder for a context overflow that slipped past the
-			// FitClient estimate (tokenizer drift): shrink hard to 75% of the
-			// client's window and retry once, rather than failing the task.
-			if llmErr != nil && errors.Is(llmErr, core.ErrContextTooLong) && attempt == 0 {
-				window := 0
-				if client != nil {
-					window = client.ModelInfo().Context
-				}
-				if window <= 0 {
-					window = compression.DefaultContextWindow
-				}
-				a.messages = compression.FitToWindow(a.messages, window*3/4, 0)
-				continue
+			if ans != nil {
+				resp = ans.Raw
 			}
+
 			if llmErr != nil && a.errMgr != nil {
 				modified, newHist := a.errMgr.Handle(llmErr, a.messages)
 				if modified {

@@ -289,6 +289,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemorySto
 	rec, _ := recall.New(mem)
 	models, _ := modelport.New(rtr)
 	factory := agents.NewAgentFactory(rtr, reg, emitter, errMgr)
+	factory.SetModels(models)
 	executor := agents.NewConcurrentExecutor(factory, cfg.MaxConcurrent, emitter)
 	verifier := agents.NewVerificationPipeline(rtr, emitter, "")
 	bus := agents.NewAgentBus()
