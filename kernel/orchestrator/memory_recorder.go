@@ -145,6 +145,16 @@ func (k *Kernel) recordOutcome(goal, output string, results []*core.SubAgentResu
 	}
 }
 
+// maxRecallBlockTotalBytes caps getRecallBlock's fully-assembled output (the
+// FormatRecall portion plus the skill/strategy precedent appended after it).
+// FormatRecall caps itself at 2000 bytes (memory.maxRecallBlockLen), but that
+// cap only covered its own portion — recallSkill's rendered steps and
+// recallStrategy's summary were appended after it uncapped, so a skill with
+// many verbose steps could push the combined block arbitrarily large with no
+// bound at all. Sized to comfortably fit FormatRecall's 2000 bytes plus a
+// skill/strategy precedent without normally truncating either in isolation.
+const maxRecallBlockTotalBytes = 6000
+
 // getRecallBlock returns a compact "Relevant Past Context" block for the goal,
 // or an empty string when there are no hits and no retriever. This is the
 // lightweight RAG half of the hybrid KG+retrieval architecture: it gives the
@@ -200,7 +210,7 @@ func (k *Kernel) getRecallBlock(goal string) string {
 			block += "\n" + strategy
 		}
 	}
-	return block
+	return strutil.TruncateMid(block, maxRecallBlockTotalBytes)
 }
 
 // injectRecall prepends a compact "Relevant Past Context" block to the goal

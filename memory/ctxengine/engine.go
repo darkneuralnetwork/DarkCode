@@ -11,9 +11,24 @@ import (
 
 // AssembleRequest holds all inputs needed to assemble a context window.
 type AssembleRequest struct {
-	Query           string
-	Conversation    []core.Message
-	SystemPrompt    string
+	Query        string
+	Conversation []core.Message
+	SystemPrompt string
+	// Injections are caller-supplied context — a recall/RAG block, project
+	// notes, anything that isn't part of the conversation itself but needs to
+	// reach the model. They are budgeted ALONGSIDE Conversation in the same
+	// relevance-ranked pool, rather than unconditionally kept the way a real
+	// system message is: when everything doesn't fit, an injection can lose
+	// to higher-relevance conversation instead of always winning the space a
+	// caller that pre-concatenated it into the system prompt would have given
+	// it. This is a second line of defense, not a replacement for the
+	// caller's own cap — a caller should still bound what it hands in here
+	// (getRecallBlock and BuildContextQuery both do); Assemble's budget is
+	// what keeps a still-large, still-relevant injection from silently
+	// crowding out the conversation it's competing with, not a license to
+	// hand in unbounded content. Injections retain their own Role (typically
+	// RoleSystem) in the output.
+	Injections      []core.Message
 	AvailableTokens int
 }
 
@@ -89,15 +104,26 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 		req.AvailableTokens = 32000 // sensible default
 	}
 
-	// Step 1: Deduplicate (exact + near-dup).
+	// Step 1: Deduplicate (exact + near-dup). Only req.Conversation's own
+	// system messages get the unconditionally-kept treatment below —
+	// req.Injections are deduplicated separately (against each other, not
+	// against the conversation: two overlapping injections are unusual and a
+	// cross-pool check isn't worth the complexity for what's a single
+	// caller-supplied block in practice today) and always join the ranked
+	// pool, even when their Role is RoleSystem. That's what makes them
+	// compete for space instead of always winning it.
 	msgs := e.deduplicator.Deduplicate(req.Conversation)
+	injections := e.deduplicator.Deduplicate(req.Injections)
 
 	// Step 2: Separate the system prompt (always kept) from the conversational
-	// messages, then rank the conversation by relevance to the query. order[i]
-	// is ranked[i]'s index in convo — kept alongside the ranking so the
-	// surviving messages can be restored to convo's original order below,
-	// instead of left in relevance order (which reads as a shuffled
-	// transcript to the model, particularly bad for a "continue" follow-up).
+	// messages, then rank conversation+injections together by relevance to
+	// the query. order[i] is ranked[i]'s index in convo — kept alongside the
+	// ranking so the surviving messages can be restored to convo's original
+	// order below, instead of left in relevance order (which reads as a
+	// shuffled transcript to the model, particularly bad for a "continue"
+	// follow-up). Injections sort as if they were the most recent turn (they
+	// were appended last, before ranking) when they survive — appropriate for
+	// current-turn context like a recall block.
 	var system []core.Message
 	var convo []core.Message
 	for _, m := range msgs {
@@ -107,6 +133,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 			convo = append(convo, m)
 		}
 	}
+	convo = append(convo, injections...)
 	order := e.ranker.RankIndices(ctx, req.Query, convo)
 	ranked := make([]core.Message, len(order))
 	for i, idx := range order {
@@ -190,8 +217,10 @@ func (e *Engine) SummarizeBlock(ctx context.Context, msgs []core.Message) core.M
 // fit layer's estimator (infra/ctxfit), which accounts for per-message and
 // tool-call overhead a bare content estimate misses. NOTE: this is a
 // different (more accurate) count than Assemble's own internal budgeting,
-// which estimates per-message via tokenBudget.EstimateTokens — reconciling
-// the two is Phase 3 work, not done here.
+// which estimates per-message via tokenBudget.EstimateTokens — the two
+// remain unreconciled; a caller using this for its own pre-Compress check
+// should treat it as an upper bound on what Assemble will count, not an
+// exact match.
 func (e *Engine) EstimateTokens(messages []core.Message) int {
 	return ctxfit.EstimateTokens(messages)
 }

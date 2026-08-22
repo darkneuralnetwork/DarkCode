@@ -14,6 +14,35 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+// TestBuildContextQuery_CapsContext is the regression test for the one
+// injection path in the codebase that had no cap at all: context.md can grow
+// up to maxContextBytes (1 MiB, SetContext's own cap) before automatic
+// recompression catches up, and BuildContextQuery used to inject every byte
+// of it into the query with no further bound — see Context management Phase
+// 4 of the context-management unification.
+func TestBuildContextQuery_CapsContext(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.Create("demo", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	huge := strings.Repeat("word ", 100000) // ~500KB, well under maxContextBytes but way over the injection cap
+	if err := s.SetContext(p.ID, huge); err != nil {
+		t.Fatal(err)
+	}
+
+	query := s.BuildContextQuery(p.ID, "do the task")
+	if len(query) >= len(huge) {
+		t.Fatalf("BuildContextQuery did not cap context: query is %d bytes, source context was %d bytes", len(query), len(huge))
+	}
+	if !strings.Contains(query, "## Task\ndo the task") {
+		t.Errorf("expected the task to survive verbatim, got: %q", query[len(query)-50:])
+	}
+	if len(query) > maxContextInjectBytes+len("## Project Context\n\n\n## Task\ndo the task")+64 {
+		t.Errorf("query (%d bytes) is much larger than maxContextInjectBytes (%d) plus overhead", len(query), maxContextInjectBytes)
+	}
+}
+
 func TestMarkTaskStatus_FlipsCheckboxOnly(t *testing.T) {
 	s := newTestStore(t)
 	p, err := s.Create("demo", "", "", nil)

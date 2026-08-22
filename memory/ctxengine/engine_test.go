@@ -94,6 +94,72 @@ func TestAssembleKeepsSurvivorsChronologicalAndSummaryLast(t *testing.T) {
 	}
 }
 
+// TestAssembleIncludesInjectionsWhenTheyFit also pins the ordering: an
+// injection that survives alongside the conversation lands AFTER it
+// (injections are appended to convo before ranking, so they sort as the most
+// recent turn — see the Assemble comment) — that ordering is load-bearing for
+// how callers like executeDirectNoTools expect a recall block to read
+// relative to the conversation, so a regression here should fail loudly.
+func TestAssembleIncludesInjectionsWhenTheyFit(t *testing.T) {
+	e := NewEngine(nil)
+	window, err := e.Assemble(context.Background(), AssembleRequest{
+		Query:           "capital of France",
+		Conversation:    []core.Message{{Role: core.RoleUser, Content: "let's talk about bananas"}},
+		Injections:      []core.Message{{Role: core.RoleSystem, Content: "## Relevant Past Context\nParis is the capital of France."}},
+		AvailableTokens: 10000,
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	convoIdx, injectIdx := -1, -1
+	for i, m := range window.Messages {
+		if m.ContentString() == "let's talk about bananas" {
+			convoIdx = i
+		}
+		if strings.Contains(m.ContentString(), "Paris is the capital of France") {
+			injectIdx = i
+		}
+	}
+	if injectIdx < 0 {
+		t.Fatalf("expected the injection to appear in the assembled window, got: %+v", window.Messages)
+	}
+	if convoIdx < 0 {
+		t.Fatalf("expected the conversation message to appear in the assembled window, got: %+v", window.Messages)
+	}
+	if injectIdx < convoIdx {
+		t.Errorf("expected the injection (index %d) to land after the conversation message (index %d), got: %+v", injectIdx, convoIdx, window.Messages)
+	}
+}
+
+// TestAssembleInjectionsCompeteForBudget proves Injections are NOT
+// unconditionally kept verbatim like a real system message: given a token
+// budget too small for everything, a low-relevance injection loses out to
+// higher-relevance conversation and gets folded into the overflow summary
+// (AdaptiveCompressor.Compress) instead of surviving as its own full
+// message — exactly like any other losing candidate, not specially exempted.
+func TestAssembleInjectionsCompeteForBudget(t *testing.T) {
+	e := NewEngine(nil)
+	filler := strings.Repeat("irrelevant filler about spacecraft engineering ", 20)
+	window, err := e.Assemble(context.Background(), AssembleRequest{
+		Query: "banana banana banana banana",
+		Conversation: []core.Message{
+			{Role: core.RoleUser, Content: "banana banana banana banana"},
+		},
+		// Long, entirely irrelevant to the query, and NOT capped by the
+		// caller — Assemble's shared budget is what has to constrain it now.
+		Injections:      []core.Message{{Role: core.RoleSystem, Content: filler}},
+		AvailableTokens: 15, // fits only the highest-relevance survivor
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	for _, m := range window.Messages {
+		if m.ContentString() == filler {
+			t.Errorf("expected the low-relevance injection to lose out under a tight budget (survive only inside the overflow summary, if at all), but it survived verbatim as its own message: %+v", window.Messages)
+		}
+	}
+}
+
 func TestAssembleSystemPromptAndSystemMessagesComeFirst(t *testing.T) {
 	e := NewEngine(nil)
 	convo := []core.Message{

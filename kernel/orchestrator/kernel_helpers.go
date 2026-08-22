@@ -467,10 +467,6 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 
 	sysContent := degradedNoToolsPrompt
 
-	if recallBlock != "" {
-		sysContent += "\n\n## Relevant Past Context\n" + recallBlock
-	}
-
 	// When UseCtxEngine is enabled, assemble a deduplicated, relevance-ranked,
 	// budget-trimmed context window (memory/ctxengine's Engine.Assemble)
 	// instead of dumping raw STM. Disabled by default (Phase 5 of the context-
@@ -478,12 +474,22 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 	// any error, so this is strictly opt-in until then — the dispatch-time
 	// ctxfit.FitClient backstop inside k.models.Complete still bounds the raw
 	// fallback before it reaches the wire either way.
+	//
+	// The recall block goes in as an Injection here, not concatenated into
+	// sysContent (its pre-unification treatment): Assemble ranks/budgets it
+	// alongside the conversation instead of it unconditionally winning space
+	// as if it were part of the system prompt — see AssembleRequest.Injections.
 	var messages []core.Message
 	if k.cfg.UseCtxEngine && k.ctxEngine != nil {
+		var injections []core.Message
+		if recallBlock != "" {
+			injections = []core.Message{{Role: core.RoleSystem, Content: "## Relevant Past Context\n" + recallBlock}}
+		}
 		window, err := k.ctxEngine.Assemble(ctx, ctxengine.AssembleRequest{
 			Query:           goal,
 			Conversation:    stm,
 			SystemPrompt:    sysContent,
+			Injections:      injections,
 			AvailableTokens: client.ModelInfo().Context,
 		})
 		if err == nil && window != nil {
@@ -495,10 +501,16 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		// does (boundedChatContext) rather than appending raw STM — see its
 		// comment for why a flat append isn't equivalent once history is long
 		// enough for FitToWindow's oldest-first shedding to reach a rolling
-		// compressed-context summary sitting mid-history.
+		// compressed-context summary sitting mid-history. The recall block
+		// folds into the system content directly here (the pre-unification
+		// behavior) since this fallback doesn't rank/budget it separately.
+		fallbackSys := sysContent
+		if recallBlock != "" {
+			fallbackSys += "\n\n## Relevant Past Context\n" + recallBlock
+		}
 		convo := boundedChatContext(stm)
 		messages = make([]core.Message, 0, len(convo)+1)
-		messages = append(messages, core.Message{Role: core.RoleSystem, Content: sysContent})
+		messages = append(messages, core.Message{Role: core.RoleSystem, Content: fallbackSys})
 		messages = append(messages, convo...)
 	}
 

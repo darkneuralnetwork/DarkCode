@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/darkcode/internal/strutil"
 )
 
 // Project is a single tracked project and its long-lived context.
@@ -276,6 +278,16 @@ func (s *Store) AppendRawContext(id, appendText string) error {
 	return err
 }
 
+// maxContextInjectBytes caps how much of context.md BuildContextQuery injects
+// into a single query. context.md itself can be up to maxContextBytes (1
+// MiB, SetContext's cap) — "kept small via automatic and explicit rewriting"
+// is a goal LLM compression aims for, not something enforced at read time, so
+// this was the one injection path in the codebase with no cap at all: a
+// project that hadn't been recompressed recently could glue the better part
+// of a megabyte onto every single task query. Matches the order of magnitude
+// orchestrator.maxPlanInjectBytes uses for the same kind of injection.
+const maxContextInjectBytes = 8192
+
 // BuildContextQuery assembles the project-context prefix prepended to the
 // user's task. It strictly injects the current context.md, which is kept small
 // via automatic and explicit rewriting using the local LLM model.
@@ -285,6 +297,7 @@ func (s *Store) BuildContextQuery(id, task string) string {
 	if err != nil || rawContext == "" {
 		return task
 	}
+	rawContext = strutil.TruncateMid(rawContext, maxContextInjectBytes)
 	return "## Project Context\n" + rawContext + "\n\n## Task\n" + task
 }
 
