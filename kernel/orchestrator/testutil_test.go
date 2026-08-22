@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/darkcode/infra/core"
-	"github.com/darkcode/kernel/compression"
 	"github.com/darkcode/kernel/router"
+	"github.com/darkcode/memory/ctxengine"
 	"github.com/darkcode/memory/memory"
 	"github.com/darkcode/surfaces/ui"
 	"github.com/darkcode/tools/tools"
@@ -151,7 +151,9 @@ func newTestKernelWithMode(t *testing.T, mode core.RoutingMode, client *fakeLLMC
 	t.Cleanup(mem.Shutdown)
 
 	rtr := newTestRouter(mode, client, client.name)
-	comp := compression.NewCompressor(client, client.name, rtr)
+	comp := ctxengine.NewEngine(nil)
+	comp.SetClient(client, client.name)
+	comp.SetRouter(rtr)
 
 	k := New(DefaultConfig(), rtr, reg, mem, comp, nil)
 

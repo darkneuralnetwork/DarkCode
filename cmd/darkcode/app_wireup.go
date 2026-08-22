@@ -16,12 +16,12 @@ import (
 	"github.com/darkcode/infra/safeurl"
 	"github.com/darkcode/infra/security"
 	"github.com/darkcode/kernel/candidate"
-	"github.com/darkcode/kernel/compression"
 	"github.com/darkcode/kernel/hooks"
 	"github.com/darkcode/kernel/modelport"
 	"github.com/darkcode/kernel/orchestrator"
 	"github.com/darkcode/kernel/router"
 	"github.com/darkcode/memory/checkpoint"
+	"github.com/darkcode/memory/ctxengine"
 	"github.com/darkcode/memory/ingest"
 	"github.com/darkcode/memory/memory"
 	"github.com/darkcode/memory/project"
@@ -427,7 +427,14 @@ func (a *AppRunner) initRouterAndModels() {
 		fc.SetProvider(a.Cfg.Provider)
 		fastClient, fastModel = fc, fm
 	}
-	a.Compressor = compression.NewCompressor(llm.WrapCloud(fastClient, a.Cfg.Provider, fastModel), fastModel, a.Router)
+	// NewEngine(nil) deliberately leaves the block-summarizer's LLM branch on
+	// its extractive fallback (it's dead in production today — see
+	// memory/ctxengine/summarizer_llm_test.go) rather than wiring the same
+	// client into two places that would then drift apart on the next
+	// SetClient hot-swap below.
+	a.Compressor = ctxengine.NewEngine(nil)
+	a.Compressor.SetClient(llm.WrapCloud(fastClient, a.Cfg.Provider, fastModel), fastModel)
+	a.Compressor.SetRouter(a.Router)
 
 	// localEmbedClient is the loaded local model's client, captured for the
 	// embedder wiring below (Phase C): llama-server already runs with

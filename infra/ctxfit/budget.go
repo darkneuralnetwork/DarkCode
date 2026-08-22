@@ -3,7 +3,6 @@ package ctxfit
 import (
 	"strings"
 
-	"github.com/darkcode/infra/config"
 	"github.com/darkcode/infra/core"
 )
 
@@ -35,78 +34,6 @@ const SystemReserveTokens = 600
 // TokensPerToolSchema is the estimated tokens consumed by each tool schema
 // in the `tools` field of the completion request.
 const TokensPerToolSchema = 120
-
-// TokenBudget holds the computed token allocations for a single LLM call.
-type TokenBudget struct {
-	// ModelContextWindow is the total context window of the model.
-	ModelContextWindow int
-
-	// TotalAvailable is the tokens available for context (after reserves).
-	TotalAvailable int
-
-	// ReservedForResponse is tokens reserved for the LLM output.
-	ReservedForResponse int
-
-	// ReservedForTools is tokens consumed by tool schemas.
-	ReservedForTools int
-
-	// ReservedForSystem is tokens reserved for the system prompt.
-	ReservedForSystem int
-
-	// AvailableForContext is the final budget for conversation messages.
-	// This is what the compression system must fit within.
-	AvailableForContext int
-}
-
-// ComputeTokenBudget calculates how many tokens are available for context
-// messages given the model, provider, and number of tools. It reads context
-// window sizes from the provider catalogue (for registered models) or from
-// the config's ContextLength (for custom/local endpoints).
-func ComputeTokenBudget(providerID, modelID string, toolCount int, cfgContextLength int) TokenBudget {
-	b := TokenBudget{}
-
-	// 1. Determine the model's context window
-	b.ModelContextWindow = resolveContextWindow(providerID, modelID, cfgContextLength)
-
-	// 2. Reserve space for the response
-	b.ReservedForResponse = b.ModelContextWindow * ResponseReservePercent / 100
-
-	// 3. Reserve space for tool schemas
-	b.ReservedForTools = toolCount * TokensPerToolSchema
-
-	// 4. Reserve space for system prompt
-	b.ReservedForSystem = SystemReserveTokens
-
-	// 5. Compute available for context
-	b.TotalAvailable = b.ModelContextWindow - b.ReservedForResponse
-	b.AvailableForContext = b.TotalAvailable - b.ReservedForTools - b.ReservedForSystem
-
-	// Floor at a minimum usable budget (even tiny models should get something)
-	if b.AvailableForContext < 1000 {
-		b.AvailableForContext = 1000
-	}
-
-	return b
-}
-
-// resolveContextWindow determines the context window for a model by checking:
-// 1. The provider catalogue (config/providers.go)
-// 2. The user's configured context_length
-// 3. The default fallback
-func resolveContextWindow(providerID, modelID string, cfgContextLength int) int {
-	// Try the provider catalogue first
-	if m, ok := config.LookupModel(providerID, modelID); ok && m.ContextWindow > 0 {
-		return m.ContextWindow
-	}
-
-	// Fall back to user-configured context length
-	if cfgContextLength > 0 {
-		return cfgContextLength
-	}
-
-	// Ultimate fallback
-	return DefaultContextWindow
-}
 
 // EstimateTokens estimates the token count for a slice of messages, adding the
 // per-message and per-tool-call overhead a bare string estimate cannot see.
@@ -363,16 +290,6 @@ func FitClient(messages []core.Message, client core.LLMClient, cfgContextLength,
 // FitsInBudget checks whether the given messages fit within the token budget.
 func FitsInBudget(messages []core.Message, budget int) bool {
 	return EstimateTokens(messages) <= budget
-}
-
-// ExceedsBudgetBy returns how many tokens the messages exceed the budget by.
-// Returns 0 if within budget.
-func ExceedsBudgetBy(messages []core.Message, budget int) int {
-	tokens := EstimateTokens(messages)
-	if tokens <= budget {
-		return 0
-	}
-	return tokens - budget
 }
 
 // repairToolPairs drops tool-call/tool-response pairs that shedding has broken

@@ -2,8 +2,10 @@ package ctxengine
 
 import (
 	"context"
+	"sync"
 
 	"github.com/darkcode/infra/core"
+	"github.com/darkcode/infra/ctxfit"
 )
 
 // AssembleRequest holds all inputs needed to assemble a context window.
@@ -19,17 +21,39 @@ type ContextWindow struct {
 	Messages []core.Message
 }
 
-// Engine manages intelligent context assembly for LLM prompts.
+// Engine manages intelligent context assembly for LLM prompts. It is also the
+// home of LLM-backed context compression (Compress, Summarize — see
+// compress.go): the two used to live in kernel/compression's Compressor,
+// which could never route through modelport because modelport itself depends
+// on infra/ctxfit for window-fitting, and ctxfit's predecessor package
+// (kernel/compression) sat upstream of modelport in the import graph. Engine
+// already depended on kernel/modelport (for IncrementalSummarizer), so this
+// is where compression could actually become a real CompleteWith caller
+// instead of only tagging its context for the call log.
 type Engine struct {
 	summarizer   *IncrementalSummarizer
 	ranker       *ContextRanker
 	deduplicator *Deduplicator
 	tokenBudget  *TokenBudgetManager
 	compressor   *AdaptiveCompressor
+
+	mu       sync.Mutex
+	client   core.LLMClient
+	model    string
+	router   core.ModelRouter
+	useLocal bool
 }
 
 // NewEngine creates an engine. Pass an optional fast-tier LLM client to enable
 // LLM-backed summarization; nil uses the deterministic extractive fallback.
+//
+// This does NOT also wire Compress/Summarize (compress.go) onto the same
+// client — call SetClient separately for that. Keeping the two assignments
+// apart is deliberate: a caller that wants Compress/Summarize on a
+// hot-swappable client (SetClient is what ReloadModels calls) but doesn't
+// want summarizer.llm silently pointing at a stale client from construction
+// should pass nil here and call SetClient once, not pass the same client to
+// both and have two copies drift apart on the next swap.
 func NewEngine(llm core.LLMClient) *Engine {
 	summarizer := NewIncrementalSummarizer(llm)
 	return &Engine{
@@ -38,6 +62,7 @@ func NewEngine(llm core.LLMClient) *Engine {
 		deduplicator: NewDeduplicator(),
 		tokenBudget:  NewTokenBudgetManager(),
 		compressor:   NewAdaptiveCompressor(summarizer),
+		useLocal:     true, // matches the old Compressor's default: prefer local to save API cost
 	}
 }
 
@@ -105,13 +130,22 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 	return &ContextWindow{Messages: final}, nil
 }
 
-// Summarize is a convenience wrapper exposing the summarizer.
-func (e *Engine) Summarize(ctx context.Context, msgs []core.Message) core.Message {
+// SummarizeBlock is a convenience wrapper exposing the incremental summarizer
+// for a block of messages. Named distinctly from Summarize (compress.go),
+// which produces a narrative briefing of arbitrary text — the two solve
+// different problems and previously couldn't coexist as methods with the
+// same name.
+func (e *Engine) SummarizeBlock(ctx context.Context, msgs []core.Message) core.Message {
 	return e.summarizer.Summarize(ctx, msgs)
 }
 
-// EstimateTokens exposes the token estimator for callers (e.g. the kernel's
-// budget check).
-func (e *Engine) EstimateTokens(m core.Message) int {
-	return e.tokenBudget.EstimateTokens(m)
+// EstimateTokens estimates the token cost of a full message slice, e.g. for a
+// caller's own budget check before calling Compress. Uses the deterministic
+// fit layer's estimator (infra/ctxfit), which accounts for per-message and
+// tool-call overhead a bare content estimate misses. NOTE: this is a
+// different (more accurate) count than Assemble's own internal budgeting,
+// which estimates per-message via tokenBudget.EstimateTokens — reconciling
+// the two is Phase 3 work, not done here.
+func (e *Engine) EstimateTokens(messages []core.Message) int {
+	return ctxfit.EstimateTokens(messages)
 }

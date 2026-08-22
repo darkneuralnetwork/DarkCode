@@ -12,11 +12,11 @@ import (
 	"github.com/darkcode/infra/config"
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/infra/security"
-	"github.com/darkcode/kernel/compression"
 	"github.com/darkcode/kernel/hooks"
 	"github.com/darkcode/kernel/orchestrator"
 	"github.com/darkcode/kernel/router"
 	"github.com/darkcode/memory/checkpoint"
+	"github.com/darkcode/memory/ctxengine"
 	"github.com/darkcode/memory/memory"
 	"github.com/darkcode/memory/project"
 	"github.com/darkcode/memory/recall"
@@ -40,7 +40,7 @@ type AppRunner struct {
 	ProjectStore *project.Store
 	Emitter      *ui.EventEmitter
 	Router       *router.Router
-	Compressor   *compression.Compressor
+	Compressor   *ctxengine.Engine
 	// createClient builds an LLM client from a model config (handling the
 	// embedded provider). It is the wiring layer's factory, persisted here so
 	// the kernel's live model-reload can reuse it without importing llm.
