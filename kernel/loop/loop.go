@@ -381,7 +381,19 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 			},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("agentic loop iteration %d: %w", iteration, err)
+			// A provider-side rejection (a Gemini 400 "invalid argument" was
+			// the case that motivated this) gave nothing to debug beyond the
+			// iteration number and the provider's own generic message. The
+			// request itself isn't logged anywhere, so this is the only
+			// place left to record what this call's shape actually was —
+			// how many tool calls the loop had made so far, and which tools
+			// this call offered — for whoever investigates the next one.
+			toolNames := make([]string, len(schemas))
+			for i, s := range schemas {
+				toolNames[i] = s.Function.Name
+			}
+			return nil, fmt.Errorf("agentic loop iteration %d (prior tool calls: %d, tools offered: %s): %w",
+				iteration, len(allToolCalls), strings.Join(toolNames, ", "), err)
 		}
 
 		msg := ans.Raw.Choices[0].Message
