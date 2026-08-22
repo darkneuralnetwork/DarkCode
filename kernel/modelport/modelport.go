@@ -37,7 +37,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/infra/core"
-	"github.com/darkcode/kernel/compression"
+	"github.com/darkcode/infra/ctxfit"
 	"github.com/darkcode/model/llm"
 )
 
@@ -291,7 +291,7 @@ func (m *Manager) dispatch(ctx context.Context, client core.LLMClient, model str
 	// take" a property of the manager rather than of each call site, and it is
 	// more accurate besides: the fit happens after routing, against the model
 	// that will really answer, not the one the caller guessed.
-	messages := compression.FitClient(ask.Messages, client, 0, len(ask.Tools))
+	messages := ctxfit.FitClient(ask.Messages, client, 0, len(ask.Tools))
 
 	req := &core.CompletionRequest{
 		Model:       model,
@@ -362,7 +362,7 @@ func (m *Manager) send(ctx context.Context, client core.LLMClient, req *core.Com
 	if target <= 0 {
 		return nil, err
 	}
-	req.Messages = compression.FitToWindow(req.Messages, target, 0)
+	req.Messages = ctxfit.FitToWindow(req.Messages, target, 0)
 	return dispatch()
 }
 

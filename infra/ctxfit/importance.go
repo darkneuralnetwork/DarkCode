@@ -1,4 +1,4 @@
-package compression
+package ctxfit
 
 import (
 	"math"

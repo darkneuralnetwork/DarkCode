@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/darkcode/infra/core"
+	"github.com/darkcode/infra/ctxfit"
 	"github.com/darkcode/infra/observability"
 	"github.com/darkcode/model/llm"
 )
@@ -238,7 +239,7 @@ func (c *Compressor) CompressBlock(ctx context.Context, messages []core.Message,
 	c.mu.Unlock()
 
 	// 1. Identify important messages to pin
-	_, pinnedIdxs := ScoreMessages(messages)
+	_, pinnedIdxs := ctxfit.ScoreMessages(messages)
 	var pinned []core.Message
 	for _, idx := range pinnedIdxs {
 		pinned = append(pinned, messages[idx])
@@ -270,7 +271,7 @@ func (c *Compressor) CompressBlock(ctx context.Context, messages []core.Message,
 
 	if !enabled || client == nil {
 		block.Summary = "(Compression disabled - raw messages omitted)"
-		block.EstimatedTokens = EstimateTokens(pinned) + 50
+		block.EstimatedTokens = ctxfit.EstimateTokens(pinned) + 50
 		return block, nil
 	}
 
@@ -307,8 +308,8 @@ func (c *Compressor) CompressBlock(ctx context.Context, messages []core.Message,
 	}
 
 	// Estimate final tokens (summary + pinned msgs)
-	msgTokens := EstimateTokens(pinned)
-	summaryTokens := EstimateStringTokens(block.Summary)
+	msgTokens := ctxfit.EstimateTokens(pinned)
+	summaryTokens := ctxfit.EstimateStringTokens(block.Summary)
 	block.EstimatedTokens = msgTokens + summaryTokens + 50 // some overhead
 
 	return block, nil
@@ -321,18 +322,18 @@ func (c *Compressor) CompressBlock(ctx context.Context, messages []core.Message,
 // 3. Compresses the remaining older, low-importance messages into a structured summary.
 func (c *Compressor) AssembleContext(ctx context.Context, messages []core.Message, goal string, tokenBudget int) ([]core.Message, error) {
 	// If it fits natively, just return it
-	if FitsInBudget(messages, tokenBudget) {
+	if ctxfit.FitsInBudget(messages, tokenBudget) {
 		return messages, nil
 	}
 
 	// 1. Score messages for importance (heuristics from importance.go)
-	_, pinnedIdxs := ScoreMessages(messages)
+	_, pinnedIdxs := ctxfit.ScoreMessages(messages)
 
 	// 2. Determine recent sliding window (up to 40% of budget)
 	recentTokens := 0
 	recentStart := len(messages)
 	for i := len(messages) - 1; i >= 0; i-- {
-		toks := EstimateTokens([]core.Message{messages[i]})
+		toks := ctxfit.EstimateTokens([]core.Message{messages[i]})
 		if recentTokens+toks > (tokenBudget * 40 / 100) {
 			break
 		}
@@ -382,7 +383,7 @@ func (c *Compressor) AssembleContext(ctx context.Context, messages []core.Messag
 	result = append(result, messages[recentStart:]...)
 
 	// Fallback if STILL over budget (due to too many pinned messages)
-	if !FitsInBudget(result, tokenBudget) {
+	if !ctxfit.FitsInBudget(result, tokenBudget) {
 		snap, err := c.Compress(ctx, messages, goal)
 		if err != nil {
 			return messages, err
@@ -401,7 +402,7 @@ func (c *Compressor) AssembleContext(ctx context.Context, messages []core.Messag
 
 // estimateTokens gives a rough token count using the improved heuristic.
 func (c *Compressor) estimateTokens(messages []core.Message) int {
-	return EstimateTokens(messages)
+	return ctxfit.EstimateTokens(messages)
 }
 
 // estimateSnapshotTokens estimates tokens in a compressed snapshot.
@@ -627,7 +628,7 @@ Rules:
 // helpers without naming the package. They add no behaviour — each forwards to
 // the function of the same name.
 func (c *Compressor) EstimateTokens(messages []core.Message) int {
-	return EstimateTokens(messages)
+	return ctxfit.EstimateTokens(messages)
 }
 
 // SnapshotToMessages forwards to the package function; see EstimateTokens.

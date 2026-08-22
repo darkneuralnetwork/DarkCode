@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/darkcode/infra/core"
-	"github.com/darkcode/kernel/compression"
+	"github.com/darkcode/infra/ctxfit"
 	"github.com/darkcode/kernel/modelport"
 	"github.com/darkcode/kernel/router"
 	"github.com/darkcode/model/llm"
@@ -248,7 +248,7 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 			// fit is local to the call — it doesn't feed back into a.messages,
 			// so this assignment is what keeps the PERSISTED history trimmed
 			// turn over turn, not just the one request being sent right now.
-			a.messages = compression.FitClient(a.messages, client, 0, len(schemas))
+			a.messages = ctxfit.FitClient(a.messages, client, 0, len(schemas))
 
 			// CompleteWith applies PurposeExecute's shared ceiling/temperature
 			// (this ran with no ceiling before — whatever the provider
