@@ -41,19 +41,31 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
-// sharedLibsHealthy reports whether destDir holds a usable set of shared
-// libraries for llama-server: at least one non-empty library file, and NO
-// zero-byte library. A zero-byte `.so`/`.so.N`/`.dylib` is always corruption
-// (a broken symlink extraction) and makes the dynamic loader fail with
-// "file too short"; treating it as unhealthy triggers a fresh re-download that
-// re-creates the files correctly. Exported behavior is unit-tested
-// (downloader_health_test.go) without needing a network download.
+// sharedLibsHealthy reports whether destDir's shared libraries, if any, are
+// intact: no zero-byte `.so`/`.so.N`/`.dylib` file. A zero-byte one is always
+// corruption (a broken symlink extraction from DarkCode's own release
+// bundle) and makes the dynamic loader fail with "file too short"; finding
+// one triggers a fresh re-download that re-creates the files correctly.
+//
+// A directory with NO shared libraries at all is not itself evidence of
+// corruption and is reported healthy. This used to require at least one
+// non-empty library to pass, which meant a working llama-server that got
+// there some other way — an OS package, a statically-linked build, anything
+// not extracted from DarkCode's own bundle format — was unconditionally
+// treated as needing a re-download, forcing a network call (a GitHub API
+// fetch) on every startup even though the binary worked fine; under
+// air-gap/offline that call fails outright and just adds a scary-looking log
+// line before falling back to the same binary anyway. Only the specific
+// corruption signature this self-heal targets — a zero-byte library —
+// should force a download.
+//
+// Exported behavior is unit-tested (downloader_health_test.go) without
+// needing a network download.
 func sharedLibsHealthy(destDir string) bool {
 	entries, err := os.ReadDir(destDir)
 	if err != nil {
 		return false
 	}
-	hasNonEmpty := false
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -69,9 +81,8 @@ func sharedLibsHealthy(destDir string) bool {
 		if info.Size() == 0 {
 			return false // zero-byte library = corrupt install
 		}
-		hasNonEmpty = true
 	}
-	return hasNonEmpty
+	return true
 }
 
 // EnsureLlamaServer checks if llama-server exists in destDir or PATH.
@@ -91,14 +102,16 @@ func EnsureLlamaServer(ctx context.Context, destDir string) error {
 	needsDownload := true
 	if _, err := os.Stat(destPath); err == nil {
 		needsDownload = false
-		// For linux/mac, we also need the shared libraries (libllama.so etc.).
-		// A prior install can be CORRUPT — the SONAME symlinks
-		// (libllama-common.so.0 →  …so.0.0.9935) can end up as zero-byte files,
-		// which makes llama-server die at load with
-		// "libllama-common.so.0: file too short". The previous check accepted
-		// ANY `.so`-named entry, so it treated a broken install as healthy and
-		// never re-downloaded. Require at least one NON-EMPTY library and no
-		// zero-byte library so a corrupt install self-heals.
+		// For linux/mac, also check the shared libraries next to the binary
+		// (libllama.so etc.) — but only for a corruption signature, not for
+		// their mere absence. A prior DarkCode-downloaded install can be
+		// CORRUPT — the SONAME symlinks (libllama-common.so.0 →
+		// …so.0.0.9935) can end up as zero-byte files, which makes
+		// llama-server die at load with "file too short" — and that is what
+		// this re-checks on every startup. A binary that got here some other
+		// way (an OS package, a static build) has no sibling .so files at
+		// all, which is a different, perfectly healthy state, not corruption
+		// — see sharedLibsHealthy.
 		if runtime.GOOS != "windows" && !sharedLibsHealthy(destDir) {
 			needsDownload = true
 		}

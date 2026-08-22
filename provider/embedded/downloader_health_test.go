@@ -37,11 +37,16 @@ func TestSharedLibsHealthy(t *testing.T) {
 		}
 	})
 
-	t.Run("no libraries at all", func(t *testing.T) {
+	t.Run("no libraries at all is healthy, not corrupt", func(t *testing.T) {
+		// A binary that got here some other way — an OS package, a
+		// statically-linked build — has no sibling .so files to check. That
+		// is not evidence of corruption, and treating it as unhealthy used
+		// to force a needless re-download (a network call, which fails
+		// outright under air-gap) for a binary that already worked.
 		dir := t.TempDir()
 		write(t, dir, "llama-server", 1000) // exe present but no libs
-		if sharedLibsHealthy(dir) {
-			t.Fatal("a dir with no shared libraries is not healthy")
+		if !sharedLibsHealthy(dir) {
+			t.Fatal("a dir with no shared libraries at all should be healthy (nothing to be corrupt)")
 		}
 	})
 
