@@ -103,18 +103,18 @@ PATTERNS=(
   '\.(ChatCompletion|ChatCompletionStream|CreateEmbedding)\('
   '\.(EpisodicAdd|SemanticAdd|ProceduralAdd|Relate)\(|\.AddNode\(&core\.KGNode|\.AddEdge\(&core\.KGEdge'
   '(kernel|Kernel)\.Execute\('
-  '"github.com/darkcode/(llm|memory|compression)"'
+  '"github.com/darkcode/(model/llm|memory/memory|kernel/compression)"'
   'http\.DefaultClient|&http\.Client\{'
 )
 EXCLUDES=(
-  '(^|/)(llm|router|provider|modelport)/'
-  '(^|/)(memory|core|recall)/'
+  '(^|/)(model/llm|kernel/router|model/provider|kernel/modelport)/'
+  '(^|/)(memory/memory|infra/core|memory/recall)/'
   ''
-  '^\./(llm|memory|compression)/'
-  '(^|/)safeurl/'
+  '^\./(model/llm|memory/memory|kernel/compression)/'
+  '(^|/)infra/safeurl/'
 )
-# orchestrator-impl-imports only applies within orchestrator/
-RESTRICTS=( '' '' '' '^\./orchestrator/' '' )
+# orchestrator-impl-imports only applies within kernel/orchestrator/
+RESTRICTS=( '' '' '' '^\./kernel/orchestrator/' '' )
 
 # unwired_setters lists exported Kernel Set* methods that no non-test code
 # calls. Such a method is a feature switch with no way to reach it: the
@@ -123,14 +123,14 @@ RESTRICTS=( '' '' '' '^\./orchestrator/' '' )
 # binary. go vet cannot see this — an exported method is "used" by definition.
 unwired_setters() {
   local m callers
-  grep -hoE '^func \(k \*Kernel\) (Set[A-Za-z0-9_]+)\(' orchestrator/*.go 2>/dev/null \
+  grep -hoE '^func \(k \*Kernel\) (Set[A-Za-z0-9_]+)\(' kernel/orchestrator/*.go 2>/dev/null \
     | sed -E 's/^func \(k \*Kernel\) //; s/\($//' | sort -u \
   | while read -r m; do
       [ -z "$m" ] && continue
       callers=$(grep -rn --include='*.go' --exclude-dir='.claude' "\.$m(" . 2>/dev/null \
         | grep -v '_test\.go:' \
-        | grep -v "^\./orchestrator/.*func (k \*Kernel) $m" \
-        | grep -vE "^\./orchestrator/[a-z_]+\.go:[0-9]+:func " \
+        | grep -v "^\./kernel/orchestrator/.*func (k \*Kernel) $m" \
+        | grep -vE "^\./kernel/orchestrator/[a-z_]+\.go:[0-9]+:func " \
         | grep -c . )
       [ "$callers" -eq 0 ] && echo "orchestrator: Kernel.$m has no non-test caller"
     done
@@ -151,7 +151,7 @@ unwired_setters() {
 unbounded_completions() {
   grep -rn --include='*.go' --exclude-dir='.claude' -E '\.(ChatCompletion|ChatCompletionStream)\(' . 2>/dev/null \
     | grep -v '_test\.go:' \
-    | grep -vE '(^|/)(llm|router|provider|modelport)/' \
+    | grep -vE '(^|/)(model/llm|kernel/router|model/provider|kernel/modelport)/' \
     | cut -d: -f1,2 \
     | while IFS=: read -r file line; do
         start=$(( line > 22 ? line - 22 : 1 ))
@@ -168,10 +168,11 @@ unbounded_completions() {
 # built the same way in this very migration: a full package, well tested, and
 # New() had no non-test caller, so only its policy table was reachable.
 unwired_managers() {
-  for pkg in modelport recall uiport spill planwork concurrency datasource adjudicate hooks; do
-    [ -d "$pkg" ] || continue
-    grep -qE "^func New\\(" "$pkg"/*.go 2>/dev/null || continue
-    n=$(grep -rn --include='*.go' --exclude-dir='.claude' "$pkg\\.New(" . 2>/dev/null | grep -v '_test\.go:' | grep -vc "^\\./$pkg/")
+  for dir in kernel/modelport memory/recall surfaces/uiport tools/spill kernel/planwork kernel/concurrency memory/datasource kernel/adjudicate kernel/hooks; do
+    [ -d "$dir" ] || continue
+    pkg="${dir##*/}"
+    grep -qE "^func New\\(" "$dir"/*.go 2>/dev/null || continue
+    n=$(grep -rn --include='*.go' --exclude-dir='.claude' "$pkg\\.New(" . 2>/dev/null | grep -v '_test\.go:' | grep -vc "^\\./$dir/")
     [ "$n" -eq 0 ] && echo "$pkg: New() has no non-test caller — the manager is unreachable"
   done
   true
