@@ -260,7 +260,16 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	complexity := router.AssessComplexity(userGoal)
 	k.log("plan", fmt.Sprintf("Task complexity: %d/10", complexity))
 
-	// Step 3.01: Fetch Hybrid Recall (Memory + KG) so all paths can use it
+	// Step 3.01: Fetch Hybrid Recall (Memory + KG) so all paths can use it.
+	//
+	// Known dilution (not fixed here, out of scope for the ctxengine
+	// unification): by this point userGoal has usually already passed through
+	// injectProjectContext, so it carries that directive's own boilerplate
+	// ("important", "execution", "adhere", "provided", "deviate",
+	// "documents", ...). recallSkill scores overlap/len(want) where want =
+	// keywordSet(goal) — the inflated len(want) from that boilerplate can
+	// push a genuinely matching skill under skillMinScore, so procedural
+	// recall is systematically weaker exactly when a project is active.
 	recallBlock := k.getRecallBlock(userGoal)
 
 	// Step 3.02 (MOVED): Confident Recall now runs as rung 1 of the cognition
