@@ -1,4 +1,12 @@
-package orchestrator
+package agents
+
+// error_manager.go lives here (not orchestrator, where it originated)
+// because ErrorHandler — the interface it implements — is declared in this
+// package (subagent.go), and kernel/loop already imports kernel/agents
+// (for its verification pipeline), so this is reachable from both of this
+// fix's consumers: SubAgent.Execute (the DAG/trivial-task path) and
+// ReActLoop (the /loop-mode path) without a cycle. orchestrator imports
+// kernel/loop, so the reverse placement wouldn't have been.
 
 import (
 	"fmt"

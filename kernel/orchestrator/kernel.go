@@ -279,7 +279,7 @@ type TaskLogEntry struct {
 
 // New creates the orchestration kernel with all layers wired together.
 func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemoryStore, comp contextCompressor, emitter *ui.EventEmitter) *Kernel {
-	errMgr := NewErrorManager()
+	errMgr := agents.NewErrorManager()
 	// The memory gateway is built here rather than injected later, so it is
 	// never nil. An earlier version treated nil as "write the stores
 	// directly"; the code returned without writing at all, so every fact the

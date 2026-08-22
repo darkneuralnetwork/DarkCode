@@ -120,6 +120,14 @@ type ReActLoop struct {
 	// repoRules is the repo's rules file content (config.Config.RepoRules),
 	// appended to the system prompt when non-empty.
 	repoRules string
+	// errMgr auto-fixes known provider schema errors (Gemini's
+	// thought_signature/INVALID_ARGUMENT constraint on replayed tool-call
+	// history) by rewriting history and signaling a retry. Every iteration
+	// after the first replays prior tool calls/results, which is exactly
+	// what triggers this — agents.SubAgent (the DAG/trivial-task path) has
+	// always had this; this loop didn't, which is very likely why a /loop
+	// task could fail outright on iteration 2 with no recovery attempted.
+	errMgr agents.ErrorHandler
 }
 
 // New creates a ReAct loop wired to the model router, tool registry, and event
@@ -135,6 +143,15 @@ func New(rtr core.ModelRouter, reg core.ToolRegistry, emitter *ui.EventEmitter, 
 		emitter:  emitter,
 		maxLoops: maxLoops,
 		models:   m,
+		errMgr:   agents.NewErrorManager(),
+	}
+}
+
+// SetErrorHandler overrides the default error handler (agents.ErrorManager).
+// Exposed mainly for tests; production callers get the default via New.
+func (l *ReActLoop) SetErrorHandler(h agents.ErrorHandler) {
+	if h != nil {
+		l.errMgr = h
 	}
 }
 
@@ -360,26 +377,44 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 		// missed all belong to the manager now. This file used to do each of
 		// them itself, and kept a second copy of the overflow ladder besides —
 		// two recovery mechanisms for one failure is worse than one.
-		ans, err := l.models.Complete(ctx, modelport.Ask{
-			Purpose:    modelport.PurposeExecute,
-			Complexity: complexity,
-			Goal:       goal,
-			Messages:   messages,
-			Tools:      schemas,
-			Stream: &core.StreamCallbacks{
-				OnContent: func(chunk string) {
-					if l.emitter != nil {
-						l.emitter.Emit(core.EventTaskUpdate, chunk,
-							ui.WithTaskID("agentic-loop"), ui.WithStatus("streaming"))
-					}
+		//
+		// errMgr gets one retry with sanitized history on a provider schema
+		// error (Gemini's thought_signature/INVALID_ARGUMENT complaint about
+		// replayed tool-call history) — the same fix agents.SubAgent has
+		// always had. Iteration 2+ is exactly when this can fire, since it's
+		// the first call that replays a prior tool call/result.
+		var ans *modelport.Answer
+		var err error
+		for attempt := 0; attempt < 2; attempt++ {
+			ans, err = l.models.Complete(ctx, modelport.Ask{
+				Purpose:    modelport.PurposeExecute,
+				Complexity: complexity,
+				Goal:       goal,
+				Messages:   messages,
+				Tools:      schemas,
+				Stream: &core.StreamCallbacks{
+					OnContent: func(chunk string) {
+						if l.emitter != nil {
+							l.emitter.Emit(core.EventTaskUpdate, chunk,
+								ui.WithTaskID("agentic-loop"), ui.WithStatus("streaming"))
+						}
+					},
+					OnToolCall: func(tc core.ToolCall) {
+						if l.emitter != nil {
+							l.emitter.EmitToolExecution(tc.Function.Name, "requested", tc.Function.Arguments)
+						}
+					},
 				},
-				OnToolCall: func(tc core.ToolCall) {
-					if l.emitter != nil {
-						l.emitter.EmitToolExecution(tc.Function.Name, "requested", tc.Function.Arguments)
-					}
-				},
-			},
-		})
+			})
+			if err == nil || attempt > 0 || l.errMgr == nil {
+				break
+			}
+			if modified, newHist := l.errMgr.Handle(err, messages); modified {
+				messages = newHist
+				continue
+			}
+			break
+		}
 		if err != nil {
 			// A provider-side rejection (a Gemini 400 "invalid argument" was
 			// the case that motivated this) gave nothing to debug beyond the
