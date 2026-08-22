@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/infra/core"
+	"github.com/darkcode/kernel/agents"
 	"github.com/darkcode/kernel/modelport"
 	"github.com/darkcode/kernel/router"
 	"github.com/darkcode/memory/ctxengine"
@@ -202,12 +203,22 @@ func (k *Kernel) executeDirect(ctx context.Context, goal string, recallBlock str
 	}
 
 	// Complexity-gated post-completion verification: even the direct path
-	// verifies its output when the task is meaty enough to warrant it. The
-	// pipeline's stages are deterministic (gofmt/build/tests/style, each
+	// verifies its output when the task is meaty enough to warrant it, OR
+	// when it wrote to the workspace at all. The complexity gate alone let a
+	// short-looking task ("add a function, add a test, build and test") skip
+	// verification entirely while still claiming success — a broken build
+	// went unnoticed because nothing checked it. A task that never touched
+	// the filesystem has nothing for gofmt/build/test to catch, so read-only
+	// answers keep the cheap complexity-only path.
+	// The pipeline's stages are deterministic (gofmt/build/tests/style, each
 	// gated by IsApplicable) so this costs no LLM calls; failures are
 	// surfaced in the answer instead of silently logged.
 	output := result.Output
-	output = k.verifyOutput(ctx, goal, output, router.AssessComplexity(goal))
+	complexity := router.AssessComplexity(goal)
+	if k.usedMutatingTool(result.ToolCalls) {
+		complexity = verifyComplexityMin
+	}
+	output = k.verifyOutput(ctx, goal, output, complexity)
 
 	if k.emitter != nil {
 		k.emitter.EmitFinalOutput(output)
@@ -228,6 +239,31 @@ func (k *Kernel) executeDirect(ctx context.Context, goal string, recallBlock str
 // task is non-trivial by definition).
 const verifyComplexityMin = 6
 
+// usedMutatingTool reports whether any of the given calls invoked a tool that
+// can change the workspace (write_file, patch, terminal, ...) rather than
+// only observing it. Unknown tool names are treated as mutating — the safe
+// default when a name can't be looked up is to verify, not to skip.
+func (k *Kernel) usedMutatingTool(calls []core.ToolCall) bool {
+	if k.registry == nil {
+		return false
+	}
+	for _, c := range calls {
+		entry, ok := k.registry.Get(c.Function.Name)
+		if !ok || !entry.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+// VerificationIssuesMarker prefixes the block verifyOutput appends to an
+// answer when post-completion verification fails. Surfaces that report a
+// separate machine-readable success flag (surfaces/server/chat_handler.go's
+// JSON response, notably) check for this marker rather than hardcoding
+// success — the alternative was a response that says "success": true over an
+// answer whose own text says the build is broken.
+const VerificationIssuesMarker = "⚠ Verification found issues:"
+
 // verifyOutput runs the self-verification pipeline when the task complexity
 // warrants it, emits the outcome, and appends any found issues to the output
 // so the user sees verification results instead of a silent log line.
@@ -236,7 +272,15 @@ func (k *Kernel) verifyOutput(ctx context.Context, goal, output string, complexi
 		return output
 	}
 	k.log("verify", fmt.Sprintf("Post-completion verification (complexity %d)", complexity))
-	vResult, vErr := k.verifier.QuickVerify(ctx, goal, output)
+	// k.verifier is built once at kernel construction with an empty
+	// workspace, which made every command-based stage check whatever
+	// directory the process happened to be launched from instead of the
+	// active per-request workspace — silently verifying the wrong project
+	// once the active workspace ever differs from that (the normal case for
+	// a long-running server). loop.go's agentic-loop verifier already builds
+	// itself fresh per call with the real workspace; this mirrors that.
+	verifier := agents.NewVerificationPipeline(k.router, k.emitter, core.WorkspaceFrom(ctx))
+	vResult, vErr := verifier.QuickVerify(ctx, goal, output)
 	if vErr != nil || vResult == nil {
 		return output
 	}
@@ -250,7 +294,7 @@ func (k *Kernel) verifyOutput(ctx context.Context, goal, output string, complexi
 			fmt.Sprintf("Post-completion verification %s (confidence %.2f)", status, vResult.Confidence.Overall))
 	}
 	if !vResult.Passed && len(vResult.Issues) > 0 {
-		output += "\n\n⚠ Verification found issues:\n- " + strings.Join(vResult.Issues, "\n- ")
+		output += "\n\n" + VerificationIssuesMarker + "\n- " + strings.Join(vResult.Issues, "\n- ")
 	}
 	return output
 }

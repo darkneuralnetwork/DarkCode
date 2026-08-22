@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/darkcode/infra/config"
+	"github.com/darkcode/kernel/orchestrator"
 )
 
 // newTestServer builds a Server with only cfg populated. This is sufficient
@@ -25,6 +26,19 @@ func postChat(s *Server, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	s.handleChat(w, req)
 	return w
+}
+
+func TestChatSucceededTrueForCleanOutput(t *testing.T) {
+	if !chatSucceeded("The function was added and the tests pass.") {
+		t.Fatal("clean output with no verification-issues marker should report success")
+	}
+}
+
+func TestChatSucceededFalseWhenVerificationFailed(t *testing.T) {
+	output := "I added the function.\n\n" + orchestrator.VerificationIssuesMarker + "\n- go build failed: undefined: Greeting"
+	if chatSucceeded(output) {
+		t.Fatal("output carrying the verification-issues marker must not report success")
+	}
 }
 
 func TestHandleChatRejectsNonPOST(t *testing.T) {

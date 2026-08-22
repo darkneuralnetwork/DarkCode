@@ -34,6 +34,12 @@ type fakeLLMClient struct {
 	err       error         // if set, every call fails with this error
 	delay     time.Duration // artificial per-call delay, for cancellation tests
 	calls     int32         // atomic call counter
+	// toolCallsFunc, if set, lets a test script a tool-using turn: the
+	// returned calls (if non-empty) are attached to that call's response
+	// message, driving the same ReAct act/observe loop a real tool-calling
+	// model would. nil (the default) means no test relies on this — every
+	// existing caller of fakeLLMClient is unaffected.
+	toolCallsFunc func(callIndex int) []core.ToolCall
 }
 
 func (f *fakeLLMClient) nextContent(req *core.CompletionRequest) string {
@@ -64,9 +70,14 @@ func (f *fakeLLMClient) ChatCompletion(ctx context.Context, req *core.Completion
 	if f.err != nil {
 		return nil, f.err
 	}
+	idx := int(atomic.LoadInt32(&f.calls))
 	content := f.nextContent(req)
+	var toolCalls []core.ToolCall
+	if f.toolCallsFunc != nil {
+		toolCalls = f.toolCallsFunc(idx)
+	}
 	return &core.CompletionResponse{
-		Choices: []core.ChatChoice{{Message: core.ResponseMessage{Role: "assistant", Content: content}}},
+		Choices: []core.ChatChoice{{Message: core.ResponseMessage{Role: "assistant", Content: content, ToolCalls: toolCalls}}},
 	}, nil
 }
 

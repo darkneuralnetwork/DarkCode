@@ -41,12 +41,25 @@ type CmdVerificationStage struct {
 	name string
 	cmd  string
 	args []string
+	// workspace confines the command to the project being verified. Empty
+	// means "whatever directory the process happens to be running in" —
+	// historically the only behavior this had, since Verify never set
+	// cmd.Dir at all. That made every stage (gofmt/build/test/vet, and
+	// govulncheck/golangci-lint via runCmdStage) check the process's own
+	// launch directory instead of the workspace passed to IsApplicable,
+	// silently verifying the wrong project whenever the two differ — which
+	// is the common case for a long-running server whose active workspace
+	// changes after startup.
+	workspace string
 }
 
 func (c *CmdVerificationStage) Name() string                    { return c.name }
 func (c *CmdVerificationStage) IsApplicable(output string) bool { return true }
 func (c *CmdVerificationStage) Verify(ctx context.Context, goal, output string) (*core.VerificationResult, error) {
 	cmd := exec.CommandContext(ctx, c.cmd, c.args...)
+	if c.workspace != "" {
+		cmd.Dir = c.workspace
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return &core.VerificationResult{Passed: false, Confidence: core.ConfidenceScore{Overall: 0.0}, Issues: []string{string(out)}}, nil

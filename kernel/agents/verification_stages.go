@@ -68,7 +68,7 @@ type GoStage struct {
 
 func NewGoStage(name, cmd string, args []string, workspace string) *GoStage {
 	return &GoStage{
-		CmdVerificationStage: CmdVerificationStage{name: name, cmd: cmd, args: args},
+		CmdVerificationStage: CmdVerificationStage{name: name, cmd: cmd, args: args, workspace: workspace},
 		workspace:            workspace,
 	}
 }
@@ -85,7 +85,7 @@ type NodeStage struct {
 
 func NewNodeStage(name, cmd string, args []string, workspace string) *NodeStage {
 	return &NodeStage{
-		CmdVerificationStage: CmdVerificationStage{name: name, cmd: cmd, args: args},
+		CmdVerificationStage: CmdVerificationStage{name: name, cmd: cmd, args: args, workspace: workspace},
 		workspace:            workspace,
 	}
 }
@@ -238,5 +238,5 @@ func isLikelyFilePath(s string) bool {
 
 // runCmdStage is a helper that runs a command and returns a verification result.
 func runCmdStage(ctx context.Context, name, cmd string, args []string, workspace string) (*core.VerificationResult, error) {
-	return (&CmdVerificationStage{name: name, cmd: cmd, args: args}).Verify(ctx, "", "")
+	return (&CmdVerificationStage{name: name, cmd: cmd, args: args, workspace: workspace}).Verify(ctx, "", "")
 }

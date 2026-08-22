@@ -19,6 +19,17 @@ import (
 	"github.com/darkcode/tools/attach"
 )
 
+// chatSucceeded reports whether a chat turn's answer should be reported as a
+// success. It used to be a bare `true` literal regardless of what actually
+// happened. verifyOutput (kernel/orchestrator) appends
+// orchestrator.VerificationIssuesMarker to the text when post-completion
+// verification fails — a broken build, a failing test — and that was the
+// only place the signal existed: a caller reading just the JSON "success"
+// field saw success even when the answer's own text said otherwise.
+func chatSucceeded(output string) bool {
+	return !strings.Contains(output, orchestrator.VerificationIssuesMarker)
+}
+
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		writeError(w, http.StatusMethodNotAllowed, "use POST")
@@ -361,7 +372,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"output":  output,
-		"success": true,
+		"success": chatSucceeded(output),
 		"query":   req.Query,
 	})
 }
