@@ -228,7 +228,7 @@ func IsAuxiliary(p Purpose) bool {
 	return false
 }
 
-// Complete runs one model call.
+// Complete runs one model call, routing to a client itself.
 //
 // Every call leaves here with a token ceiling, which is the point: eight of
 // the sites this replaces sent none, including the hottest three.
@@ -241,17 +241,46 @@ func (m *Manager) Complete(ctx context.Context, ask Ask) (*Answer, error) {
 	}
 
 	pol := policyFor(ask.Purpose)
+	client, model, err := m.route(pol, ask)
+	if err != nil {
+		return nil, err
+	}
+	return m.dispatch(ctx, client, model, pol, ask)
+}
+
+// CompleteWith runs one model call against a client the caller already
+// chose, rather than one Complete would route to itself.
+//
+// Some callers can't be expressed as "route by tier": a consensus fan-out
+// hits every registered model in one logical operation, not one; a DAG
+// worker needs slot-aware routing so concurrent workers in one wave land on
+// different models; a compression path may already prefer a specific local
+// client. Those callers still want the same ceiling/temperature policy,
+// window-fit, Purpose-tagged dispatch and retry/overflow handling Complete
+// gives everyone else — they just need to supply the client themselves.
+func (m *Manager) CompleteWith(ctx context.Context, client core.LLMClient, model string, ask Ask) (*Answer, error) {
+	if m == nil {
+		return nil, fmt.Errorf("modelport: nil manager")
+	}
+	if client == nil {
+		return nil, fmt.Errorf("modelport: nil client")
+	}
+	if len(ask.Messages) == 0 {
+		return nil, fmt.Errorf("modelport: %s call with no messages", ask.Purpose)
+	}
+	return m.dispatch(ctx, client, model, policyFor(ask.Purpose), ask)
+}
+
+// dispatch is the shared tail of Complete and CompleteWith: resolve the
+// policy's ceiling/temperature (with Ask overrides), fit to the given
+// client's window, build the request, and send it.
+func (m *Manager) dispatch(ctx context.Context, client core.LLMClient, model string, pol policy, ask Ask) (*Answer, error) {
 	maxTokens, temp := pol.maxTokens, pol.temp
 	if ask.MaxTokens > 0 {
 		maxTokens = ask.MaxTokens
 	}
 	if ask.Temperature != nil {
 		temp = *ask.Temperature
-	}
-
-	client, model, err := m.route(pol, ask)
-	if err != nil {
-		return nil, err
 	}
 
 	// Fit to the window of the model actually chosen. Every caller used to do
