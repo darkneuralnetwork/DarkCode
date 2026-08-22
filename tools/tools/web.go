@@ -14,6 +14,7 @@ import (
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/infra/safeurl"
 	"github.com/darkcode/infra/security"
+	"github.com/darkcode/kernel/modelport"
 )
 
 // WebTool fetches web content via HTTP GET and orchestrates intelligent web searches.
@@ -131,21 +132,24 @@ func (t *WebTool) WebSearch(ctx context.Context, args map[string]interface{}) *T
 			_ = lm.MountLoRA("summarizer", 1.0)
 			defer lm.MountLoRA("summarizer", 0.0)
 		}
-		maxTokens2000 := 2000
 		summaryMsg := core.Message{
 			Role:    "user",
 			Content: fmt.Sprintf("Extract the most relevant information from these raw retrieval results to answer the query: '%s'. Remove duplicates, trim unnecessary text, and produce a concise, high-signal context package.\n\nRaw Results:\n%s", query, rawResult),
 		}
-		resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-			Model:     clientModel,
+		// CompleteWith keeps the existing 2000-token ceiling via an explicit
+		// override (not PurposeCompress's default 1200 — that would be a
+		// real behavior change this migration isn't making), and adds
+		// window-fit + purpose="compress" call-log tagging on top.
+		ans, err := toolsModelManager.CompleteWith(ctx, client, clientModel, modelport.Ask{
+			Purpose:   modelport.PurposeCompress,
 			Messages:  []core.Message{summaryMsg},
-			MaxTokens: &maxTokens2000,
+			MaxTokens: 2000,
 		})
-		if err == nil && len(resp.Choices) > 0 {
+		if err == nil && ans != nil {
 			return &ToolResult{
 				Name:    "web_search",
 				Success: true,
-				Output:  fmt.Sprintf("[Source: %s]\n\n%s", intent, resp.Choices[0].Message.Content),
+				Output:  fmt.Sprintf("[Source: %s]\n\n%s", intent, ans.Text),
 			}
 		}
 	}
