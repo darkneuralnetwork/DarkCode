@@ -325,14 +325,28 @@ const degradedNoToolsPrompt = "You are DarkCode. Your tools are temporarily unre
 // participates in consensus when
 // multiple models are registered, since that's a text-only refinement.
 
-// chatContextRecentMax bounds how many recent messages are sent verbatim in
-// Chat; older turns are covered by the rolling compressed summary instead.
+// chatContextRecentMax bounds how many recent messages are sent verbatim
+// when cfg.UseCtxEngine is off; older turns are covered by the rolling
+// compressed summary instead. Only used by boundedChatContext.
 const chatContextRecentMax = 8
 
-// boundedChatContext returns a compact conversation for Chat: every rolling-
-// summary briefing message (which carries older understanding) plus only the
-// last chatContextRecentMax messages verbatim. Short conversations pass through
-// unchanged.
+// boundedChatContext is the pre-ctxengine fallback for bounding Chat/General
+// history: every rolling-summary briefing message (which carries older
+// understanding) plus only the last chatContextRecentMax messages verbatim.
+// Short conversations pass through unchanged.
+//
+// Used ONLY when cfg.UseCtxEngine is off (executeChatReadOnly,
+// executeDirectNoTools) — when it's on, ctxengine.Engine.Assemble replaces
+// this and does strictly better (keeps EVERY system message, not just ones
+// found in the trimmed-off older segment, and ranks/trims the rest instead of
+// a flat recent-N cutoff). This still needs to exist for the off case: it was
+// previously called unconditionally, and briefly wasn't called at all here
+// during Phase 3 of the context-management unification — plain raw STM
+// relies on ctxfit.FitToWindow's oldest-first shedding as its only bound,
+// which anchors just the LEADING system message, not a rolling summary
+// sitting further back in history, so a long off-flag Chat could silently
+// lose its compressed-context briefing. Restored once that gap was caught in
+// review.
 func boundedChatContext(stm []core.Message) []core.Message {
 	if len(stm) <= chatContextRecentMax {
 		return stm
@@ -361,14 +375,34 @@ func (k *Kernel) executeChatReadOnly(ctx context.Context, goal string, recallBlo
 	roCtx := context.WithValue(ctx, core.ReadOnlyToolsKey, true)
 
 	// Prior conversation excluding the current turn (STMAdd already appended
-	// it), bounded to a compact summary + recent tail so a long chat doesn't
-	// resend the whole transcript.
+	// it). When cfg.UseCtxEngine is on, passed to the loop raw — Run assembles
+	// it (dedup, rank, budget-trim, restore chronological order) via its own
+	// ctxengine.Engine, which the kernel shares with the loop
+	// (SetContextEngine + SetUseContextEngine in New); bounding it again here
+	// first would just assemble twice, and the loop is the single choke
+	// point. When it's off, bound it here the same way General mode does
+	// (boundedChatContext) — Run's own fallback for that case is a raw,
+	// unranked, untrimmed append, which is fine size-wise (ctxfit.FitClient
+	// still bounds it at the wire) but doesn't know to protect a rolling
+	// compressed-context summary sitting mid-history the way
+	// boundedChatContext does.
 	stm := k.memory.STMGet()
 	var history []core.Message
 	if len(stm) > 0 {
-		history = boundedChatContext(stm[:len(stm)-1])
+		history = stm[:len(stm)-1]
+		if !k.cfg.UseCtxEngine {
+			history = boundedChatContext(history)
+		}
 	}
 
+	// k.injectRecall(goal, recallBlock) is both the actual goal message AND
+	// (when useContextEngine is on) the Query Assemble ranks history against —
+	// so relevance ranking currently scores against goal+recall-block text,
+	// not the bare user ask, which dilutes which history survives trimming.
+	// Harmless today (recallBlock is capped, budget is generous) but real;
+	// stops being implicit once injections carry their own AssembleRequest
+	// field instead of being pre-concatenated into the goal — Phase 4 of the
+	// context-management unification.
 	loopRes, err := k.agenticLoop.Run(roCtx, k.injectRecall(goal, recallBlock), history)
 	if err != nil {
 		// Say so, loudly. This degrades to an answer with no tools, and a
@@ -437,13 +471,16 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		sysContent += "\n\n## Relevant Past Context\n" + recallBlock
 	}
 
-	// When UseCtxEngine is enabled, assemble a deduplicated, budget-trimmed
-	// context window instead of dumping raw STM (Strategy 6b). Disabled by
-	// default and falls back to the original raw-append behavior on any
-	// error, so this is strictly opt-in.
+	// When UseCtxEngine is enabled, assemble a deduplicated, relevance-ranked,
+	// budget-trimmed context window (memory/ctxengine's Engine.Assemble)
+	// instead of dumping raw STM. Disabled by default (Phase 5 of the context-
+	// management unification flips this) and falls back to a raw append on
+	// any error, so this is strictly opt-in until then — the dispatch-time
+	// ctxfit.FitClient backstop inside k.models.Complete still bounds the raw
+	// fallback before it reaches the wire either way.
 	var messages []core.Message
-	if engine := k.getCtxEngine(); engine != nil {
-		window, err := engine.Assemble(ctx, ctxengine.AssembleRequest{
+	if k.cfg.UseCtxEngine && k.ctxEngine != nil {
+		window, err := k.ctxEngine.Assemble(ctx, ctxengine.AssembleRequest{
 			Query:           goal,
 			Conversation:    stm,
 			SystemPrompt:    sysContent,
@@ -454,8 +491,11 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		}
 	}
 	if messages == nil {
-		// Bound the conversation: rolling summary + recent tail, not the whole
-		// transcript (Chat context economy).
+		// Off, or Assemble errored: bound the conversation the same way Chat
+		// does (boundedChatContext) rather than appending raw STM — see its
+		// comment for why a flat append isn't equivalent once history is long
+		// enough for FitToWindow's oldest-first shedding to reach a rolling
+		// compressed-context summary sitting mid-history.
 		convo := boundedChatContext(stm)
 		messages = make([]core.Message, 0, len(convo)+1)
 		messages = append(messages, core.Message{Role: core.RoleSystem, Content: sysContent})

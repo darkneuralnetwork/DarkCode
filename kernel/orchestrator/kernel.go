@@ -31,18 +31,6 @@ import (
 // DAGs, delegates to sub-agents, routes models, enforces safety, and stores
 // episodic memory. Trivial tasks are answered directly without decomposition.
 
-// contextCompressor is the slice of compression.Compressor the kernel uses, named
-// here so the orchestrator states context compaction as a capability rather than
-// importing the concrete package for it. EstimateTokens and SnapshotToMessages
-// are method forms of the two package helpers, added for exactly this seam.
-type contextCompressor interface {
-	Compress(ctx context.Context, messages []core.Message, goal string) (*core.ContextSnapshot, error)
-	SetClient(client core.LLMClient, model string)
-	Summarize(ctx context.Context, text, focus string) (string, error)
-	EstimateTokens(messages []core.Message) int
-	SnapshotToMessages(snapshot *core.ContextSnapshot) []core.Message
-}
-
 // Kernel is the orchestration core — Layer 1.
 type Kernel struct {
 	cfg      Config
@@ -52,8 +40,7 @@ type Kernel struct {
 	// data is the gateway for reads: ranked recall, the answer cache, graph
 	// question answering, and the graph's own reasoning. `recall` owns the
 	// other direction. Never nil in a kernel built by New.
-	data       *datasource.Manager
-	compressor contextCompressor
+	data *datasource.Manager
 	// newClient builds an LLM client from a model config. Injected by the
 	// wiring layer (SetClientFactory) so live model reload can construct clients
 	// without the orchestrator importing the llm package.
@@ -127,13 +114,18 @@ type Kernel struct {
 	pendingPlan *pendingPlanState
 	lastRunPlan *plan.Graph
 
-	// ctxEngine is the optional intelligent context-assembly engine
-	// ("Strategy 6b" — dedup + TF-IDF ranking + budget trimming), lazily
-	// constructed by getCtxEngine when cfg.UseCtxEngine is true. nil when
-	// disabled (the default), in which case callers fall back to raw STM
-	// append — see executeDirectNoTools.
-	ctxEngine   *ctxengine.Engine
-	ctxEngineMu sync.Mutex
+	// ctxEngine is the context-assembly and LLM-backed compression engine
+	// ("Strategy 6b" — dedup + TF-IDF ranking + budget trimming — plus
+	// Compress/Summarize, see memory/ctxengine/compress.go). Set from New's
+	// comp parameter, which every real caller (app_wireup.go) passes non-nil;
+	// a nil-comp caller (e.g. a test building a bare *Kernel by hand rather
+	// than through New) gets a nil ctxEngine, which every call site guards
+	// against — see the `k.ctxEngine != nil` checks. Whether Assemble
+	// actually runs (vs. a caller's own raw-append fallback) is separately
+	// gated per call site by cfg.UseCtxEngine — see
+	// executeDirectNoTools/executeChatReadOnly, and loop.go's
+	// useContextEngine (set from this same flag, once, in New below).
+	ctxEngine *ctxengine.Engine
 
 	// governor enforces optional spend caps before each Execute. nil = no
 	// enforcement (the default), so behavior is unchanged unless a budget is
@@ -250,26 +242,6 @@ func (k *Kernel) SetCostGovernor(g *metrics.CostGovernor) {
 	})
 }
 
-// getCtxEngine lazily builds the ctxengine.Engine when cfg.UseCtxEngine is
-// enabled, and returns nil otherwise. Safe for concurrent use. This restores
-// the "Strategy 6b" integration for the General-mode fast path
-// (executeDirectNoTools): dedup + rank + budget-trim the conversation instead
-// of dumping raw STM into the prompt.
-func (k *Kernel) getCtxEngine() *ctxengine.Engine {
-	if !k.cfg.UseCtxEngine {
-		return nil
-	}
-	k.ctxEngineMu.Lock()
-	defer k.ctxEngineMu.Unlock()
-	if k.ctxEngine == nil {
-		// nil LLM client: use the deterministic extractive summarizer
-		// fallback rather than spending an extra LLM call on every General
-		// mode request just to compress context.
-		k.ctxEngine = ctxengine.NewEngine(nil)
-	}
-	return k.ctxEngine
-}
-
 // TaskLogEntry records a single step in the execution loop.
 type TaskLogEntry struct {
 	Step      string
@@ -278,7 +250,7 @@ type TaskLogEntry struct {
 }
 
 // New creates the orchestration kernel with all layers wired together.
-func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemoryStore, comp contextCompressor, emitter *ui.EventEmitter) *Kernel {
+func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemoryStore, comp *ctxengine.Engine, emitter *ui.EventEmitter) *Kernel {
 	errMgr := agents.NewErrorManager()
 	// The memory gateway is built here rather than injected later, so it is
 	// never nil. An earlier version treated nil as "write the stores
@@ -312,7 +284,7 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemorySto
 		recall:      rec,
 		models:      models,
 		data:        datasource.New(mem),
-		compressor:  comp,
+		ctxEngine:   comp,
 		factory:     factory,
 		executor:    executor,
 		emitter:     emitter,
@@ -329,6 +301,15 @@ func New(cfg Config, rtr *router.Router, reg *tools.Registry, mem core.MemorySto
 	// policy table and one local-preference setting (PreferLocalForAux reaches
 	// the loop through this shared pointer) rather than from two copies.
 	k.agenticLoop.SetModels(models)
+	// Share the kernel's context-assembly engine too, so a loop.Run() and the
+	// rest of the kernel rank/trim prior conversation the same way, off the
+	// same compressor-model configuration, instead of the loop falling back
+	// to its own nil-client engine (New's default). cfg.UseCtxEngine is read
+	// here — the single source of truth for whether Run() actually uses it —
+	// so a future default flip is a one-line change in DefaultConfig, not a
+	// second gate to find and update.
+	k.agenticLoop.SetContextEngine(k.ctxEngine)
+	k.agenticLoop.SetUseContextEngine(cfg.UseCtxEngine)
 	return k
 }
 
@@ -640,7 +621,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 	// Re-wire the context compressor with the user-selected model (if any),
 	// or fall back to the primary. This makes a compressor-model change made
 	// via the GUI take effect immediately, without restart.
-	if k.compressor != nil {
+	if k.ctxEngine != nil {
 		compClient := primaryClient
 		compModel := cfg.Model
 		if cfg.CompressorModel != "" {
@@ -649,7 +630,7 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 				compModel = mc.Model
 			}
 		}
-		k.compressor.SetClient(compClient, compModel)
+		k.ctxEngine.SetClient(compClient, compModel)
 		k.log("compression", "Context compressor model: "+compModel+
 			" (user-selected="+strutil.NonEmpty(cfg.CompressorModel, "<primary>")+")")
 	}
@@ -659,10 +640,10 @@ func (k *Kernel) ReloadModels(cfg *config.Config) {
 // context.md using the compressor model, so a reopened project gets a short
 // summary instead of a huge raw log. Nil-safe wrapper over Compressor.Summarize.
 func (k *Kernel) CompressProjectContext(ctx context.Context, content, projectName string) (string, error) {
-	if k.compressor == nil || strings.TrimSpace(content) == "" {
+	if k.ctxEngine == nil || strings.TrimSpace(content) == "" {
 		return "", nil
 	}
-	return k.compressor.Summarize(ctx, content, projectName)
+	return k.ctxEngine.Summarize(ctx, content, projectName)
 }
 
 // parseRoutingModeLocal mirrors main.parseRoutingMode without the import

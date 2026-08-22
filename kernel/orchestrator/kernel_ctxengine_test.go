@@ -1,9 +1,9 @@
 package orchestrator
 
-// kernel_ctxengine_test.go — verifies the ctxengine.Engine integration in the
-// General-mode fast path (Strategy 6b). When UseCtxEngine is true, the kernel
-// should assemble a deduplicated, budget-trimmed context window instead of
-// dumping raw STM.
+// kernel_ctxengine_test.go — verifies ctxengine.Engine.Assemble's dedup and
+// budget-trimming behavior (Strategy 6b), the same engine the kernel uses in
+// the General-mode fast path (executeDirectNoTools, kernel_helpers.go) when
+// cfg.UseCtxEngine is true, instead of dumping raw STM.
 
 import (
 	"context"
@@ -17,15 +17,7 @@ import (
 // TestCtxEngineDedupAndBudget verifies that the ctxengine deduplicates
 // near-duplicate messages and trims to the token budget.
 func TestCtxEngineDedupAndBudget(t *testing.T) {
-	k := &Kernel{
-		cfg: Config{
-			UseCtxEngine: true,
-		},
-	}
-	engine := k.getCtxEngine()
-	if engine == nil {
-		t.Fatal("getCtxEngine returned nil")
-	}
+	engine := ctxengine.NewEngine(nil)
 
 	// Build a conversation with near-duplicates.
 	dup := core.Message{Role: core.RoleUser, Content: "The quick brown fox jumps over the lazy dog. The quick brown fox is very quick indeed."}
@@ -70,10 +62,7 @@ func TestCtxEngineDedupAndBudget(t *testing.T) {
 // TestCtxEngineBudgetTrimming verifies that a small token budget triggers
 // compression/trimming.
 func TestCtxEngineBudgetTrimming(t *testing.T) {
-	k := &Kernel{
-		cfg: Config{UseCtxEngine: true},
-	}
-	engine := k.getCtxEngine()
+	engine := ctxengine.NewEngine(nil)
 
 	// Build a large conversation.
 	var msgs []core.Message

@@ -172,9 +172,28 @@ func NewContextRanker() *ContextRanker { return &ContextRanker{} }
 
 // Rank returns msgs ordered by descending relevance to query. The most
 // relevant messages come first; the original order is used as a tiebreaker.
+// A thin convenience over RankIndices for a caller that only wants the
+// reordered messages, not the index mapping back to msgs' original order —
+// Assemble needs that mapping (to restore chronological order among the
+// survivors after trimming) so it calls RankIndices directly instead.
 func (r *ContextRanker) Rank(ctx context.Context, query string, msgs []core.Message) []core.Message {
 	if len(msgs) == 0 {
 		return msgs
+	}
+	order := r.RankIndices(ctx, query, msgs)
+	out := make([]core.Message, len(order))
+	for i, idx := range order {
+		out[i] = msgs[idx]
+	}
+	return out
+}
+
+// RankIndices returns the indices of msgs in descending-relevance order to
+// query (stable: ties keep msgs' original relative order) — i.e. order[0] is
+// the index into msgs of the most relevant message.
+func (r *ContextRanker) RankIndices(ctx context.Context, query string, msgs []core.Message) []int {
+	if len(msgs) == 0 {
+		return nil
 	}
 	qtf := termFreq(query)
 	type scoredItem struct {
@@ -199,11 +218,11 @@ func (r *ContextRanker) Rank(ctx context.Context, query string, msgs []core.Mess
 		items[i] = scoredItem{idx: i, score: overlap/norm + recency}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].score > items[j].score })
-	out := make([]core.Message, len(msgs))
+	order := make([]int, len(items))
 	for i, s := range items {
-		out[i] = msgs[s.idx]
+		order[i] = s.idx
 	}
-	return out
+	return order
 }
 
 // recencyBoost gives a small boost to the most recent messages so a stale
@@ -224,8 +243,23 @@ type Deduplicator struct{}
 
 func NewDeduplicator() *Deduplicator { return &Deduplicator{} }
 
+// minDedupWords is the shortest message content Deduplicate will consider
+// for removal, exact or near. Below this floor, dedup was dropping the
+// second of two separate turns that just happen to share short wording —
+// "continue", "yes", "ok" — which is legitimate conversation structure, not
+// redundancy: collapsing it breaks user/assistant turn alternation, which
+// matters once this ran on live loop.Run history (a "continue" follow-up is
+// exactly the case loopHistoryBudgetTokens exists to serve). A message this
+// short also carries too little shingle signal for Jaccard to mean much
+// anyway — shingleSet's own fallback for text under k=3 words is a bag of
+// single words, so two on-topic-but-different one-word replies can still
+// collide.
+const minDedupWords = 4
+
 // Deduplicate returns msgs with exact- and near-duplicates removed. The first
 // occurrence is kept; later near-duplicates (Jaccard >= 0.8) are dropped.
+// Messages shorter than minDedupWords are never considered for removal — see
+// its comment.
 func (d *Deduplicator) Deduplicate(msgs []core.Message) []core.Message {
 	if len(msgs) == 0 {
 		return msgs
@@ -234,6 +268,10 @@ func (d *Deduplicator) Deduplicate(msgs []core.Message) []core.Message {
 	out := make([]core.Message, 0, len(msgs))
 	for _, m := range msgs {
 		c := contentStr(m)
+		if len(strings.Fields(c)) < minDedupWords {
+			out = append(out, m)
+			continue
+		}
 		shingles := shingleSet(c, 3)
 		dup := false
 		for _, s := range seen {

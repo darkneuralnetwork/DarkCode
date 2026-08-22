@@ -2,6 +2,7 @@ package ctxengine
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/darkcode/infra/core"
@@ -69,8 +70,20 @@ func NewEngine(llm core.LLMClient) *Engine {
 // Assemble builds the optimal context window for a request.
 //
 // Pipeline: deduplicate → rank by query relevance → trim to token budget →
-// adaptively compress the overflow into a summary. The system prompt is
+// adaptively compress the overflow into a summary → restore the surviving
+// messages to their original chronological order. The system prompt is
 // always preserved at the head of the result.
+//
+// Callers: this is for PRE-TURN conversational history (prior STM handed
+// into a fresh loop.Run, or Chat's prior turns) — content with no structural
+// adjacency requirements, where relevance-ranking and reordering is safe.
+// It is deliberately NOT used for a live, in-flight tool-calling loop's own
+// growing message list: an assistant tool_call must stay immediately
+// followed by its role:tool response or the provider rejects the request
+// outright, and neither the ranker nor the deduplicator here are aware of
+// that pairing. ctxfit.FitClient (called at dispatch time, inside
+// modelport.CompleteWith) is what those call sites use instead — see
+// kernel/agents/subagent.go.
 func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWindow, error) {
 	if req.AvailableTokens <= 0 {
 		req.AvailableTokens = 32000 // sensible default
@@ -80,7 +93,11 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 	msgs := e.deduplicator.Deduplicate(req.Conversation)
 
 	// Step 2: Separate the system prompt (always kept) from the conversational
-	// messages, then rank the conversation by relevance to the query.
+	// messages, then rank the conversation by relevance to the query. order[i]
+	// is ranked[i]'s index in convo — kept alongside the ranking so the
+	// surviving messages can be restored to convo's original order below,
+	// instead of left in relevance order (which reads as a shuffled
+	// transcript to the model, particularly bad for a "continue" follow-up).
 	var system []core.Message
 	var convo []core.Message
 	for _, m := range msgs {
@@ -90,7 +107,11 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 			convo = append(convo, m)
 		}
 	}
-	ranked := e.ranker.Rank(ctx, req.Query, convo)
+	order := e.ranker.RankIndices(ctx, req.Query, convo)
+	ranked := make([]core.Message, len(order))
+	for i, idx := range order {
+		ranked[i] = convo[idx]
+	}
 
 	// Step 3: Reserve tokens for the system prompt + the query itself.
 	sysTokens := 0
@@ -104,22 +125,28 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 	}
 
 	// Step 4: Trim to budget. If the ranked set doesn't fit, the adaptive
-	// compressor summarizes the overflow.
+	// compressor summarizes the overflow. Both TrimToBudget and Compress keep
+	// a strict PREFIX of their ranked input (plus, only for Compress, exactly
+	// one synthesized summary message appended at the end covering the
+	// dropped tail) — survivorCutoff below is that prefix length, used to
+	// split "real" survivors (which get chronologically restored) from the
+	// synthesized summary (which doesn't correspond to any convo index, and
+	// is left exactly where Compress put it).
 	trimmed, err := e.tokenBudget.TrimToBudget(ranked, convoBudget)
+	survivorCutoff := len(trimmed)
 	if err != nil {
 		trimmed = e.compressor.Compress(ctx, ranked, convoBudget)
+		// Compress always appends exactly one summary message when it
+		// shortens its input (see its own comment) — TrimToBudget's error
+		// here guarantees the input didn't already fit, so Compress always
+		// takes that branch, never its unchanged-passthrough one.
+		survivorCutoff = len(trimmed) - 1
+		if survivorCutoff < 0 {
+			survivorCutoff = 0
+		}
 	}
+	trimmed = restoreChronological(convo, order, trimmed, survivorCutoff)
 
-	// Final order: system prompt → the trimmed conversation in ranker order.
-	//
-	// This is NOT chronological. The ranker returns most-relevant-first and we
-	// present that order unchanged. A chronologicalSort helper used to be
-	// called here; it returned its input untouched while its own comment
-	// explained it had decided not to sort, so the claimed re-ordering never
-	// happened. Restoring chronological order is a real (and probably correct)
-	// change to make — it wants message timestamps, which core.Message does not
-	// carry today — but it should be made deliberately and measured, not
-	// implied by a no-op.
 	final := make([]core.Message, 0, len(system)+len(trimmed)+1)
 	final = append(final, system...)
 	if req.SystemPrompt != "" {
@@ -128,6 +155,25 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (*ContextWin
 	final = append(final, trimmed...)
 
 	return &ContextWindow{Messages: final}, nil
+}
+
+// restoreChronological re-sorts the first cutoff messages of trimmed — the
+// relevance-ranked survivors, identified via order (order[i] is ranked[i]'s
+// index into convo) — back into convo's original order, and leaves anything
+// from cutoff onward (a synthesized overflow summary, if present) untouched
+// at the end.
+func restoreChronological(convo []core.Message, order []int, trimmed []core.Message, cutoff int) []core.Message {
+	if cutoff > len(order) {
+		cutoff = len(order)
+	}
+	keptIdx := append([]int(nil), order[:cutoff]...)
+	sort.Ints(keptIdx)
+	out := make([]core.Message, 0, len(trimmed))
+	for _, idx := range keptIdx {
+		out = append(out, convo[idx])
+	}
+	out = append(out, trimmed[cutoff:]...)
+	return out
 }
 
 // SummarizeBlock is a convenience wrapper exposing the incremental summarizer

@@ -223,7 +223,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// worth an LLM call). Running compression on every request — including a
 	// trivial single-turn "what is 2+2" — adds latency and cost for no benefit,
 	// so it runs only once the conversation genuinely crowds the window.
-	if k.cfg.CompressContext && k.compressor != nil {
+	if k.cfg.CompressContext && k.ctxEngine != nil {
 		stm := k.memory.STMGet()
 		// One trigger, and it is about tokens. This used to fire on a message
 		// COUNT as well — eight messages, grown by four — which is unrelated to
@@ -231,7 +231,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// and it would still spend a model call summarising them. See
 		// compaction.go.
 		window := k.primaryContextWindow()
-		used := k.compressor.EstimateTokens(stm)
+		used := k.ctxEngine.EstimateTokens(stm)
 		if shouldCompact(len(stm), used, window) {
 			k.log("compress", fmt.Sprintf("Compacting context: %d tokens used of a %d window (threshold %d)",
 				used, window, compactionThreshold(window)))
@@ -242,7 +242,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 				Goal:   userGoal,
 				Detail: fmt.Sprintf("%d tokens of a %d window", used, window),
 			})
-			snapshot, err := k.compressor.Compress(ctx, stm, userGoal)
+			snapshot, err := k.ctxEngine.Compress(ctx, stm, userGoal)
 			if err == nil && snapshot != nil {
 				k.log("compress", fmt.Sprintf("Context compressed: %d→%d tokens (ratio: %.1f%%)",
 					snapshot.OriginalTokens, snapshot.CompressedTokens,
@@ -250,7 +250,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 				if k.emitter != nil {
 					k.emitter.EmitCompression(snapshot.OriginalTokens, snapshot.CompressedTokens)
 				}
-				briefing := k.compressor.SnapshotToMessages(snapshot)
+				briefing := k.ctxEngine.SnapshotToMessages(snapshot)
 				k.memory.STMCompress(briefing, compressionKeepRecent)
 			}
 		}

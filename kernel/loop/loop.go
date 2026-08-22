@@ -32,6 +32,7 @@ import (
 	"github.com/darkcode/kernel/agents"
 	"github.com/darkcode/kernel/modelport"
 	"github.com/darkcode/kernel/router"
+	"github.com/darkcode/memory/ctxengine"
 	"github.com/darkcode/model/llm"
 	"github.com/darkcode/surfaces/ui"
 	"github.com/darkcode/tools/tools"
@@ -78,24 +79,26 @@ const maxCorrections = 8
 // that is simply unreachable would otherwise spin here forever.
 const maxEvalFailures = 2
 
-// loopHistoryBudgetBytes bounds how much prior conversation (from the
-// caller's STM) is folded into a Run() call, keeping the most recent
-// messages when the budget is exceeded. This is what gives the loop real
-// conversation continuity (local-first upgrade §7 Fix C): previously every
-// Run() started a brand-new 2-message conversation with zero memory of what
-// it was doing, so a follow-up "continue" had nothing to continue.
+// loopHistoryBudgetTokens bounds how much prior conversation (from the
+// caller's STM) is folded into a Run() call, ranking by relevance to the
+// goal and trimming to this budget (memory/ctxengine's Engine.Assemble) when
+// exceeded. This is what gives the loop real conversation continuity
+// (local-first upgrade §7 Fix C): previously every Run() started a brand-new
+// 2-message conversation with zero memory of what it was doing, so a
+// follow-up "continue" had nothing to continue.
 //
 // This is an outer safety net against handing an unbounded slice around
 // before the real fit runs, not the primary truncation — that happens per
 // iteration, per the actual selected model's real window, inside
-// l.models.Complete via compression.FitClient (modelport/modelport.go).
-// It used to be 6000 (~1500 tokens): far below any real model's window, so a
-// "continue" after a loop run stopped effectively started half-blind,
-// discarding almost all prior progress on every single continuation. Sized
-// generously here for the same reason agents/subagent.go never pre-truncates
-// at a flat byte count either — a duplicate, un-window-aware truncation ahead
-// of the correct one only throws away context for no benefit.
-const loopHistoryBudgetBytes = 400000
+// l.models.Complete via ctxfit.FitClient (modelport/modelport.go). No client
+// is routed yet at Run() start (routing happens per-call, inside the model
+// manager), so this can't ask a real model for its window either; sized
+// generously — about the same order of magnitude as the byte budget this
+// replaced (400000 bytes ≈ 100000 tokens) — for the same reason
+// agents/subagent.go never pre-truncates its own live loop at a flat count
+// either: a duplicate, under-informed truncation ahead of the correct one
+// only throws away context for no benefit.
+const loopHistoryBudgetTokens = 100000
 
 // ReActLoop is the agentic execution loop. It is constructed once by the
 // orchestrator kernel and re-used per Execute call when AgenticLoop is on.
@@ -128,6 +131,19 @@ type ReActLoop struct {
 	// always had this; this loop didn't, which is very likely why a /loop
 	// task could fail outright on iteration 2 with no recovery attempted.
 	errMgr agents.ErrorHandler
+	// engine assembles the prior-STM history folded into a fresh Run() call:
+	// dedup, rank by relevance to the goal, trim to loopHistoryBudgetTokens,
+	// restored to chronological order. Never used on the loop's own growing
+	// per-iteration message list — see Assemble's doc comment for why. Only
+	// consulted when useContextEngine is set.
+	engine *ctxengine.Engine
+	// useContextEngine gates whether Run() folds history through engine.
+	// Off by default (matches Config.UseCtxEngine's default) — a caller opts
+	// in via SetUseContextEngine, read once from cfg.UseCtxEngine in
+	// orchestrator.New so the flag has exactly one source of truth. When off,
+	// Run() falls back to a plain, unranked, untrimmed system+history append
+	// (still bounded at the wire by ctxfit.FitClient inside CompleteWith).
+	useContextEngine bool
 }
 
 // New creates a ReAct loop wired to the model router, tool registry, and event
@@ -144,8 +160,25 @@ func New(rtr core.ModelRouter, reg core.ToolRegistry, emitter *ui.EventEmitter, 
 		maxLoops: maxLoops,
 		models:   m,
 		errMgr:   agents.NewErrorManager(),
+		engine:   ctxengine.NewEngine(nil),
 	}
 }
+
+// SetContextEngine installs the caller's context-assembly engine, so the loop
+// shares one compressor/model configuration with the rest of the system
+// rather than assembling history with a second, unconfigured engine (the one
+// New builds has a nil summarizer client — a functional but purely
+// extractive fallback). Has no effect unless SetUseContextEngine(true) is
+// also called.
+func (l *ReActLoop) SetContextEngine(e *ctxengine.Engine) {
+	if e != nil {
+		l.engine = e
+	}
+}
+
+// SetUseContextEngine turns history-folding through engine on or off. See the
+// useContextEngine field comment.
+func (l *ReActLoop) SetUseContextEngine(on bool) { l.useContextEngine = on }
 
 // SetErrorHandler overrides the default error handler (agents.ErrorManager).
 // Exposed mainly for tests; production callers get the default via New.
@@ -244,9 +277,10 @@ func (l *ReActLoop) RunWithContract(ctx context.Context, goal string, history []
 // is the caller's prior conversation (STM) — nil/empty for a genuinely fresh
 // task, non-empty when this is a follow-up (e.g. "continue") so the loop
 // knows what it was doing rather than starting from zero every time (local-
-// first upgrade §7 Fix C). Truncated to loopHistoryBudgetBytes, keeping the
-// most recent messages, so a long conversation can't blow out the context
-// window on every single loop turn.
+// first upgrade §7 Fix C). Assembled via l.engine (dedup, rank by relevance
+// to goal, trim to loopHistoryBudgetTokens, restored to chronological
+// order), so a long conversation can't blow out the context window on every
+// single loop turn.
 func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message) (*Result, error) {
 	return l.run(ctx, goal, history, nil)
 }
@@ -265,8 +299,28 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 
 	// Assemble the initial conversation: a ReAct system prompt + prior
 	// history (if any, continuity) + the goal.
-	messages := []core.Message{{Role: core.RoleSystem, Content: l.systemPrompt() + contract.brief()}}
-	messages = append(messages, truncateHistory(history, loopHistoryBudgetBytes)...)
+	systemPrompt := l.systemPrompt() + contract.brief()
+	var messages []core.Message
+	if l.useContextEngine {
+		window, err := l.engine.Assemble(ctx, ctxengine.AssembleRequest{
+			Query:           goal,
+			Conversation:    history,
+			SystemPrompt:    systemPrompt,
+			AvailableTokens: loopHistoryBudgetTokens,
+		})
+		if err == nil && window != nil {
+			messages = window.Messages
+		}
+	}
+	if messages == nil {
+		// useContextEngine is off, or Assemble had no production error path
+		// today but errored anyway — either way, never block a loop run on
+		// it: fall back to the prior conversation unranked, untrimmed rather
+		// than empty (ctxfit.FitClient inside CompleteWith still bounds this
+		// at the wire).
+		messages = append(messages, core.Message{Role: core.RoleSystem, Content: systemPrompt})
+		messages = append(messages, history...)
+	}
 	messages = append(messages, core.Message{Role: core.RoleUser, Content: goal})
 
 	if l.emitter != nil {
@@ -766,28 +820,6 @@ func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, goal, final stri
 	// evidence, not a failure — and guessing at free-form prose is worse than
 	// taking the answer at face value.
 	return true, "", true
-}
-
-// truncateHistory keeps the most recent messages from history whose combined
-// content fits within maxBytes, dropping the oldest first — the byte-budget
-// truncation Run uses to fold prior conversation in without letting a long
-// history blow out the context window on every loop turn. Mirrors the same
-// keep-the-tail pattern orchestrator.truncateMid uses for plan/workflow
-// injection.
-func truncateHistory(history []core.Message, maxBytes int) []core.Message {
-	if len(history) == 0 {
-		return nil
-	}
-	total := 0
-	start := 0
-	for i := len(history) - 1; i >= 0; i-- {
-		total += len(history[i].ContentString())
-		if total > maxBytes {
-			start = i + 1
-			break
-		}
-	}
-	return history[start:]
 }
 
 // systemPrompt returns the ReAct instruction set given to the model. It tells

@@ -9,6 +9,7 @@ import (
 
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/kernel/router"
+	"github.com/darkcode/memory/ctxengine"
 	"github.com/darkcode/tools/tools"
 )
 
@@ -302,32 +303,92 @@ func TestReActLoopHistoryIsIncluded(t *testing.T) {
 	}
 }
 
-func TestTruncateHistory_KeepsEverythingWithinBudget(t *testing.T) {
-	history := []core.Message{
-		{Role: core.RoleUser, Content: "short"},
-		{Role: core.RoleAssistant, Content: "also short"},
+// TestReActLoopRunAssemblesHistoryViaContextEngine proves Run's history
+// folding actually goes through l.engine.Assemble (Phase 3 of the context-
+// management unification — replaces the old flat byte-budget
+// truncateHistory) rather than some other path: an exact-duplicate message in
+// history must be deduplicated before it reaches the model, which is
+// Assemble's deduplicator, not anything Run does itself.
+func TestReActLoopRunAssemblesHistoryViaContextEngine(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return // only capture the first (THINK) call
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
 	}
-	got := truncateHistory(history, 1000)
-	if len(got) != len(history) {
-		t.Errorf("len(got) = %d, want %d (everything fits within the budget)", len(got), len(history))
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetContextEngine(ctxengine.NewEngine(nil))
+	l.SetUseContextEngine(true)
+
+	dup := core.Message{Role: core.RoleUser, Content: "the exact same message"}
+	history := []core.Message{dup, dup}
+	if _, err := l.Run(context.Background(), "continue", history); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	count := 0
+	for _, s := range seen {
+		if s == "the exact same message" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("saw %q %d times in the request, want exactly 1 (Assemble's deduplicator should have dropped the exact duplicate)", dup.Content, count)
 	}
 }
 
-func TestTruncateHistory_KeepsMostRecentWhenOverBudget(t *testing.T) {
-	history := []core.Message{
-		{Role: core.RoleUser, Content: "oldest message, should be dropped"},
-		{Role: core.RoleAssistant, Content: "middle message, should be dropped"},
-		{Role: core.RoleUser, Content: "newest message, must survive"},
+// TestReActLoopRunAssemblesHistoryChronologically proves the survivors of
+// Assemble's relevance ranking reach the model in their original
+// chronological order, not ranked (most-relevant-to-goal-first) order — a
+// shuffled transcript is actively worse than an untrimmed one for a
+// "continue" follow-up.
+func TestReActLoopRunAssemblesHistoryChronologically(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
 	}
-	// Budget only large enough for the last message.
-	got := truncateHistory(history, len("newest message, must survive")+5)
-	if len(got) != 1 || got[0].Content != "newest message, must survive" {
-		t.Errorf("truncateHistory kept %v, want only the newest message", got)
-	}
-}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetContextEngine(ctxengine.NewEngine(nil))
+	l.SetUseContextEngine(true)
 
-func TestTruncateHistory_EmptyInputReturnsNil(t *testing.T) {
-	if got := truncateHistory(nil, 1000); got != nil {
-		t.Errorf("truncateHistory(nil, ...) = %v, want nil", got)
+	// "banana" is what the goal below is most relevant to — a pure relevance
+	// ranking would put history[2] first. Chronological order must survive.
+	history := []core.Message{
+		{Role: core.RoleUser, Content: "first: talk about apples"},
+		{Role: core.RoleAssistant, Content: "second: apples are red"},
+		{Role: core.RoleUser, Content: "third: banana banana banana"},
+	}
+	if _, err := l.Run(context.Background(), "banana banana banana", history); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	idx := func(want string) int {
+		for i, s := range seen {
+			if s == want {
+				return i
+			}
+		}
+		return -1
+	}
+	i1, i2, i3 := idx("first: talk about apples"), idx("second: apples are red"), idx("third: banana banana banana")
+	if i1 < 0 || i2 < 0 || i3 < 0 {
+		t.Fatalf("not all history messages reached the model: %v", seen)
+	}
+	if !(i1 < i2 && i2 < i3) {
+		t.Errorf("history reached the model out of chronological order: %v", seen)
 	}
 }

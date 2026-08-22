@@ -12,6 +12,46 @@ func msg(role core.Role, chars int) core.Message {
 	return core.Message{Role: role, Content: strings.Repeat("a", chars)}
 }
 
+// TestDeduplicate_PreservesShortRepeatedTurns is the regression test for the
+// bug caught reviewing Phase 3 of the context-management unification: two
+// SEPARATE "continue" turns (a real, common follow-up in a loop.Run history)
+// have identical shingle sets under shingleSet's under-k fallback (a bag of
+// single words), so Jaccard scored them as a 1.0 near-duplicate and the
+// second one was silently dropped — breaking user/assistant turn alternation
+// right before a "continue" follow-up, the exact case
+// loopHistoryBudgetTokens/Assemble exists to preserve. minDedupWords fixes
+// this by never considering short messages for removal.
+func TestDeduplicate_PreservesShortRepeatedTurns(t *testing.T) {
+	d := NewDeduplicator()
+	msgs := []core.Message{
+		{Role: core.RoleUser, Content: "continue"},
+		{Role: core.RoleAssistant, Content: "did some work"},
+		{Role: core.RoleUser, Content: "continue"},
+		{Role: core.RoleAssistant, Content: "did more work"},
+	}
+	out := d.Deduplicate(msgs)
+	if len(out) != len(msgs) {
+		t.Fatalf("Deduplicate dropped a short repeated turn: got %d messages, want all %d kept: %+v", len(out), len(msgs), out)
+	}
+}
+
+// TestDeduplicate_StillDropsLongExactDuplicates is the companion case:
+// minDedupWords must not blanket-disable dedup — a genuinely long,
+// word-for-word repeated message is still redundant and should still go.
+func TestDeduplicate_StillDropsLongExactDuplicates(t *testing.T) {
+	d := NewDeduplicator()
+	long := "this is a much longer message with plenty of words to carry real shingle signal"
+	msgs := []core.Message{
+		{Role: core.RoleUser, Content: long},
+		{Role: core.RoleAssistant, Content: "ack"},
+		{Role: core.RoleUser, Content: long},
+	}
+	out := d.Deduplicate(msgs)
+	if len(out) != 2 {
+		t.Fatalf("Deduplicate kept a long exact duplicate: got %d messages, want 2: %+v", len(out), out)
+	}
+}
+
 // TestAdaptiveCompressor_KeepsHighestRankedMessages exercises the real call
 // path: engine.go's Assemble ranks messages most-relevant-first (see
 // ContextRanker.Rank) and hands that order straight to Compress on overflow.
