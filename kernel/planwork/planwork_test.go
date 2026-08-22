@@ -6,16 +6,19 @@ import (
 	"testing"
 
 	"github.com/darkcode/infra/core"
+	"github.com/darkcode/kernel/modelport"
 )
 
 type fakeClient struct {
 	calls int
 	reply string
 	err   error
+	got   *core.CompletionRequest
 }
 
 func (f *fakeClient) ChatCompletion(ctx context.Context, req *core.CompletionRequest) (*core.CompletionResponse, error) {
 	f.calls++
+	f.got = req
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -49,6 +52,30 @@ func TestAmendCostsOneCall(t *testing.T) {
 	}
 	if !strings.Contains(workflow, "T1: do it") {
 		t.Errorf("workflow not updated: %q", workflow)
+	}
+}
+
+// TestAmendRequestShapeMatchesPurposePlanPolicy locks in the request that
+// reaches the client after migrating onto modelport.CompleteWith: the
+// caller-supplied model, PurposePlan's shared token ceiling (previously a
+// duplicate `modelport.PolicyFor` call producing the same number), and the
+// explicit temperature override this package has always used.
+func TestAmendRequestShapeMatchesPurposePlanPolicy(t *testing.T) {
+	fc := &fakeClient{reply: "# Plan\nnew\n===WORKFLOW===\n- [ ] T1: x"}
+	Amend(context.Background(), fc, "caller-model", "add auth", "old", "old")
+
+	if fc.got == nil {
+		t.Fatal("client never received a request")
+	}
+	if fc.got.Model != "caller-model" {
+		t.Errorf("Model = %q, want the caller-supplied model", fc.got.Model)
+	}
+	_, wantMaxTok, _ := modelport.PolicyFor(modelport.PurposePlan)
+	if fc.got.MaxTokens == nil || *fc.got.MaxTokens != wantMaxTok {
+		t.Errorf("MaxTokens = %v, want %d (PurposePlan's ceiling)", fc.got.MaxTokens, wantMaxTok)
+	}
+	if fc.got.Temperature == nil || *fc.got.Temperature != 0.2 {
+		t.Errorf("Temperature = %v, want 0.2 (this package's explicit override, unchanged)", fc.got.Temperature)
 	}
 }
 

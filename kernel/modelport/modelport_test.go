@@ -190,9 +190,20 @@ func TestRoutingFailureIsReported(t *testing.T) {
 	}
 }
 
-func TestNilRouterIsRefused(t *testing.T) {
-	if _, err := New(nil); err == nil {
-		t.Error("New(nil) returned a manager whose every call fails at the point of use")
+// TestNilRouterCompleteFailsButCompleteWithWorks: New(nil) is accepted — such
+// a Manager still works for CompleteWith, since it never routes; only
+// Complete (which does route) needs a real router and must refuse without one.
+func TestNilRouterCompleteFailsButCompleteWithWorks(t *testing.T) {
+	m, err := New(nil)
+	if err != nil {
+		t.Fatalf("New(nil) should be accepted, got error: %v", err)
+	}
+	if _, err := m.Complete(context.Background(), Ask{Purpose: PurposeExecute, Messages: msgs}); err == nil {
+		t.Error("Complete on a routerless Manager should fail — there's nothing to route to")
+	}
+	c := &fakeClient{reply: "ok"}
+	if _, err := m.CompleteWith(context.Background(), c, "m", Ask{Purpose: PurposeExecute, Messages: msgs}); err != nil {
+		t.Errorf("CompleteWith on a routerless Manager should succeed (caller supplied the client), got: %v", err)
 	}
 }
 

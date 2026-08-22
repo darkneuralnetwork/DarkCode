@@ -187,12 +187,14 @@ type Manager struct {
 // PreferLocal enables the local rungs of the auxiliary ladder.
 func (m *Manager) PreferLocal(on bool) { m.preferLocal = on }
 
-// New returns a Manager over r. A nil router is refused rather than producing
-// a manager whose every call fails at the point of use.
+// New returns a Manager over r. A nil router is accepted: such a Manager
+// still works for CompleteWith (which never routes — the caller supplies the
+// client), and correctly refuses at the point of use for Complete (which
+// does). This lets a caller that has no router of its own — planwork.Amend
+// deliberately doesn't construct or route to a client — still get the
+// shared ceiling/temperature policy, window-fit and dispatch machinery for
+// a client someone else already selected.
 func New(r Router) (*Manager, error) {
-	if r == nil {
-		return nil, fmt.Errorf("modelport: nil router")
-	}
 	return &Manager{router: r}, nil
 }
 

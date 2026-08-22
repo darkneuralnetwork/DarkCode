@@ -42,6 +42,13 @@ const amendSystemPrompt = "You are an AI software architect. Rewrite a project's
 	"Section 2 = the updated Task Workflow: \"- [ ] T<n>: ...\" (pending) / \"- [/] T<n>: ...\" (running — mark the task worked on next) / " +
 	"\"- [x] T<n>: ...\" (done); keep task IDs stable, never renumber."
 
+// manager is a routerless modelport.Manager, safe because Amend only ever
+// calls CompleteWith (never Complete) — it supplies the client itself, never
+// asks the manager to route to one. Package-level and constructed once:
+// Manager is stateless beyond a router reference this one doesn't have, so
+// there's nothing per-call to gain from rebuilding it.
+var manager, _ = modelport.New(nil)
+
 // Amend rewrites plan and workflow together to reflect query.
 //
 // It never fails the caller: on any error, or an empty/unparseable response,
@@ -59,26 +66,26 @@ func Amend(ctx context.Context, client core.LLMClient, model, query, oldPlan, ol
 	}
 
 	temp := 0.2
-	// Bound the reply — this plan and workflow rewrite ran with no ceiling. The
-	// number comes from the one policy table.
-	_, maxTok, _ := modelport.PolicyFor(modelport.PurposePlan)
 	user := fmt.Sprintf("Current Implementation Plan:\n%s\n\nCurrent Task Workflow:\n%s\n\nThe user just requested: %s",
 		oldPlan, oldWorkflow, query)
 
-	resp, err := client.ChatCompletion(ctx, &core.CompletionRequest{
-		Model: model,
+	// CompleteWith applies PurposePlan's shared token ceiling, fits the
+	// messages to client's window (this rewrite's prompt includes the full
+	// current plan+workflow, which can grow large — previously unfitted),
+	// and tags the call log with purpose="plan" for request/quota telemetry.
+	ans, err := manager.CompleteWith(ctx, client, model, modelport.Ask{
+		Purpose: modelport.PurposePlan,
 		Messages: []core.Message{
 			{Role: core.RoleSystem, Content: amendSystemPrompt},
 			{Role: core.RoleUser, Content: user},
 		},
 		Temperature: &temp,
-		MaxTokens:   &maxTok,
 	})
-	if err != nil || resp == nil || len(resp.Choices) == 0 {
+	if err != nil || ans == nil {
 		return plan, workflow
 	}
 
-	np, nw := Split(strings.TrimSpace(resp.Choices[0].Message.Content))
+	np, nw := Split(strings.TrimSpace(ans.Text))
 	if np != "" {
 		plan = np
 	}
