@@ -85,6 +85,23 @@ func (c *Client) penalize(key string, err error) {
 	c.Keys.Penalize(key, d)
 }
 
+// DefaultTimeout is the per-call HTTP timeout for a cloud provider — ample
+// for a hosted API, and short enough that a genuinely hung request fails
+// fast rather than tying up a turn indefinitely.
+const DefaultTimeout = 300 * time.Second
+
+// LocalTimeout is the per-call HTTP timeout for the embedded/local model
+// client (see NewEmbeddedClient in provider/embedded/client.go). Local
+// inference on constrained or CPU-only hardware — exactly the case DarkCode's
+// local-first design targets — can legitimately take much longer than any
+// cloud call for the same request, especially the larger single generations
+// a planning or code-writing turn produces. DefaultTimeout used to apply here
+// too: a real run against a small CPU-bound local model exceeded it and
+// failed outright with "context deadline exceeded", with no retry possible
+// (RetryingClient correctly refuses to retry once streaming content has
+// already been delivered) and no way to raise the ceiling.
+const LocalTimeout = 20 * time.Minute
+
 // NewClient creates a new LLM client.
 func NewClient(baseURL, apiKey, model string) *Client {
 	baseURL = strings.TrimRight(baseURL, "/")
@@ -94,10 +111,20 @@ func NewClient(baseURL, apiKey, model string) *Client {
 		// EgressClient applies no SSRF restrictions (a provider may legitimately
 		// be a private vLLM host) but does enforce air-gap mode, so enabling it
 		// stops cloud calls at the socket rather than trusting configuration.
-		HTTPClient: safeurl.EgressClient(300 * time.Second),
+		HTTPClient: safeurl.EgressClient(DefaultTimeout),
 		Model:      model,
 		AuthScheme: config.AuthBearer,
 	}
+}
+
+// SetTimeout replaces the client's per-call HTTP timeout. d <= 0 is a no-op —
+// callers pass a real duration or leave the constructor's default in place,
+// never an unbounded client.
+func (c *Client) SetTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	c.HTTPClient = safeurl.EgressClient(d)
 }
 
 // ProviderID returns the provider id this client is associated with. Lets

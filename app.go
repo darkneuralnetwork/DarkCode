@@ -19,6 +19,7 @@ import (
 	"github.com/darkcode/orchestrator"
 	"github.com/darkcode/plugin"
 	"github.com/darkcode/project"
+	"github.com/darkcode/provider/embedded"
 	"github.com/darkcode/recall"
 	"github.com/darkcode/router"
 	"github.com/darkcode/security"
@@ -159,6 +160,14 @@ func (a *AppRunner) gracefulShutdown() {
 		if a.LSP != nil {
 			a.LSP.Shutdown() // stop any language server processes we started
 		}
+		// Stop the embedded local-model subprocess (llama-server), if one was
+		// loaded. This used to be missing entirely: a clean SIGINT/SIGTERM
+		// flushed memory/KG and stopped LSP servers but left the local model's
+		// child process running, reparented to init once darkcode exited —
+		// an unsupervised, unbounded leak on every shutdown after using a
+		// local model. Default() is the process-wide singleton and Close() is
+		// a no-op when nothing was ever loaded.
+		embedded.Default().Close()
 		a.Shutdown()
 	})
 }

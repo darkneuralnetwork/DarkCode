@@ -46,6 +46,9 @@ func NewEmbeddedClient(baseURL, providerID, modelID string) *EmbeddedClient {
 	c := llm.NewClient(baseURL, "no-key-required", modelID)
 	c.Provider = providerID
 	c.AuthScheme = "none"
+	// Local inference needs far more headroom than a cloud call — see
+	// llm.LocalTimeout.
+	c.SetTimeout(llm.LocalTimeout)
 	ec := &EmbeddedClient{Client: c, modelID: modelID}
 	// Attach to the singleton provider so we can guard against model swaps.
 	// If the singleton isn't initialized (e.g. unit test), genAtCreate stays
