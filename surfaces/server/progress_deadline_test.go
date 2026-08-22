@@ -28,15 +28,25 @@ func newProgressTestServer() *Server {
 // reporting progress must outlive the idle window. Under the flat five-minute
 // cap this replaces, a build that was working steadily got cancelled mid-step
 // simply for having taken longer than the budget.
+//
+// idle/tick margin: this used to be idle=150ms with a 50ms tick — only a 3x
+// margin against the wall clock, which flaked under load (go test ./... runs
+// many packages in parallel, and -race adds real per-goroutine/per-channel
+// overhead) even though progress_deadline.go's timer-reset logic is
+// standard, correct Go with no race in it — a delayed tick delivery under
+// scheduler/GC pressure, not a production bug, was enough to blow a 150ms
+// budget. Widened to a 10x margin (500ms idle / 50ms tick), which is what
+// actually makes this load-independent rather than just less likely to
+// flake.
 func TestProgressExtendsTheDeadline(t *testing.T) {
 	s := newProgressTestServer()
-	const idle = 150 * time.Millisecond
+	const idle = 500 * time.Millisecond
 
 	ctx, cancel := s.progressContext(context.Background(), idle, 10*time.Second)
 	defer cancel()
 
 	// Report progress every 50ms for well past the idle window.
-	deadline := time.After(600 * time.Millisecond)
+	deadline := time.After(2 * time.Second)
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for done := false; !done; {
