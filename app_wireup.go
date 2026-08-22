@@ -651,8 +651,16 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 
 	a.Kernel = orchestrator.New(orchCfg, a.Router, a.Registry, a.MemSystem, a.Compressor, a.Emitter)
 	// Hand the kernel the client factory so ReloadModels can rebuild clients on
-	// a live config change without the orchestrator importing llm.
-	a.Kernel.SetClientFactory(a.createClient)
+	// a live config change without the orchestrator importing llm. Wrapped with
+	// WrapCloud here (not left raw) so a model added/switched via a live reload
+	// gets the same retry/backoff/rate-limiting as one registered at startup —
+	// ReloadModels used to build straight from the raw factory, so any model
+	// touched by a live reload silently lost all resilience to transient
+	// errors (429/503/network blips) that startup-registered models are
+	// protected against.
+	a.Kernel.SetClientFactory(func(mc config.ModelConfig) core.LLMClient {
+		return llm.WrapCloud(a.createClient(mc), mc.Provider, mc.Model)
+	})
 	a.Kernel.SetRepoRules(a.Cfg.RepoRules)
 	a.Recorder = tools.NewChangeRecorder()
 	a.Kernel.SetChangeRecorder(a.Recorder)

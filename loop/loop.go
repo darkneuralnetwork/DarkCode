@@ -84,7 +84,18 @@ const maxEvalFailures = 2
 // conversation continuity (local-first upgrade §7 Fix C): previously every
 // Run() started a brand-new 2-message conversation with zero memory of what
 // it was doing, so a follow-up "continue" had nothing to continue.
-const loopHistoryBudgetBytes = 6000
+//
+// This is an outer safety net against handing an unbounded slice around
+// before the real fit runs, not the primary truncation — that happens per
+// iteration, per the actual selected model's real window, inside
+// l.models.Complete via compression.FitClient (modelport/modelport.go).
+// It used to be 6000 (~1500 tokens): far below any real model's window, so a
+// "continue" after a loop run stopped effectively started half-blind,
+// discarding almost all prior progress on every single continuation. Sized
+// generously here for the same reason agents/subagent.go never pre-truncates
+// at a flat byte count either — a duplicate, un-window-aware truncation ahead
+// of the correct one only throws away context for no benefit.
+const loopHistoryBudgetBytes = 400000
 
 // ReActLoop is the agentic execution loop. It is constructed once by the
 // orchestrator kernel and re-used per Execute call when AgenticLoop is on.

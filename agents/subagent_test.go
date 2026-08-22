@@ -84,6 +84,29 @@ func agentTestRegistry(t *testing.T, counts map[string]*int32) *tools.Registry {
 	return reg
 }
 
+// agentTestFailingRegistry is agentTestRegistry's mirror: every tool always
+// fails, for testing the outcome-based stuck-loop guard.
+func agentTestFailingRegistry(t *testing.T, counts map[string]*int32) *tools.Registry {
+	t.Helper()
+	reg := tools.NewRegistry()
+	for _, name := range []string{"read_file", "web_search", "terminal"} {
+		n := name
+		if counts[n] == nil {
+			counts[n] = new(int32)
+		}
+		readOnly := n != "terminal"
+		reg.Register(&tools.ToolEntry{
+			Name: n, Description: "test " + n, ReadOnly: readOnly,
+			Parameters: tools.MustParseSchema(`{"type":"object","properties":{}}`),
+			Handler: func(ctx context.Context, a map[string]interface{}) *tools.ToolResult {
+				atomic.AddInt32(counts[n], 1)
+				return &tools.ToolResult{Name: n, Success: false, Error: "simulated failure"}
+			},
+		})
+	}
+	return reg
+}
+
 func spawnAgent(t *testing.T, client core.LLMClient, reg *tools.Registry, cfg core.SubAgentConfig) *SubAgent {
 	t.Helper()
 	rtr := newScriptedRouter(client)
@@ -115,13 +138,18 @@ func TestAgentReturnsOnFirstToolFreeAnswer(t *testing.T) {
 }
 
 // TestExactRepeatGuardStopsAStuckAgent. An agent repeating a byte-identical
-// call is not making progress, and the guard exists so it stops rather than
-// spending the whole turn budget discovering that.
+// call that keeps FAILING is not making progress, and the guard exists so it
+// stops rather than spending the whole turn budget discovering that.
+//
+// The guard is keyed on outcome, not mere repetition: three identical calls
+// that all SUCCEED (re-running a build between fixes, re-reading a file to
+// confirm state) is legitimate progress and must not trip this — see
+// TestRepeatedSuccessfulCallIsNotTreatedAsStuck.
 func TestExactRepeatGuardStopsAStuckAgent(t *testing.T) {
 	counts := map[string]*int32{}
-	// Always the same call, forever.
+	// Always the same call, forever, and it always fails.
 	client := &scriptedClient{turns: []turn{toolTurn("read_file", `{"path":"a"}`)}}
-	a := spawnAgent(t, client, agentTestRegistry(t, counts),
+	a := spawnAgent(t, client, agentTestFailingRegistry(t, counts),
 		core.SubAgentConfig{Role: core.RoleWorker, Goal: "loop forever", MaxTurns: 50})
 
 	res, err := a.Execute(context.Background())
@@ -137,6 +165,30 @@ func TestExactRepeatGuardStopsAStuckAgent(t *testing.T) {
 	// It must give up well before MaxTurns rather than burning all 50.
 	if client.callCount() > 6 {
 		t.Errorf("took %d calls to notice it was stuck", client.callCount())
+	}
+}
+
+// TestRepeatedSuccessfulCallIsNotTreatedAsStuck. Three identical calls that
+// all succeed is legitimate progress, not a stuck loop — only repeated
+// FAILURES of the same call abort early. A successful repeat now runs its
+// natural course (bounded by MaxTurns) instead of being killed within a
+// handful of calls as "stuck", which is what happened before the guard was
+// made outcome-aware.
+func TestRepeatedSuccessfulCallIsNotTreatedAsStuck(t *testing.T) {
+	counts := map[string]*int32{}
+	client := &scriptedClient{turns: []turn{toolTurn("read_file", `{"path":"a"}`)}}
+	a := spawnAgent(t, client, agentTestRegistry(t, counts),
+		core.SubAgentConfig{Role: core.RoleWorker, Goal: "repeat successfully", MaxTurns: 8})
+
+	_, err := a.Execute(context.Background())
+	if err == nil || strings.Contains(err.Error(), "stuck") {
+		t.Errorf("a repeated but succeeding call must not be treated as stuck, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "max turns") {
+		t.Errorf("want a max-turns error (the script never stops calling tools), got %v", err)
+	}
+	if client.callCount() < 8 {
+		t.Errorf("stopped early at %d calls; a succeeding repeat should run to MaxTurns, not abort as stuck", client.callCount())
 	}
 }
 
@@ -184,6 +236,33 @@ func TestMaxTurnsIsEnforced(t *testing.T) {
 	}
 	if client.callCount() > 4 {
 		t.Errorf("ran %d turns with MaxTurns=3", client.callCount())
+	}
+}
+
+// TestMaxTurnsSalvagesPartialOutput. Hitting MaxTurns used to return a
+// completely empty Output, which is what the DAG merge step (mergeResults in
+// orchestrator/dag_executor.go) shows for that node — nothing — even though
+// the agent had already produced real content along the way. The last
+// non-empty assistant text must survive into the failed result.
+func TestMaxTurnsSalvagesPartialOutput(t *testing.T) {
+	counts := map[string]*int32{}
+	turns := []turn{
+		{content: "working on it", tools: []core.ToolCall{{ID: "c1", Type: "function",
+			Function: core.FunctionCall{Name: "read_file", Arguments: `{"path":"a"}`}}}},
+	}
+	for i := 0; i < 20; i++ {
+		turns = append(turns, toolTurn("read_file", `{"path":"f`+string(rune('a'+i))+`"}`))
+	}
+	client := &scriptedClient{turns: turns}
+	a := spawnAgent(t, client, agentTestRegistry(t, counts),
+		core.SubAgentConfig{Role: core.RoleWorker, Goal: "never finish", MaxTurns: 5})
+
+	res, err := a.Execute(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "max turns") {
+		t.Fatalf("want a max-turns error, got %v", err)
+	}
+	if res.Output != "working on it" {
+		t.Errorf("res.Output = %q, want the salvaged partial content", res.Output)
 	}
 }
 

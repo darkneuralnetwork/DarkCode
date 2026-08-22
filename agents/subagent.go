@@ -149,8 +149,15 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 	}
 
 	var allToolCalls []core.ToolCall
-	var lastCallSig string
-	var repeatCount int
+	// stuckFails tracks consecutive FAILURES of the exact same (tool, args)
+	// call, keyed on that signature — not mere repetition, which used to
+	// abort the whole task on three identical calls regardless of outcome
+	// (e.g. `go build` → fix → `go build` → fix → `go build`, or re-reading a
+	// file to confirm state, both entirely legitimate). A success deletes the
+	// key. Mirrors loop.ReActLoop's stuckFails (loop/loop.go) — the loop
+	// package already got this right; the DAG sub-agent path had not caught
+	// up.
+	stuckFails := map[string]int{}
 	// Per-tool call budget: the exact-repeat guard below only catches
 	// byte-identical calls, so an agent that re-searches with slightly
 	// reworded queries (e.g. 12 web_search calls for one factual question)
@@ -307,24 +314,6 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 			return result, nil
 		}
 
-		// Loop protection: if the agent makes the exact same tool call sequence 3 times in a row, break out
-		if len(msg.ToolCalls) > 0 {
-			callSig := ""
-			for _, tc := range msg.ToolCalls {
-				callSig += tc.Function.Name + ":" + tc.Function.Arguments + "|"
-			}
-			if callSig == lastCallSig {
-				repeatCount++
-				if repeatCount >= 3 {
-					err := fmt.Errorf("agent got stuck in a loop calling: %s", msg.ToolCalls[0].Function.Name)
-					return a.failResult(err), err
-				}
-			} else {
-				lastCallSig = callSig
-				repeatCount = 0
-			}
-		}
-
 		// Count per-tool usage for the budget guard above.
 		for _, tc := range msg.ToolCalls {
 			toolNameCounts[tc.Function.Name]++
@@ -412,11 +401,47 @@ func (a *SubAgent) Execute(ctx context.Context) (*core.SubAgentResult, error) {
 				Name:       toolName,
 			})
 		}
+
+		// Stuck detection, by outcome: three consecutive failures of the
+		// exact same (tool, args) call is not making progress and burns the
+		// rest of the turn budget discovering that; three consecutive
+		// successes of the same call is not evidence of anything wrong (the
+		// per-tool cap above already converges that case).
+		for _, tc := range msg.ToolCalls {
+			key := tc.Function.Name + ":" + tc.Function.Arguments
+			succeeded := false
+			for _, result := range toolResults {
+				if result.CallID == tc.ID {
+					succeeded = result.Result != nil && result.Result.Success
+					break
+				}
+			}
+			if succeeded {
+				delete(stuckFails, key)
+				continue
+			}
+			stuckFails[key]++
+			if stuckFails[key] >= 3 {
+				err := fmt.Errorf("agent got stuck repeatedly failing the same call: %s", tc.Function.Name)
+				result := a.failResult(err)
+				// Salvage whatever real work already happened rather than
+				// discarding it: this used to return a completely empty
+				// Output, which is what dag_executor.go's merge step showed
+				// for the node — nothing, even though real work preceded the
+				// failing calls.
+				result.Output = bestPartial(a.messages)
+				return result, err
+			}
+		}
 	}
 
-	// Max turns exceeded
+	// Max turns exceeded. Salvage whatever real work already happened rather
+	// than discarding it — see the comment above on the stuck-detection path;
+	// the same reasoning applies here.
 	err = fmt.Errorf("agent exceeded max turns (%d)", maxTurns)
-	return a.failResult(err), err
+	result := a.failResult(err)
+	result.Output = bestPartial(a.messages)
+	return result, err
 }
 
 func (a *SubAgent) failResult(err error) *core.SubAgentResult {
@@ -433,6 +458,21 @@ func (a *SubAgent) failResult(err error) *core.SubAgentResult {
 		a.emitter.EmitAgentComplete(a.Role, a.Goal, err.Error(), false)
 	}
 	return result
+}
+
+// bestPartial returns the last assistant text in the conversation, for use
+// when Execute aborts early (stuck/max-turns) so the DAG merge step still
+// sees whatever the agent actually produced instead of nothing. Mirrors
+// loop.bestPartial (loop/loop.go).
+func bestPartial(messages []core.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == core.RoleAssistant {
+			if s := messages[i].ContentString(); strings.TrimSpace(s) != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // buildAgentSystemPrompt creates a role-specific system prompt.
