@@ -283,8 +283,42 @@ func FitClient(messages []core.Message, client core.LLMClient, cfgContextLength,
 	if window <= 0 {
 		window = DefaultContextWindow
 	}
-	reserve := window*ResponseReservePercent/100 + toolCount*TokensPerToolSchema + SystemReserveTokens
-	return FitToWindow(messages, window, reserve)
+	return FitToWindow(messages, window, reserveFor(window, toolCount))
+}
+
+// reserveFor computes the token reservation FitClient subtracts from window:
+// room for the response, the tool schemas, and the system prompt. Shared
+// with UsableBudget so the two stay in agreement by construction.
+func reserveFor(window, toolCount int) int {
+	return window*ResponseReservePercent/100 + toolCount*TokensPerToolSchema + SystemReserveTokens
+}
+
+// UsableBudget returns how many tokens are actually available for message
+// content once FitClient's own reserves are subtracted from window — the
+// same arithmetic FitClient applies internally, exposed so an upstream
+// caller building a request BEFORE it reaches FitClient (e.g.
+// ctxengine.Engine.Assemble, which trims by relevance rather than recency)
+// can budget against the number that will actually survive the wire.
+//
+// Without this, an upstream budget of the raw window routinely comes in
+// well above what FitClient will actually allow (window minus ~40% response
+// reserve minus a 600-token system reserve minus tool schemas), so the
+// upstream trim never engages — everything passes through untouched — and
+// FitClient ends up doing ALL the trimming itself, by its own oldest-first
+// recency rule. That silently discards whatever relevance-based selection
+// the upstream caller made: its ranked survivors get re-shed by recency
+// before they ever reach the model. Floors at 256, matching FitToWindow's
+// own floor, so a tiny or misreported window still leaves room for a
+// request.
+func UsableBudget(window, toolCount int) int {
+	if window <= 0 {
+		window = DefaultContextWindow
+	}
+	budget := window - reserveFor(window, toolCount)
+	if budget < 256 {
+		budget = 256
+	}
+	return budget
 }
 
 // FitsInBudget checks whether the given messages fit within the token budget.

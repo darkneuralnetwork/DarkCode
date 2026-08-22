@@ -114,6 +114,35 @@ func TestFitClient_FallsBackToCfgContextLength(t *testing.T) {
 	}
 }
 
+// TestUsableBudget_MatchesWhatFitClientActuallyEnforces is the regression
+// test for the bug caught reviewing Phase 5 of the context-management
+// unification: an upstream caller (ctxengine.Engine.Assemble) that budgeted
+// against the RAW window, not FitClient's reserve-adjusted usable amount,
+// routinely computed a budget so much larger than what FitClient would
+// actually allow that its own relevance-based trim never engaged — every
+// message passed through Assemble untouched, and FitClient did ALL the
+// trimming itself by recency, silently discarding whatever ranking Assemble
+// had chosen. UsableBudget must return a number FitClient genuinely honors:
+// filling a message list to just past UsableBudget must still get trimmed
+// by FitClient, and content sized at or under UsableBudget must survive
+// untouched (when no anchors force something to yield space regardless).
+func TestUsableBudget_MatchesWhatFitClientActuallyEnforces(t *testing.T) {
+	const window = 8000
+	budget := UsableBudget(window, 0)
+	if budget <= 0 || budget >= window {
+		t.Fatalf("UsableBudget(%d, 0) = %d, want a positive number well under the raw window (reserves should have been subtracted)", window, budget)
+	}
+
+	// A single message sized to just exceed the usable budget must get
+	// trimmed by FitClient at this window — proving UsableBudget didn't
+	// overstate what FitClient will actually allow.
+	over := []core.Message{bigMsg(core.RoleUser, (budget+200)*4)} // *4: ~4 bytes/token
+	out := FitClient(over, fakeWindowClient{window: window}, 0, 0)
+	if EstimateTokens(out) > budget+50 { // small slack for estimator rounding
+		t.Errorf("a message sized just over UsableBudget(%d) survived FitClient untrimmed (%d tokens) — UsableBudget overstates FitClient's real budget", budget, EstimateTokens(out))
+	}
+}
+
 // Shedding must never split a tool exchange. An orphaned tool response is
 // rejected outright by Gemini's OpenAI-compatible endpoint ("function call
 // turn must come immediately after a user turn or a function response turn"),

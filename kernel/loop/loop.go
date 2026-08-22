@@ -28,6 +28,7 @@ import (
 	"github.com/darkcode/internal/strutil"
 
 	"github.com/darkcode/infra/core"
+	"github.com/darkcode/infra/ctxfit"
 	"github.com/darkcode/infra/observability"
 	"github.com/darkcode/kernel/agents"
 	"github.com/darkcode/kernel/modelport"
@@ -92,13 +93,22 @@ const maxEvalFailures = 2
 // iteration, per the actual selected model's real window, inside
 // l.models.Complete via ctxfit.FitClient (modelport/modelport.go). No client
 // is routed yet at Run() start (routing happens per-call, inside the model
-// manager), so this can't ask a real model for its window either; sized
-// generously — about the same order of magnitude as the byte budget this
-// replaced (400000 bytes ≈ 100000 tokens) — for the same reason
-// agents/subagent.go never pre-truncates its own live loop at a flat count
-// either: a duplicate, under-informed truncation ahead of the correct one
-// only throws away context for no benefit.
-const loopHistoryBudgetTokens = 100000
+// manager), so this can't ask a real model for its window either.
+//
+// Uses ctxfit.UsableBudget against the package default window rather than a
+// bare token guess: budgeting against a RAW window (this used to be a flat
+// 100000, about the byte budget it replaced — 400000 bytes ≈ 100000 tokens —
+// with no reserve subtracted) routinely computes room Assemble's own trim
+// never needs to use, so FitClient ends up doing ALL the real trimming
+// itself by recency once the real model is known, silently discarding
+// whatever relevance-based selection Assemble made (see
+// infra/ctxfit.UsableBudget's comment — this was a real, found bug, not
+// hypothetical). This is still an approximation for a genuinely small-window
+// model (a local model well under DefaultContextWindow): FitClient's
+// per-iteration backstop is what actually protects that case, same as
+// always — this just stops the common case from defeating Assemble for no
+// reason.
+var loopHistoryBudgetTokens = ctxfit.UsableBudget(ctxfit.DefaultContextWindow, 0)
 
 // ReActLoop is the agentic execution loop. It is constructed once by the
 // orchestrator kernel and re-used per Execute call when AgenticLoop is on.

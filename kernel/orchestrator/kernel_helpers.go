@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/darkcode/infra/core"
+	"github.com/darkcode/infra/ctxfit"
 	"github.com/darkcode/kernel/agents"
 	"github.com/darkcode/kernel/modelport"
 	"github.com/darkcode/kernel/router"
@@ -485,12 +486,18 @@ func (k *Kernel) executeDirectNoTools(ctx context.Context, goal string, recallBl
 		if recallBlock != "" {
 			injections = []core.Message{{Role: core.RoleSystem, Content: "## Relevant Past Context\n" + recallBlock}}
 		}
+		// UsableBudget, not the raw window: budgeting against the window
+		// directly routinely computes room Assemble's own trim never needs
+		// to use, and ctxfit.FitClient (inside k.models.Complete, below)
+		// then does ALL the real trimming itself by recency — silently
+		// discarding whatever relevance-based selection Assemble made. This
+		// path offers no tools, so toolCount is 0, matching the Ask below.
 		window, err := k.ctxEngine.Assemble(ctx, ctxengine.AssembleRequest{
 			Query:           goal,
 			Conversation:    stm,
 			SystemPrompt:    sysContent,
 			Injections:      injections,
-			AvailableTokens: client.ModelInfo().Context,
+			AvailableTokens: ctxfit.UsableBudget(client.ModelInfo().Context, 0),
 		})
 		if err == nil && window != nil {
 			messages = window.Messages
