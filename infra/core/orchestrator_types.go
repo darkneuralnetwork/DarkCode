@@ -401,7 +401,7 @@ type AuditEntry struct {
 	Tool       string    `json:"tool,omitempty"`
 	RiskLevel  RiskLevel `json:"risk_level"`
 	Approved   bool      `json:"approved"`
-	ApprovedBy string    `json:"approved_by,omitempty"` // "auto", "human", "policy"
+	ApprovedBy string    `json:"approved_by,omitempty"` // "auto", "approver", "policy", "denied"
 	Outcome    string    `json:"outcome"`
 	Detail     string    `json:"detail,omitempty"`
 	TaskID     string    `json:"task_id,omitempty"`

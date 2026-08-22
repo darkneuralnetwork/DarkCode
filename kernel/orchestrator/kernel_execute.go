@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/internal/strutil"
@@ -198,12 +199,22 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// confident hit answers with zero LLM calls; anything else escalates. Runs
 	// on the RAW goal so the rungs match what the user asked, not the
 	// plan-injected version. See cascade.go.
-	if answer, ok := k.runCascade(ctx, userGoal); ok {
-		k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: answer})
-		if k.emitter != nil {
-			k.emitter.EmitFinalOutput(answer)
+	//
+	// Skipped when the request explicitly asked for the agentic loop
+	// (/loop, or Loop chat mode): a live reproduction found the cascade's
+	// "composed" rung answering a never-before-asked question from stale,
+	// only-loosely-related stored facts with a confidence score high enough
+	// to short-circuit the loop entirely — the user asked for the loop
+	// strategy specifically and got a wrong answer from memory instead, with
+	// no signal the requested strategy never ran.
+	if !k.loopEnabledForRequest(ctx) {
+		if answer, ok := k.runCascade(ctx, userGoal); ok {
+			k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: answer})
+			if k.emitter != nil {
+				k.emitter.EmitFinalOutput(answer)
+			}
+			return answer, nil
 		}
-		return answer, nil
 	}
 
 	userGoal = k.injectProjectContext(userGoal)
@@ -440,6 +451,30 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 
 	// Step 4: Decide — trivial task or needs decomposition?
 	if k.isTrivial(userGoal, complexity) {
+		// plan_approval: "always" means always — a trivial classification
+		// used to skip the approval gate entirely (only Step 5.5 below ever
+		// consulted it), so a user who explicitly asked to review every plan
+		// before it ran had file-mutating "trivial" tasks execute with no
+		// review at all. A one-node plan gets the same preview/approve/
+		// reject/revise turn a decomposed plan gets; on approval,
+		// executePlannedGraph runs it with the same DAG verify/repair
+		// pipeline. Any other policy ("auto"/"never") is unaffected — this
+		// only tightens the explicit "always" case.
+		k.mu.Lock()
+		planApprovalCfg := k.cfg.PlanApproval
+		k.mu.Unlock()
+		if planApprovalCfg == "always" {
+			g := trivialTaskGraph(userGoal)
+			preview := k.previewWithImpact(g)
+			k.setPendingPlan(g)
+			k.log("plan", "Trivial task awaiting user approval (plan_approval: always)")
+			k.memory.STMAdd(core.Message{Role: core.RoleAssistant, Content: preview})
+			if k.emitter != nil {
+				k.emitter.EmitTaskUpdate("planner", "awaiting-approval", "Trivial task awaiting approval")
+				k.emitter.EmitFinalOutput(preview)
+			}
+			return preview, nil
+		}
 		k.log("plan", "Task is trivial — executing directly")
 		return k.executeDirect(ctx, userGoal, recallBlock)
 	}
@@ -484,4 +519,26 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// Steps 6-10: execute the graph (DAG run → merge → verify → record →
 	// emit) — see executePlannedGraph in dag_executor.go.
 	return k.executePlannedGraph(ctx, g, recallBlock)
+}
+
+// trivialTaskGraph wraps a trivial-classified goal in a one-node plan.Graph
+// so it can go through the same approval-preview/approve/reject/revise flow
+// a decomposed plan gets, for the plan_approval:"always" case at Step 4. On
+// approval, executePlannedGraph runs it exactly like any other single-task
+// plan — it does not need to know this one was never actually decomposed.
+func trivialTaskGraph(goal string) *plan.Graph {
+	return &plan.Graph{
+		Version:   1,
+		Goal:      goal,
+		Summary:   "Trivial task — executed directly once approved, no decomposition.",
+		CreatedBy: "trivial-path",
+		CreatedAt: time.Now(),
+		Nodes: []*plan.Node{{
+			ID:     "T1",
+			Name:   "trivial-task",
+			Goal:   goal,
+			Agent:  string(core.RoleWorker),
+			Status: core.TaskPending,
+		}},
+	}
 }

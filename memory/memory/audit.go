@@ -81,7 +81,17 @@ func (al *AuditLog) RecordAction(agent core.AgentRole, action, tool string, risk
 	approvedBy := "auto"
 	if risk == core.RiskHigh || risk == core.RiskCritical {
 		if approved {
-			approvedBy = "human"
+			// Not "human": every approved high/critical entry reaches here
+			// through the permission gate's ask(), which can resolve a
+			// decision through a real interactive approver (CLI/GUI) OR
+			// through its own no-approver fallback — a live reproduction of
+			// the exact write_file scenario this audit trail is meant to
+			// cover confirmed both paths are reachable in practice, and
+			// RecordAction has no way to tell them apart. Asserting "human"
+			// unconditionally claimed a fact the code cannot prove; "approver"
+			// says only what's actually known — it went through the approval
+			// mechanism, not that a person was on the other end of it.
+			approvedBy = "approver"
 		} else {
 			approvedBy = "denied"
 		}
