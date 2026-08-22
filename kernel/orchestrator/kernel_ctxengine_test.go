@@ -93,11 +93,13 @@ func TestCtxEngineBudgetTrimming(t *testing.T) {
 	}
 }
 
-// TestCtxEngineDisabledByDefault verifies that UseCtxEngine=false preserves
-// the raw STM append behavior (the original code path).
-func TestCtxEngineDisabledByDefault(t *testing.T) {
+// TestCtxEngineEnabledByDefault verifies that UseCtxEngine defaults to true
+// (Phase 5 of the context-management unification) — Assemble is the default
+// builder for pre-turn history and injections; boundedChatContext/raw STM
+// append remains reachable only as the opt-out (UseCtxEngine=false) path.
+func TestCtxEngineEnabledByDefault(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.UseCtxEngine {
-		t.Error("UseCtxEngine should default to false to preserve existing behavior")
+	if !cfg.UseCtxEngine {
+		t.Error("UseCtxEngine should default to true — see Context management Phase 5")
 	}
 }

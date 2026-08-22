@@ -40,6 +40,10 @@ type fakeLLMClient struct {
 	// model would. nil (the default) means no test relies on this — every
 	// existing caller of fakeLLMClient is unaffected.
 	toolCallsFunc func(callIndex int) []core.ToolCall
+	// contextWindow overrides ModelInfo().Context (0 keeps the previous
+	// hardcoded 8000 default). Lets a test that needs a tight, Assemble-
+	// engaging budget set one without affecting every other caller.
+	contextWindow int
 }
 
 func (f *fakeLLMClient) nextContent(req *core.CompletionRequest) string {
@@ -96,7 +100,11 @@ func (f *fakeLLMClient) CreateEmbedding(ctx context.Context, text string) ([]flo
 	return nil, nil
 }
 func (f *fakeLLMClient) ModelInfo() core.ModelMetadata {
-	return core.ModelMetadata{ID: f.name, Context: 8000}
+	ctxWindow := f.contextWindow
+	if ctxWindow == 0 {
+		ctxWindow = 8000 // preserves every existing test's assumed window
+	}
+	return core.ModelMetadata{ID: f.name, Context: ctxWindow}
 }
 func (f *fakeLLMClient) Ping(ctx context.Context) error { return nil }
 func (f *fakeLLMClient) Close() error                   { return nil }

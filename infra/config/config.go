@@ -95,9 +95,15 @@ type Config struct {
 	MaxConcurrent   int  `json:"max_concurrent,omitempty"`
 	CompressContext bool `json:"compress_context,omitempty"`
 
-	// UseCtxEngine enables the intelligent context-assembly engine
-	// (dedup + TF-IDF ranking + budget trimming) for the General-mode
-	// fast path. Default false (raw STM append) to preserve behavior.
+	// UseCtxEngine enables memory/ctxengine's Engine.Assemble (dedup +
+	// relevance ranking + budget trimming, recall/project injections
+	// competing for the same budget as the conversation) as the builder for
+	// pre-turn history across the ReAct loop, Chat and General-mode fast
+	// path. Default true since Context management Phase 5 — an existing
+	// config.json with an explicit "use_ctx_engine": false is respected as
+	// an opt-out (DefaultConfig populates this before json.Unmarshal
+	// overlays the file, so only a key actually present in the file can
+	// override it — same pattern CompressContext already uses).
 	UseCtxEngine bool `json:"use_ctx_engine,omitempty"`
 
 	// HealthDaemon runs the background structural watch — import cycles
@@ -407,6 +413,7 @@ func DefaultConfig() *Config {
 		Sandbox:               "auto",
 		MaxConcurrent:         3,
 		CompressContext:       true,
+		UseCtxEngine:          true,
 		ExecutionProfile:      "auto",
 		PlanApproval:          "auto",
 		PlanDepth:             "auto",

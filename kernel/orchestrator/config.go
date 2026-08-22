@@ -11,8 +11,17 @@ type Config struct {
 	MaxTurns         int
 	SafetyLevel      SafetyLevel
 	CompressContext  bool
-	UseCtxEngine     bool
-	ContextLength    int
+	// UseCtxEngine turns on memory/ctxengine's Engine.Assemble as the builder
+	// for pre-turn conversational history and injections (loop.go's Run,
+	// executeChatReadOnly, executeDirectNoTools), replacing the flat
+	// boundedChatContext fallback and letting a recall block compete for
+	// budget with the conversation instead of always winning it. On by
+	// default since Phase 5 of the context-management unification (see the
+	// project's context-management plan); kept as a real field rather than
+	// removed so it stays an opt-out escape hatch, not a one-way door — a
+	// deliberate choice for a system that now touches every dispatch path.
+	UseCtxEngine  bool
+	ContextLength int
 
 	// No AgenticLoop or MaxLoops here. Whether a request iterates is decided
 	// per request by the /loop verb or the Loop chat mode, and the iteration
@@ -55,5 +64,6 @@ func DefaultConfig() Config {
 		MaxTurns:        10,
 		SafetyLevel:     SafetyNormal,
 		CompressContext: true,
+		UseCtxEngine:    true,
 	}
 }
