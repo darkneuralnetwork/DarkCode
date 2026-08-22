@@ -1,0 +1,153 @@
+package cli
+
+import (
+	"sort"
+	"strings"
+
+	"github.com/darkcode/surfaces/cli/tui"
+)
+
+// cmdInfo describes one slash command for the searchable command palette
+// (/help) and the tab-completer. This registry is the single source of truth so
+// the palette, completions, and docs never drift apart.
+type cmdInfo struct {
+	Name     string // canonical name, e.g. "/model"
+	Category string // grouping shown in the palette
+	Summary  string // one-line description
+}
+
+// commandRegistry lists every user-facing slash command, grouped by category.
+// Keep entries ordered by category then name; the palette sorts within a
+// category. Adding a command here surfaces it in /help and tab-completion.
+var commandRegistry = []cmdInfo{
+	// Session
+	{"/help", "Session", "Search & run any command (this palette)"},
+	{"/new", "Session", "Start a fresh chat — clears context (keeps durable memory)"},
+	{"/rollback", "Session", "List checkpoints, or undo the agent's file changes"},
+	{"/session", "Session", "Summarise, export, archive, resume, or prune sessions"},
+	{"/status", "Session", "Show the kernel/router status"},
+	{"/config", "Session", "Show the current configuration"},
+	{"/quit", "Session", "Exit darkcode"},
+
+	// Strategy verbs — typed WITH a task, applying to that one message.
+	{"/ask", "Strategy", "/ask <question> — answer without changing anything"},
+	{"/loop", "Strategy", "/loop <task> — iterate until the checks pass"},
+	{"/graph", "Strategy", "/graph <task> — plan it, run the graph, prove each task"},
+	{"/always", "Strategy", "Keep using one strategy until you say otherwise, or /always off"},
+
+	// Chat & modes
+	{"/background", "Chat & Modes", "Idle-capacity work: off / light / full"},
+	{"/brain", "Chat & Modes", "Routing brain: auto (local-first) / local (offline) / cloud"},
+	{"/mode", "Chat & Modes", "Routing mode: single / escalation / consensus"},
+	{"/safety", "Chat & Modes", "Approval level: strict / normal / relaxed"},
+	{"/sandbox", "Chat & Modes", "Shell sandbox: off / auto / on / strict"},
+	{"/profile", "Chat & Modes", "Execution profile: auto / sequential / parallel"},
+
+	// Models & local
+	{"/model", "Models & Local", "Switch the active model (selector)"},
+	{"/models", "Models & Local", "List registered models"},
+	{"/providers", "Models & Local", "List configured providers"},
+	{"/local", "Models & Local", "Local LLM: off / on / force (offline routing)"},
+	{"/memory-profile", "Models & Local", "Local model context/RAM: lean / balanced / max"},
+	{"/compressor", "Models & Local", "Set the context-compression model"},
+
+	// Knowledge & memory
+	{"/ingest", "Knowledge & Memory", "Teach the system a file, directory, URL, or text"},
+	{"/memory", "Knowledge & Memory", "Show the memory summary"},
+	{"/skills", "Knowledge & Memory", "List skills, or /skills import <dir> to load written ones"},
+	{"/episodes", "Knowledge & Memory", "List episodic memory (past tasks)"},
+	{"/know", "Knowledge & Memory", "Browse the knowledge graph"},
+	{"/learning", "Knowledge & Memory", "Show learning-engine feedback"},
+	{"/audit", "Knowledge & Memory", "Show the action audit trail"},
+	{"/health", "Knowledge & Memory", "Repository health score and ranked structural issues"},
+	{"/evolution", "Knowledge & Memory", "What changed structurally between two commits"},
+
+	// Project
+	{"/project", "Project", "List / manage projects"},
+	{"/plan", "Project", "Show the active project's implementation plan"},
+	{"/workflow", "Project", "Show the active project's task workflow"},
+
+	// Tools & system
+	{"/tools", "Tools & System", "List / inspect available tools"},
+	{"/plugins", "Tools & System", "List loaded plugins"},
+	{"/pipeline", "Tools & System", "Show the verification pipeline"},
+	{"/permissions", "Tools & System", "Show permission-gate settings"},
+	{"/lock-tests", "Tools & System", "/lock-tests on|off — deny writes to test files and CI config"},
+
+	// Observability
+	{"/monitor", "Observability", "Open the live monitoring dashboard"},
+	{"/usage", "Observability", "Token/cost usage report"},
+	{"/history", "Observability", "Show full request history"},
+	{"/stats", "Observability", "Show hardware stats"},
+	{"/events", "Observability", "Show the event stream"},
+	{"/log", "Observability", "Replay the activity/trace log"},
+}
+
+// commandAliases maps a canonical command to the other spellings the dispatcher
+// already accepts.
+//
+// These were previously undocumented: the switch answered to them, but nothing
+// listed them, so they were surface nobody maintained. Deleting them would have
+// broken muscle memory for no gain — /q and /exit are universal, /undo reads
+// better than /rollback. Listing them here makes them maintained instead: the
+// palette shows them, the completer offers them, and a test reads the switch
+// itself to prove every listed spelling is actually dispatchable.
+var commandAliases = map[string][]string{
+	"/help":           {"/?"},
+	"/quit":           {"/exit", "/q"},
+	"/new":            {"/reset"},
+	"/rollback":       {"/undo"},
+	"/session":        {"/sessions"},
+	"/know":           {"/knowledge"},
+	"/memory-profile": {"/memprofile"},
+	"/project":        {"/projects"},
+	"/permissions":    {"/perms"},
+}
+
+// CommandSpellings returns every accepted spelling — canonical names and
+// aliases — so the tab-completer offers exactly what the dispatcher accepts.
+func CommandSpellings() []string {
+	out := make([]string, 0, len(commandRegistry)+len(commandAliases))
+	for _, c := range commandRegistry {
+		out = append(out, c.Name)
+		out = append(out, commandAliases[c.Name]...)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// commandSelectorItems builds the palette entries, grouped by category (a
+// category order is imposed, and names are sorted within each category). The
+// Description carries the category tag + summary so the fuzzy filter matches on
+// command name, category, and summary alike.
+func commandSelectorItems() []tui.SelectorItem {
+	catOrder := []string{
+		"Session", "Chat & Modes", "Models & Local",
+		"Knowledge & Memory", "Project", "Tools & System", "Observability",
+	}
+	rank := make(map[string]int, len(catOrder))
+	for i, c := range catOrder {
+		rank[c] = i
+	}
+	sorted := make([]cmdInfo, len(commandRegistry))
+	copy(sorted, commandRegistry)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if rank[sorted[i].Category] != rank[sorted[j].Category] {
+			return rank[sorted[i].Category] < rank[sorted[j].Category]
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	items := make([]tui.SelectorItem, 0, len(sorted))
+	for _, c := range sorted {
+		desc := c.Category + " · " + c.Summary
+		if a := commandAliases[c.Name]; len(a) > 0 {
+			desc += " (also " + strings.Join(a, ", ") + ")"
+		}
+		items = append(items, tui.SelectorItem{
+			Title:       c.Name,
+			Description: desc,
+			Value:       c.Name,
+		})
+	}
+	return items
+}
