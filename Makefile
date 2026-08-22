@@ -9,15 +9,15 @@ PKGS    := ./...
 
 .PHONY: build
 build: ## Compile the binary
-	$(GO) build -o $(BINARY) .
+	$(GO) build -o $(BINARY) ./cmd/darkcode
 
 .PHONY: install
 install: ## Install into GOBIN
-	$(GO) install .
+	$(GO) install ./cmd/darkcode
 
 .PHONY: run
 run: ## Build and run
-	$(GO) run .
+	$(GO) run ./cmd/darkcode
 
 .PHONY: test
 test: ## Run the test suite
