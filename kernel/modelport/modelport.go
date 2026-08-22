@@ -38,6 +38,7 @@ import (
 
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/kernel/compression"
+	"github.com/darkcode/model/llm"
 )
 
 // Purpose is what a call is FOR. It decides the tier and the limits.
@@ -304,6 +305,10 @@ const overflowRefitFraction = 75
 // counting error. Retried once only — a second overflow is not drift, it is a
 // prompt that genuinely does not fit.
 func (m *Manager) send(ctx context.Context, client core.LLMClient, req *core.CompletionRequest, ask Ask) (*core.CompletionResponse, error) {
+	// Tags the call log (model/llm/call_log.go) with which subsystem this
+	// request is for, so "how many real requests did we make" is answerable
+	// per-purpose ("execute" vs "compress" vs "plan"), not just in aggregate.
+	ctx = llm.WithPurpose(ctx, string(ask.Purpose))
 	dispatch := func() (*core.CompletionResponse, error) {
 		if ask.Stream != nil {
 			return client.ChatCompletionStream(ctx, req, ask.Stream)

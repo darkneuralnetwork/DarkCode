@@ -277,15 +277,47 @@ func (c *RetryingClient) Close() error {
 	return c.inner.Close()
 }
 
+// logAttempt records one real attempt (see call_log.go) — every attempt, not
+// just the ones that get retried, so the log answers "how many real requests
+// did this cost" by line count rather than requiring the reader to guess
+// which failures were silently retried.
+func (c *RetryingClient) logAttempt(ctx context.Context, method, model string, callID uint64, attempt int, start time.Time, err error, retried bool) {
+	e := CallLogEntry{
+		Time:        time.Now(),
+		CallID:      callID,
+		Method:      method,
+		Purpose:     purposeFrom(ctx),
+		Provider:    c.Provider(),
+		Model:       model,
+		Attempt:     attempt,
+		MaxAttempts: c.opts.MaxAttempts,
+		DurationMs:  time.Since(start).Milliseconds(),
+		Success:     err == nil,
+		Retried:     retried,
+	}
+	if err != nil {
+		e.Error = err.Error()
+		var ae *APIError
+		if errors.As(err, &ae) {
+			e.StatusCode = ae.Code
+		}
+	}
+	recordCall(e)
+}
+
 // CreateEmbedding generates a vector embedding using the underlying client, with retries.
 func (c *RetryingClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
 	if c.inner == nil {
 		return nil, errNoInnerClient
 	}
+	callID := newCallID()
 	var vec []float32
 	var err error
 	for attempt := 1; attempt <= c.opts.MaxAttempts; attempt++ {
+		start := time.Now()
 		vec, err = c.inner.CreateEmbedding(ctx, text)
+		willRetry := err != nil && c.retryable(err) && attempt < c.opts.MaxAttempts
+		c.logAttempt(ctx, "create_embedding", c.ModelInfo().ID, callID, attempt, start, err, willRetry)
 		if err == nil {
 			return vec, nil
 		}
@@ -306,9 +338,13 @@ func (c *RetryingClient) ChatCompletion(ctx context.Context, req *core.Completio
 	if c.inner == nil {
 		return nil, errNoInnerClient
 	}
+	callID := newCallID()
 	var lastErr error
 	for attempt := 1; attempt <= c.opts.MaxAttempts; attempt++ {
+		start := time.Now()
 		resp, err := c.inner.ChatCompletion(ctx, req)
+		willRetry := err != nil && c.retryable(err) && attempt < c.opts.MaxAttempts
+		c.logAttempt(ctx, "chat_completion", req.Model, callID, attempt, start, err, willRetry)
 		if err == nil {
 			return resp, nil
 		}
@@ -333,8 +369,10 @@ func (c *RetryingClient) ChatCompletionStream(ctx context.Context, req *core.Com
 	if c.inner == nil {
 		return nil, errNoInnerClient
 	}
+	callID := newCallID()
 	var lastErr error
 	for attempt := 1; attempt <= c.opts.MaxAttempts; attempt++ {
+		start := time.Now()
 		streamed := false
 		wrapped := cb
 		if cb != nil {
@@ -354,6 +392,8 @@ func (c *RetryingClient) ChatCompletionStream(ctx context.Context, req *core.Com
 			}
 		}
 		resp, err := c.inner.ChatCompletionStream(ctx, req, wrapped)
+		willRetry := err != nil && !streamed && c.retryable(err) && attempt < c.opts.MaxAttempts
+		c.logAttempt(ctx, "chat_completion_stream", req.Model, callID, attempt, start, err, willRetry)
 		if err == nil {
 			return resp, nil
 		}

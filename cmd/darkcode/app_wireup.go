@@ -690,6 +690,13 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// local answers the user rejected by re-asking) survives restarts.
 	a.Kernel.SetCascadeLogPath(filepath.Join(memDir, "cascade_log.jsonl"))
 
+	// Persist every real provider call attempt (one line per attempt,
+	// retries included) — the cascade log only records whether a query
+	// escalated to the model, not how many actual round-trips that cost once
+	// tool-calling or retries are involved, which left "how many real
+	// requests did we make, and why" unanswerable after the fact.
+	llm.SetCallLogPath(filepath.Join(memDir, "llm_calls.jsonl"))
+
 	// Journal DAG runs so a crashed multi-step task resumes from where it
 	// stopped instead of re-paying for every completed sub-task.
 	a.Kernel.SetRunsDir(defaultDarkcodeDir("runs"))
