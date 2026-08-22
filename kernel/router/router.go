@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/darkcode/infra/core"
-	"github.com/darkcode/kernel/compression"
+	"github.com/darkcode/kernel/modelport"
 	"github.com/darkcode/model/capability"
 	"github.com/darkcode/surfaces/ui"
 )
@@ -71,6 +71,13 @@ type Router struct {
 	// provider. Consensus fan-out is likewise restricted to local models.
 	// Set from config by the kernel/wireup; see SetForceLocal.
 	forceLocal bool
+
+	// modelManager applies the shared ceiling/temperature policy, window-fit
+	// and Purpose-tagged dispatch to consensus's callModel — built from this
+	// same Router (which already satisfies modelport.Router), even though
+	// callModel never uses it to route: consensus already chose its client
+	// per persona/role before calling in.
+	modelManager *modelport.Manager
 }
 
 // localTiers is the local model family, best (largest) first. Shared by the
@@ -91,7 +98,7 @@ func isLocalTier(t core.ModelTier) bool {
 
 // NewRouter creates a model router with the given model configurations.
 func NewRouter(mode core.RoutingMode, emitter *ui.EventEmitter) *Router {
-	return &Router{
+	r := &Router{
 		clients:             make(map[core.ModelTier]core.LLMClient),
 		models:              make(map[core.ModelTier]string),
 		mode:                mode,
@@ -102,6 +109,11 @@ func NewRouter(mode core.RoutingMode, emitter *ui.EventEmitter) *Router {
 		roleSelector:        NewRoleSelector(),
 		modelPool:           NewTieredModelPool(),
 	}
+	// r satisfies modelport.Router (Route(tier, complexity, desc)) already;
+	// this Manager is only ever used via CompleteWith (never Complete), so
+	// it never actually routes through r — see modelManager's doc comment.
+	r.modelManager, _ = modelport.New(r)
+	return r
 }
 
 // SetAdvisor attaches a capability advisor so routing decisions can account
@@ -775,30 +787,20 @@ func (r *Router) callModel(ctx context.Context, client core.LLMClient, model str
 	})
 	msgs = append(msgs, messages...)
 
-	// Hard context-fit guarantee before dispatch (Part 3 contract): fit to
-	// this consensus contributor's own effective window, so a persona model
-	// on a smaller (e.g. local) tier never overflows.
-	msgs = compression.FitClient(msgs, client, 0, 0)
-
-	temp := 0.3
-	maxTok := 4000
-	req := &core.CompletionRequest{
-		Model:       model,
-		Messages:    msgs,
-		Temperature: &temp,
-		MaxTokens:   &maxTok,
-	}
-
-	resp, err := client.ChatCompletion(ctx, req)
+	// CompleteWith applies PurposeExecute's shared ceiling/temperature (4000
+	// tokens, 0.3 temp — numerically identical to what this call built by
+	// hand before), fits to this consensus contributor's own effective
+	// window (same compression.FitClient call CompleteWith makes
+	// internally — a persona model on a smaller, e.g. local, tier still
+	// never overflows), and tags the call log with purpose="execute".
+	ans, err := r.modelManager.CompleteWith(ctx, client, model, modelport.Ask{
+		Purpose:  modelport.PurposeExecute,
+		Messages: msgs,
+	})
 	if err != nil {
 		return "", err
 	}
-
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("empty response from model")
-	}
-
-	return resp.Choices[0].Message.Content, nil
+	return ans.Text, nil
 }
 
 // detectConflict checks if the critique strongly disagrees with the primary output.

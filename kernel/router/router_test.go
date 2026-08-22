@@ -11,9 +11,13 @@ import (
 // fakeClient is a minimal named core.LLMClient for router-level tests — it
 // doesn't need to produce realistic completions, only to be distinguishable
 // by name so tests can assert WHICH model was selected.
-type fakeClient struct{ name string }
+type fakeClient struct {
+	name string
+	got  *core.CompletionRequest
+}
 
 func (f *fakeClient) ChatCompletion(ctx context.Context, req *core.CompletionRequest) (*core.CompletionResponse, error) {
+	f.got = req
 	return &core.CompletionResponse{Choices: []core.ChatChoice{{Message: core.ResponseMessage{Role: "assistant", Content: f.name}}}}, nil
 }
 func (f *fakeClient) ChatCompletionStream(ctx context.Context, req *core.CompletionRequest, cb *core.StreamCallbacks) (*core.CompletionResponse, error) {
@@ -25,6 +29,36 @@ func (f *fakeClient) CreateEmbedding(ctx context.Context, text string) ([]float3
 func (f *fakeClient) ModelInfo() core.ModelMetadata  { return core.ModelMetadata{ID: f.name} }
 func (f *fakeClient) Ping(ctx context.Context) error { return nil }
 func (f *fakeClient) Close() error                   { return nil }
+
+// TestCallModelRequestMatchesPurposeExecutePolicy locks in the request
+// callModel sends after migrating onto modelport.CompleteWith: the ceiling
+// and temperature it used to hardcode (4000, 0.3) are numerically identical
+// to PurposeExecute's shared policy row, so this proves the migration
+// produced no behavior change, not just that it compiles.
+func TestCallModelRequestMatchesPurposeExecutePolicy(t *testing.T) {
+	r := NewRouter(core.RouteSingle, nil)
+	c := &fakeClient{name: "persona"}
+
+	if _, err := r.callModel(context.Background(), c, "persona-model",
+		[]core.Message{{Role: core.RoleUser, Content: "hello"}}, "you are a critic"); err != nil {
+		t.Fatalf("callModel: %v", err)
+	}
+	if c.got == nil {
+		t.Fatal("client never received a request")
+	}
+	if c.got.Model != "persona-model" {
+		t.Errorf("Model = %q, want persona-model", c.got.Model)
+	}
+	if c.got.MaxTokens == nil || *c.got.MaxTokens != 4000 {
+		t.Errorf("MaxTokens = %v, want 4000", c.got.MaxTokens)
+	}
+	if c.got.Temperature == nil || *c.got.Temperature != 0.3 {
+		t.Errorf("Temperature = %v, want 0.3", c.got.Temperature)
+	}
+	if len(c.got.Messages) == 0 || c.got.Messages[0].Role != core.RoleSystem || c.got.Messages[0].Content != "you are a critic" {
+		t.Errorf("expected the system prompt as the first message, got %+v", c.got.Messages)
+	}
+}
 
 func TestDisableModel_RouteSkipsDisabledModel(t *testing.T) {
 	r := NewRouter(core.RouteSingle, nil)
