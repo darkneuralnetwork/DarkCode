@@ -12,6 +12,11 @@ import (
 	"github.com/darkcode/kernel/modelport"
 )
 
+// ctxengineModelManager is a routerless modelport.Manager — IncrementalSummarizer
+// already has its client injected directly (no router of its own), and only
+// ever calls CompleteWith (never Complete), so a nil router is fine.
+var ctxengineModelManager, _ = modelport.New(nil)
+
 func contentStr(m core.Message) string {
 	if m.Content == nil {
 		return ""
@@ -59,22 +64,19 @@ func (s *IncrementalSummarizer) Summarize(ctx context.Context, msgs []core.Messa
 	}
 	transcript := b.String()
 
-	// LLM fast path.
+	// LLM fast path. CompleteWith applies PurposeCompress's shared ceiling/
+	// temperature (this ran with no ceiling before), fits the transcript to
+	// the client's window, and tags the call log with purpose="compress".
 	if s.llm != nil {
-		// Bound the summary — it ran with no ceiling, and a summary longer
-		// than what it summarises has failed. From the one policy table.
-		_, maxTok, temp := modelport.PolicyFor(modelport.PurposeCompress)
-		req := &core.CompletionRequest{
-			Model:       s.llm.ModelInfo().ID,
-			MaxTokens:   &maxTok,
-			Temperature: &temp,
+		ans, err := ctxengineModelManager.CompleteWith(ctx, s.llm, s.llm.ModelInfo().ID, modelport.Ask{
+			Purpose: modelport.PurposeCompress,
 			Messages: []core.Message{
 				{Role: core.RoleSystem, Content: "Summarize the following conversation block concisely, preserving key decisions, file paths, and outcomes. Output a compact briefing."},
 				{Role: core.RoleUser, Content: transcript},
 			},
-		}
-		if resp, err := s.llm.ChatCompletion(ctx, req); err == nil && len(resp.Choices) > 0 {
-			return core.Message{Role: core.RoleSystem, Content: "[Summarized Context]\n" + resp.Choices[0].Message.Content}
+		})
+		if err == nil && ans != nil {
+			return core.Message{Role: core.RoleSystem, Content: "[Summarized Context]\n" + ans.Text}
 		}
 	}
 

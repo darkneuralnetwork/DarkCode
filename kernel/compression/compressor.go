@@ -9,6 +9,7 @@ import (
 
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/infra/observability"
+	"github.com/darkcode/model/llm"
 )
 
 // loraLogf adapts the structured logger to the printf-style logger
@@ -145,10 +146,18 @@ func (c *Compressor) Compress(ctx context.Context, messages []core.Message, goal
 	// Mount the summarizer LoRA for the local compression call via the single
 	// audited path (logs a mount failure instead of silently using the base
 	// model). A no-op for cloud/non-LoRA clients.
+	//
+	// This can't go through modelport.CompleteWith like the direct-client
+	// call sites elsewhere got migrated to — kernel/modelport already
+	// imports kernel/compression (for FitClient/FitToWindow), so the
+	// reverse import would cycle. Tagging the context is the one piece that
+	// doesn't need modelport at all, so this call still shows up correctly
+	// attributed in the call log.
+	callCtx := llm.WithPurpose(ctx, "compress")
 	var resp *core.CompletionResponse
 	var err error
 	call := func() error {
-		resp, err = client.ChatCompletion(ctx, req)
+		resp, err = client.ChatCompletion(callCtx, req)
 		return err
 	}
 	if useSummarizerLoRA {
@@ -285,7 +294,12 @@ func (c *Compressor) CompressBlock(ctx context.Context, messages []core.Message,
 		MaxTokens:   &maxTok,
 	}
 
-	resp, err := c.client.ChatCompletion(ctx, req)
+	// Bug found while auditing this call site: this used to read c.client
+	// directly here instead of the client captured under lock above — an
+	// unsynchronized read racing SetClient's concurrent hot-swap (used by
+	// the kernel's ReloadModels). Compress (this file) already got this
+	// right; this now matches it.
+	resp, err := client.ChatCompletion(llm.WithPurpose(ctx, "compress"), req)
 	if err != nil {
 		return nil, fmt.Errorf("compress block: %w", err)
 	} else {
@@ -566,7 +580,9 @@ func (c *Compressor) Summarize(ctx context.Context, text, focus string) (string,
 		MaxTokens:   &maxTok,
 	}
 
-	resp, err := c.client.ChatCompletion(ctx, req)
+	// Same torn-read bug as CompressBlock: read the locally-captured client
+	// (safe against SetClient's concurrent hot-swap), not c.client directly.
+	resp, err := client.ChatCompletion(llm.WithPurpose(ctx, "compress"), req)
 	if err != nil || len(resp.Choices) == 0 {
 		// Fallback to a heuristic tail so a provider hiccup never breaks chat.
 		return heuristicSummary(text), nil
