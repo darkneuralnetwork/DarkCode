@@ -2,6 +2,7 @@ package cli
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/darkcode/infra/config"
@@ -219,5 +220,29 @@ func TestRenderValueShowsAbsence(t *testing.T) {
 		if got := renderValue(empty); got != "—" {
 			t.Errorf("renderValue(%v) = %q, want the absent marker", empty, got)
 		}
+	}
+}
+
+// TestMaskSecretValue covers printConfig's field.Secret path — the gap
+// CodeQL found: a rendered API key reached fmt.Printf unmasked because no
+// renderer ever consulted Field.Secret. Mirrors server.go's maskKey shape
+// (first 4 + "..." + last 4) so a key reads the same way in both surfaces.
+func TestMaskSecretValue(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"—", "—"}, // unset stays unset — nothing to hide
+		{"", ""},
+		{"short", "***"},                      // <= 8 chars: no partial reveal
+		{"sk-abcdefghijklmno", "sk-a...lmno"}, // long: first 4 + ... + last 4
+	}
+	for _, c := range cases {
+		if got := maskSecretValue(c.in); got != c.want {
+			t.Errorf("maskSecretValue(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// The masked form never contains the middle of the real secret.
+	full := "sk-THISISASECRETVALUE1234"
+	masked := maskSecretValue(full)
+	if strings.Contains(masked, full[4:len(full)-4]) {
+		t.Errorf("maskSecretValue(%q) = %q, leaks the secret's middle", full, masked)
 	}
 }

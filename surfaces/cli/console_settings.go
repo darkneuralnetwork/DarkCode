@@ -45,7 +45,11 @@ func (c *Console) printConfig() {
 				group = f.Group
 				fmt.Printf("  %s\n", paint(cBlue, group))
 			}
-			fmt.Printf("    %-30s %s\n", paint(cGray, f.Name), paint(cWhite, renderValue(values[f.Name])))
+			display := renderValue(values[f.Name])
+			if f.Secret {
+				display = maskSecretValue(display)
+			}
+			fmt.Printf("    %-30s %s\n", paint(cGray, f.Name), paint(cWhite, display))
 		}
 	}
 
@@ -99,6 +103,26 @@ func renderValue(v any) string {
 	default:
 		return fmt.Sprint(x)
 	}
+}
+
+// maskSecretValue redacts a rendered field.Secret value for display — this
+// table used to print an API key in the clear to whatever terminal `/config`
+// ran in (found by CodeQL, not by inspection: no renderer ever consulted
+// Field.Secret, despite its own doc comment predicting exactly this — "the
+// redaction belongs next to the field... which is how one of them ends up
+// forgetting"). "—" (unset) passes through unmasked; there is nothing to
+// hide about a key that was never set. Mirrors surfaces/server/server.go's
+// maskKey shape (first 4 + "..." + last 4) so a key reads the same way in
+// both surfaces — duplicated rather than exported across the package
+// boundary for five lines with no other shared state.
+func maskSecretValue(v string) string {
+	if v == "—" || v == "" {
+		return v
+	}
+	if len(v) <= 8 {
+		return "***"
+	}
+	return v[:4] + "..." + v[len(v)-4:]
 }
 
 func (c *Console) setModel(name string) {
