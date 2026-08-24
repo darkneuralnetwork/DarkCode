@@ -34,11 +34,11 @@ import (
 // That is precisely the case not to trust. A guard whose default is to permit
 // is not a guard.
 func confineWrite(ctx context.Context, resolved string) error {
-	_, err := withinWorkspace(ctx, resolved)
+	_, err := WithinWorkspace(ctx, resolved)
 	return err
 }
 
-// withinWorkspace is the containment test itself, separated from confineWrite
+// WithinWorkspace is the containment test itself, separated from confineWrite
 // so a read path can ask the same question.
 //
 // Reads are deliberately NOT confined — the permission gate decides what the
@@ -58,7 +58,11 @@ func confineWrite(ctx context.Context, resolved string) error {
 // another is the whole shape of a TOCTOU, and it is also the reason a taint
 // tracker cannot see this function as a barrier — the value it follows never
 // passed through the check.
-func withinWorkspace(ctx context.Context, resolved string) (string, error) {
+//
+// Exported for other agent-callable-tool packages with the same "reads a
+// model-chosen path, then persists what it read" shape as noteFileObservation
+// — memory/ingest's tool is the other current caller.
+func WithinWorkspace(ctx context.Context, resolved string) (string, error) {
 	ws := CurrentWorkspace(ctx)
 	if ws == "" {
 		return "", fmt.Errorf("refusing %q: this request carries no active workspace, "+

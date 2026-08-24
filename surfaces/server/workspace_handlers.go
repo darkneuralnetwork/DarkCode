@@ -88,6 +88,41 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// confineToWorkspace resolves rel against cwd and confirms the result stays
+// inside it, symlinks included — a plain filepath.Join + prefix check (the
+// previous version of this) collapses "../" but doesn't touch a symlink: a
+// link planted inside the workspace pointing at, say, /etc would pass a
+// lexical prefix check under its own name and then be opened under its
+// target's, escaping the workspace on the read side (CodeQL: go/path-
+// injection). Mirrors tools/tools/pathguard.go's withinWorkspace, which
+// closes the identical gap on the write side — same fix, same reasoning,
+// duplicated rather than imported because that one reads its workspace from
+// context.Context (per-request), not this package's ActiveWorkspace().
+func confineToWorkspace(cwd, rel string) (string, error) {
+	wsAbs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve workspace root: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(wsAbs); err == nil {
+		wsAbs = real
+	}
+	target, err := filepath.Abs(filepath.Join(cwd, rel))
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve target path: %w", err)
+	}
+	// The target usually exists (this confines reads of files already on
+	// disk), so EvalSymlinks on the full path is expected to succeed; fall
+	// back to the lexically-cleaned path if it doesn't (e.g. mid-write).
+	if real, err := filepath.EvalSymlinks(target); err == nil {
+		target = real
+	}
+	r, err := filepath.Rel(wsAbs, target)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside the active workspace %q", rel, wsAbs)
+	}
+	return filepath.Join(wsAbs, r), nil
+}
+
 // handleFilesRead returns the content of a single workspace file for the chat
 // console preview pane. Path traversal outside the cwd is rejected.
 func (s *Server) handleFilesRead(w http.ResponseWriter, r *http.Request) {
@@ -101,9 +136,8 @@ func (s *Server) handleFilesRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	// Resolve and guard against path traversal.
-	abs := filepath.Join(cwd, rel)
-	if !strings.HasPrefix(abs+string(filepath.Separator), cwd+string(filepath.Separator)) && abs != cwd {
+	abs, err := confineToWorkspace(cwd, rel)
+	if err != nil {
 		writeError(w, http.StatusForbidden, "path outside workspace")
 		return
 	}

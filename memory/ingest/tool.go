@@ -3,6 +3,8 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/memory/memory"
@@ -34,6 +36,24 @@ func NewIngestTool(mem *memory.System, kg core.KnowledgeGraphStore, rec *recall.
 			source, _ := args["source"].(string)
 			if source == "" {
 				return &tools.ToolResult{Name: "ingest", Success: false, Error: "source is required"}
+			}
+			// Confine the file/directory case the same way registry.go's
+			// noteFileObservation does for read_file — a model-chosen path
+			// reaching Ingest is exactly the "approved one-off look becomes a
+			// durable belief" shape CodeQL flagged (go/path-injection): unlike
+			// read_file, this tool had no confinement at all, and what it
+			// reads is unconditionally persisted into semantic memory, not
+			// just shown once. URLs (already SSRF-guarded inside IngestURL)
+			// and raw pasted text carry no path to confine.
+			isURL := strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")
+			if !isURL {
+				if _, err := os.Stat(source); err == nil {
+					safe, werr := tools.WithinWorkspace(ctx, source)
+					if werr != nil {
+						return &tools.ToolResult{Name: "ingest", Success: false, Error: werr.Error()}
+					}
+					source = safe
+				}
 			}
 			st, err := ing.Ingest(ctx, source)
 			if err != nil {

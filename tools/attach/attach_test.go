@@ -210,3 +210,23 @@ func TestResolvePathStaysRelativeToTheWorkspace(t *testing.T) {
 		t.Errorf("empty path resolved to %q, want the workspace", got)
 	}
 }
+
+// TestReadURLAttachmentBlocksPrivateAddresses covers the SSRF guard on a
+// @url: attachment — a URL a user (or, once attached, an agent reasoning
+// over the conversation) supplies, the exact "URL a model or web page
+// chose" category safeurl.SafeClient's own doc comment names. This used to
+// pair IsSafeFetchURL's early check with safeurl.EgressClient, which has no
+// SSRF restriction outside air-gap mode — closing only the check-time gap,
+// not the dial-time one a DNS-rebinding attack needs. Now uses SafeClient,
+// matching what safeurl.go documents as correct for this call shape.
+func TestReadURLAttachmentBlocksPrivateAddresses(t *testing.T) {
+	for _, url := range []string{
+		"http://localhost/",
+		"http://metadata.google.internal/", // cloud metadata endpoint, by name
+		"http://metadata/",                 // short form of the same
+	} {
+		if _, _, err := readURLAttachment(url); err == nil {
+			t.Errorf("readURLAttachment(%q) succeeded, want it blocked by the SSRF guard", url)
+		}
+	}
+}

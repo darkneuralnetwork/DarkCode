@@ -246,7 +246,15 @@ func readDirAttachment(p, workspace string) (string, error) {
 	return out, nil
 }
 
-// readURLAttachment fetches a URL and returns its (truncated) text body.
+// readURLAttachment fetches a URL and returns its (truncated) text body. The
+// URL comes from a @url: attachment reference — user- or model-supplied, the
+// exact category safeurl.SafeClient's doc comment names — not an admin-
+// configured provider endpoint, so it gets the dial-time-revalidated client,
+// not EgressClient (found by CodeQL: this used to pair IsSafeFetchURL's
+// early check with EgressClient's un-guarded dialer, which closes none of
+// the DNS-rebinding TOCTOU gap IsSafeFetchURL alone leaves open — a hostname
+// safe at check time can still resolve to 127.0.0.1/169.254.169.254 by the
+// time the client actually dials it).
 func readURLAttachment(url string) (string, int, error) {
 	if url == "" {
 		return "", 0, fmt.Errorf("empty url")
@@ -254,7 +262,7 @@ func readURLAttachment(url string) (string, int, error) {
 	if !safeurl.IsSafeFetchURL(url, false) {
 		return "", 0, fmt.Errorf("blocked: url targets a loopback, link-local, or private address (SSRF guard)")
 	}
-	client := safeurl.EgressClient(20 * time.Second)
+	client := safeurl.SafeClient(20*time.Second, false)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", 0, err

@@ -522,7 +522,7 @@ func denySuffix(req permission.ApprovalRequest) string {
 // exposure as the before-snapshot in captureFileBefore: it runs on a
 // model-supplied path and its result is displayed and stored.
 func readIfWithinWorkspace(ctx context.Context, path string) string {
-	safe, err := withinWorkspace(ctx, path)
+	safe, err := WithinWorkspace(ctx, path)
 	if err != nil {
 		return ""
 	}
@@ -546,7 +546,7 @@ func captureFileBefore(ctx context.Context, tool string, args map[string]interfa
 	// still captured into the change record and shown in the Changes tab.
 	// Confining the snapshot to the same subtree the write is confined to
 	// keeps the two policies identical.
-	safe, cerr := withinWorkspace(ctx, path)
+	safe, cerr := WithinWorkspace(ctx, path)
 	if cerr != nil {
 		return path, "", false
 	}
@@ -892,7 +892,7 @@ func (r *Registry) noteFileObservation(ctx context.Context, tool string, args ma
 	// persisted into the knowledge graph, so an approved one-off read of a file
 	// outside the workspace would become a durable belief about it. Confine the
 	// observation, not the tool. Fails closed — no workspace, no observation.
-	safe, err := withinWorkspace(ctx, path)
+	safe, err := WithinWorkspace(ctx, path)
 	if err != nil {
 		return
 	}
