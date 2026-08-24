@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    # Every branch, not a named few. The old list was [main, "hardening/**"],
+    # so a 62-commit branch was pushed and nothing ran — the gate was only
+    # reached at pull-request time, which is the last moment it is useful.
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# The default token is broad. Nothing in this workflow writes to the
+# repository, so it gets read and no more; a job that needs a scope asks for it.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: make fmt-check
+
+      - name: go vet
+        run: make vet
+
+      # Layering boundaries. Every one of these rules was held by convention
+      # until now — httpx's own comment claimed a CI grep enforced it and none
+      # existed, while 23 LLM call sites and 32 memory writes accumulated
+      # outside their owning layers. .arch-baseline is a set of ceilings: a
+      # count may fall, never rise. See docs/ARCHITECTURE_ANALYSIS.md.
+      - name: Architecture boundaries
+        run: make arch-check
+
+      - name: Build
+        run: make build
+
+      - name: Test (race)
+        run: make test-race
+
+      # The benchmark suite needs a live model, so CI cannot score it. What CI
+      # can enforce is that the harness and every task fixture stay valid —
+      # each task loads and is still solvable by its reference solution. A
+      # broken fixture would otherwise sit undetected until a benchmark run
+      # scored zero for the wrong reason.
+      - name: Benchmark fixtures
+        run: go test ./bench/ -run 'Shipped' -v
+
+      - name: SBOM
+        run: make sbom && cat SBOM.txt
+
+  leak-guard:
+    # The guarantee behind the local git hooks. A commit made with --no-verify,
+    # or on a machine with no hook installed, still cannot merge: this re-runs
+    # the SAME scripts/leak-check.sh rules the hooks call. fetch-depth 0 so the
+    # range scan and the origin/main base are both available.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Prove every guard rule fires
+        run: scripts/leak-check.sh --self-test
+      - name: Scan branch, files, paths and secrets
+        run: scripts/leak-check.sh --ci origin/${{ github.base_ref || 'main' }}
+
+  build-matrix:
+    # Prove the single binary cross-compiles for the platforms we ship.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: "386" }
+          - { goos: windows, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null .
