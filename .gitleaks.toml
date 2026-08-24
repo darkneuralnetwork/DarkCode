@@ -27,7 +27,14 @@
 #
 # Neither file is exempt from review. If a real key is ever pasted into one of
 # them, no scanner will catch it — that is the cost of the exemption, and it is
-# why the list is two entries and not a directory.
+# why the list is two entries (times two paths — see below) and not a
+# directory.
+#
+# "gitleaks git ." scans every historical commit against THIS file as it
+# reads at HEAD — not against whatever .gitleaks.toml said at each commit —
+# so the fixture's pre-restructure path (security/secrets_test.go, where it
+# lived from introduction until the kernel/infra/surfaces/model move) still
+# needs its own entry, or every commit before that move re-fails the scan.
 title = "darkcode"
 
 [extend]
@@ -37,5 +44,6 @@ useDefault = true
 description = "Fixtures of the project's own secret-detection code"
 paths = [
   '''^infra/security/secrets_test\.go$''',
+  '''^security/secrets_test\.go$''',
   '''^scripts/leak-check\.sh$''',
 ]
