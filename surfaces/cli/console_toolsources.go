@@ -11,9 +11,54 @@ import (
 	"github.com/darkcode/tools/tools"
 )
 
-// splitCmd splits a command line honoring simple quoting for args with spaces.
+// splitCmd splits a command line into words, honoring single- and
+// double-quoted spans (so a quoted argument can contain spaces) and a
+// backslash escape for the following character. Its doc comment always
+// claimed to honor quoting, but the body was a bare strings.Fields — a
+// spaced project name in `/project new "my project" ./path` split into two
+// arguments instead of one.
 func splitCmd(input string) []string {
-	return strings.Fields(input)
+	runes := []rune(input)
+	var out []string
+	var cur strings.Builder
+	inWord := false
+	var quote rune // 0 (unquoted), '\'', or '"'
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				continue
+			}
+			if c == '\\' && quote == '"' && i+1 < len(runes) {
+				i++
+				cur.WriteRune(runes[i])
+				continue
+			}
+			cur.WriteRune(c)
+		case c == '\'' || c == '"':
+			quote = c
+			inWord = true
+		case c == '\\' && i+1 < len(runes):
+			i++
+			cur.WriteRune(runes[i])
+			inWord = true
+		case c == ' ' || c == '\t':
+			if inWord {
+				out = append(out, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // ---- slash command implementations ----

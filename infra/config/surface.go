@@ -136,6 +136,8 @@ var descriptors = []Field{
 		Help: "Consensus only. When two answers disagree and the graph cannot settle it, they critique each other once."},
 	{Name: "reviewer", Label: "Review work after the checks pass", Group: "Models", Tier: TierAdvanced, Kind: "bool",
 		Help: "One extra call once a run is proven done, saying how it could be better. It can never fail a run."},
+	{Name: "enable_self_critique", Label: "Self-critique on unproven work", Group: "Models", Tier: TierAdvanced, Kind: "bool",
+		Help: "One extra, cheap call checking work that has no test to prove it against a rubric derived from the goal. Unlike Review, a failing critique sends the loop back to fix it. Off until measured to help — see make eval-agent."},
 	{Name: "context_length", Label: "Context length", Group: "Models", Tier: TierDerived, Kind: "int",
 		Help: "Follows from the model."},
 	{Name: "compress_context", Label: "Compress context", Group: "Execution", Tier: TierDerived, Kind: "bool",

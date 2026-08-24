@@ -1,12 +1,16 @@
 package ctxengine
 
 // summarizer_llm_test.go — IncrementalSummarizer.Summarize's LLM branch had
-// zero test coverage before (and is dead code in the running system today:
-// the only production constructor, ctxengine.NewEngine, is always called
-// with a nil client — see engine.go). Migrated onto modelport.CompleteWith
-// for consistency with the rest of the codebase; this test exercises the
-// branch directly in isolation, which is the most this code path can be
-// proven right now given nothing actually reaches it in production.
+// zero test coverage before, and used to be dead code in the running system:
+// ctxengine.NewEngine is always constructed with a nil client (see engine.go
+// — kept nil deliberately at construction, to avoid two independently-set
+// client pointers), and nothing then wired a real one into the summarizer
+// afterwards. Engine.SetClient now also calls IncrementalSummarizer.SetClient
+// (compress.go), so the production engine (constructed via NewEngine(nil),
+// then always immediately SetClient'd — see cmd/darkcode/app_wireup.go and
+// kernel/loop/loop.go) does reach this branch, through
+// Assemble → AdaptiveCompressor.Compress → this Summarize. Migrated onto
+// modelport.CompleteWith for consistency with the rest of the codebase.
 
 import (
 	"context"

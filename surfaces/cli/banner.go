@@ -40,21 +40,34 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 
 	subtitle := bold("  Enterprise AI Developer Platform") + paint(cGray, "  ·  written in Go  ·  ") + paint(cAmber, "v1.0.0")
 	fmt.Println(subtitle)
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 
 	// Capabilities Matrix
+	//
+	// "Auto-Healing Loop" used to name kernel/selfheal — real, but on-demand
+	// (a tool call the model chooses to make), not an autonomous background
+	// process the name implies. "Verifier-Gated Repair" says what actually
+	// runs: repair.go's acceptance-check retry loop (kernel/orchestrator),
+	// which now also auto-reverts to a checkpoint when repair still fails —
+	// still evidence-gated on every step, never a standing daemon.
+	//
+	// The memory-layer count used to be a fourth hardcoded number alongside
+	// Summary()'s 7 lines and the L4 layer's 4-item description below —
+	// derived from memory.TierNames() so there is exactly one place that
+	// number can be edited, not three.
+	memLayers := fmt.Sprintf("%d-Layer Memory", len(memory.TierNames()))
 	fmt.Println(paint(cGreen+clrBold, "  CAPABILITIES MATRIX"))
 	fmt.Printf("   %s %s   %s %s   %s %s\n",
 		paint(cBlue, "●"), paint(cWhite, "Multi-Model Consensus"),
-		paint(cBlue, "●"), paint(cWhite, "Auto-Healing Loop"),
+		paint(cBlue, "●"), paint(cWhite, "Verifier-Gated Repair"),
 		paint(cBlue, "●"), paint(cWhite, "Security Sandbox"),
 	)
 	fmt.Printf("   %s %s   %s %s   %s %s\n",
 		paint(cBlue, "●"), paint(cWhite, "gRPC Plugin Engine   "),
 		paint(cBlue, "●"), paint(cWhite, "Observability UI "),
-		paint(cBlue, "●"), paint(cWhite, "6-Layer Memory  "),
+		paint(cBlue, "●"), paint(cWhite, padRight(memLayers, 16)),
 	)
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 
 	// Architecture layers
 	layers := []struct {
@@ -62,10 +75,10 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 		name string
 		desc string
 	}{
-		{"L1", "Orchestration Kernel", "planning · delegating · self-healing loop"},
+		{"L1", "Orchestration Kernel", "planning · delegating · verifier-gated repair"},
 		{"L2", "Verification Pipeline", "syntax · linting · compiler · tests"},
 		{"L3", "Model Router", "single · escalation · consensus"},
-		{"L4", "Memory System", "STM · episodic · semantic · procedural"},
+		{"L4", "Memory System", memoryTierDesc()},
 		{"L5", "Security Sandbox", "firejail · namespace isolation"},
 		{"L6", "Tool Runtime", "terminal · file · plugins · search · web"},
 		{"L7", "Observability", "live telemetry · pprof · traces"},
@@ -77,7 +90,7 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 			paint(cWhite, padRight(l.name, 26)),
 			paint(cGray, l.desc))
 	}
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 
 	// Runtime configuration
 	fmt.Println(paint(cAmber+clrBold, "  RUNTIME"))
@@ -136,7 +149,7 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 		paint(cPurple, memStats),
 		paint(cGray, "· Providers "+fmtNum(len(config.Providers()))))
 
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 
 	// Metrics hint
 	snap := metrics.Default.Snapshot()
@@ -147,7 +160,7 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 			paint(cGreen, fmtCost(snap.TotalCost)),
 			paint(cBlue, fmtNum(snap.TotalRequests)),
 			paint(cGray, "(since "+fmtTimeShort(snap.Since)+")"))
-		fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+		fmt.Println("  " + divider(w-4))
 	}
 
 	fmt.Println()
@@ -158,6 +171,20 @@ func printBanner(cfg *config.Config, mem *memory.System, registry *tools.Registr
 		paint(cGray, "/help"),
 		paint(cGray, "for commands  ·  /monitor for live dashboard  ·  /quit to exit"))
 	fmt.Println()
+}
+
+// memoryTierDesc renders memory.TierNames() the same way the other
+// architecture-layer descriptions read: lowercase, joined with " · ". Built
+// from the canonical list rather than hardcoded, so L4's description can't
+// drift from the capability line's count or from Summary()'s field list —
+// see TierNames' doc comment for the three-different-numbers history.
+func memoryTierDesc() string {
+	names := memory.TierNames()
+	lower := make([]string, len(names))
+	for i, n := range names {
+		lower[i] = strings.ToLower(n)
+	}
+	return strings.Join(lower, " · ")
 }
 
 // safetyLabel converts a SafetyLevel to a friendly label.

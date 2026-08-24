@@ -18,6 +18,7 @@ function closeDirPicker() {
   if (modal) modal.classList.remove("active");
   dirPickerTargetInput = null;
 }
+window.ModalShell?.register("dir-picker-modal", closeDirPicker);
 
 async function loadDirPickerContents(pathStr) {
   const list = $("#dir-picker-list");

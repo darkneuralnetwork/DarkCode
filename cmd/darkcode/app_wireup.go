@@ -360,7 +360,18 @@ func (a *AppRunner) initRouterAndModels() {
 			}
 		}
 		c := llm.NewClient(baseURL, apiKey, modelID)
-		c.SetProvider(prov)
+		// prov == "embedded" reaching here means the local load above either
+		// wasn't attempted or failed and we fell back to a real network
+		// client — SetProvider("embedded") would apply the embedded
+		// provider's AuthNone scheme to what is now an ordinary HTTP call,
+		// silently dropping the Authorization header for whatever baseURL is
+		// actually configured (reproduced live: a Gemini call built this way
+		// came back 400 "Missing or invalid Authorization header"). Leaving
+		// the provider unset keeps NewClient's default AuthBearer scheme,
+		// which is the right behavior for an unknown/custom endpoint.
+		if prov != "embedded" {
+			c.SetProvider(prov)
+		}
 		// Pool the configured credentials (the single api_key counts as one) so
 		// calls rotate and a throttled key is parked instead of retried.
 		c.Keys = llm.NewKeyPool(append([]string{apiKey}, mc.APIKeys...)...)
@@ -424,14 +435,23 @@ func (a *AppRunner) initRouterAndModels() {
 		}
 	} else if a.Router.HasModel(core.ModelTierFast) {
 		fc, fm := getFastModel(a.Router, a.Cfg)
-		fc.SetProvider(a.Cfg.Provider)
+		// Same guard as createClient above: getFastModel builds a plain
+		// llm.NewClient straight off cfg.BaseURL/cfg.APIKey, bypassing the
+		// embedded-provider local-load path entirely, so it is always a real
+		// network client. SetProvider("embedded") would still apply that
+		// provider's AuthNone scheme to it and drop the Authorization header.
+		if a.Cfg.Provider != "embedded" {
+			fc.SetProvider(a.Cfg.Provider)
+		}
 		fastClient, fastModel = fc, fm
 	}
-	// NewEngine(nil) deliberately leaves the block-summarizer's LLM branch on
-	// its extractive fallback (it's dead in production today — see
-	// memory/ctxengine/summarizer_llm_test.go) rather than wiring the same
-	// client into two places that would then drift apart on the next
-	// SetClient hot-swap below.
+	// NewEngine(nil) then SetClient below, not NewEngine(client) directly:
+	// SetClient is the one place that wires both the engine's own
+	// client/model fields AND the block-summarizer's (IncrementalSummarizer,
+	// shared with Assemble's AdaptiveCompressor) — passing a client to
+	// NewEngine would only set the latter, leaving the former to whatever
+	// SetClient set last on a later hot-swap. Going through SetClient here
+	// keeps them from ever being set independently in the first place.
 	a.Compressor = ctxengine.NewEngine(nil)
 	a.Compressor.SetClient(llm.WrapCloud(fastClient, a.Cfg.Provider, fastModel), fastModel)
 	a.Compressor.SetRouter(a.Router)
@@ -733,6 +753,10 @@ func (a *AppRunner) initKernelAndServer(memDir string) {
 	// cannot run at all. SetReviewer had no caller outside tests, so 173 lines
 	// wired into the execute path were unreachable in a shipped binary.
 	a.Kernel.SetReviewer(a.Cfg.Reviewer)
+
+	// Same wiring, same reason — see Config.EnableSelfCritique for why this
+	// stays false by default.
+	a.Kernel.SetSelfCritique(a.Cfg.EnableSelfCritique)
 
 	// Placement is one decision. Without this the kernel writes the stores
 	// directly, which is correct but is what made it thirty-two decisions.

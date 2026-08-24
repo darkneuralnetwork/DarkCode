@@ -33,6 +33,7 @@ import (
 	"github.com/darkcode/infra/metrics"
 	"github.com/darkcode/infra/permission"
 	"github.com/darkcode/kernel/orchestrator"
+	"github.com/darkcode/kernel/planwork"
 	"github.com/darkcode/kernel/router"
 	"github.com/darkcode/kernel/verb"
 	"github.com/darkcode/memory/checkpoint"
@@ -103,6 +104,11 @@ type Console struct {
 	// live rendering state
 	evActive bool
 	mu       sync.Mutex // serializes terminal writes (spinner vs prompts)
+	// region is the redrawable spinner + live-streaming-preview block. A
+	// Console field (not local to runQuery) so requestApproval — called from
+	// a different goroutine mid-run, any time a tool needs permission — can
+	// clear exactly what's on screen instead of assuming a fixed line count.
+	region liveRegion
 
 	rl      *readline.Instance
 	resumed bool // true when entering CLI after a GUI session (skip full banner)
@@ -207,7 +213,7 @@ func (c *Console) Run() error {
 		}
 		fmt.Println(paint(cGreen+clrBold, "► Resumed CLI session — conversation context preserved") +
 			paint(cGray, "  ·  mode: "+mode+c.stickyNote()+"  ·  /help for commands  ·  /gui to return"))
-		fmt.Println(paint(cGray, "  "+strings.Repeat("─", 60)))
+		fmt.Println("  " + divider(60))
 	} else {
 		printBanner(c.cfg, c.mem, c.registry, c.kernel)
 	}
@@ -481,20 +487,57 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	}
 
 	// Record orchestration events into the activity log (for /log) without
-	// spamming stdout. Only the spinner + any approval prompts appear inline.
+	// spamming stdout. Only the spinner + the live streaming preview below it
+	// + any approval prompts appear inline.
 	var lastEvent string
+	var streamBuf string    // the CURRENT generation's accumulated text
+	var streamSource string // its task_id — see the reset rule below
+	var genPending bool     // set by a fresh ReAct "thinking" marker
+	// c.region (not a local var) — see its field comment on why requestApproval needs it too.
+	c.region.lastLines = 0
 	c.evActive = true
 	handler := func(e core.UIEvent) {
 		if !c.evActive {
 			return
 		}
-		// Streaming token chunks are the live LLM output, not execution
-		// detail. They are excluded from the inline ├─ feed AND the /log
-		// activity trace so the execution detail stays a readable
-		// orchestration log (the final answer is rendered separately from
-		// the kernel result).
+		// Streaming token chunks are the live LLM output. They render live in
+		// region (below the spinner line, see the ticker goroutine) rather
+		// than being folded into the permanent ├─ feed or the /log activity
+		// trace (recordActivity is deliberately never called for them) —
+		// this stays a readable orchestration log, not raw model output.
+		//
+		// Three different kernel call paths emit these — kernel_helpers.go's
+		// no-tools chat reply, loop.go's ReAct loop (once per iteration, not
+		// once per run), and each subagent.go DAG node — each tagged with
+		// its own TaskID. streamBuf tracks only the CURRENTLY active source:
+		// a different task_id (a subagent taking over) or a fresh ReAct
+		// iteration (the "thinking" case below — task_id stays "agentic-loop"
+		// across iterations, so it needs its own signal) resets the buffer,
+		// the same "last write wins, a stray interleave costs nothing" rule
+		// this preview always had — nothing here is authoritative; the
+		// printed final answer always comes from Execute's returned result.
 		if e.Type == core.EventTaskUpdate && e.Status == "streaming" {
+			if chunk, ok := e.Content.(string); ok {
+				c.mu.Lock()
+				if e.TaskID != streamSource || genPending {
+					streamSource = e.TaskID
+					genPending = false
+					streamBuf = ""
+				}
+				streamBuf += chunk
+				c.mu.Unlock()
+			}
 			return
+		}
+		if e.Type == core.EventTaskUpdate && e.Status == "thinking" && e.TaskID == "agentic-loop" {
+			// Marks a fresh ReAct iteration about to call the model — the
+			// only signal that the NEXT streaming chunk starts a new
+			// generation rather than continuing the last one. Consumed
+			// above; falls through so this event still gets its normal
+			// ├─ feed / activity-log treatment below like any other.
+			c.mu.Lock()
+			genPending = true
+			c.mu.Unlock()
 		}
 		c.recordActivity(e)
 
@@ -502,15 +545,14 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 
 		c.mu.Lock()
 		if c.streamEv {
-			fmt.Print("\r" + ansiClearLine + "\r")
-			icon := eventIcon(string(e.Type))
+			c.region.clear() // a real event supersedes any live streaming preview
+			icon := eventIconFor(e)
 			fmt.Printf("  %s %s  %s\n", paint(cGray, "├─"), paint(cOrange, icon), paint(cGray, msg))
 		}
 
-		if len(msg) > 60 {
-			msg = msg[:57] + "..."
-		}
+		msg = strutil.Truncate(msg, 60)
 		lastEvent = msg
+		streamBuf = ""
 		c.mu.Unlock()
 	}
 	if c.emitter != nil {
@@ -549,17 +591,34 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 		Content: query, Timestamp: time.Now(),
 	})
 
+	// Same pre-turn gate the web surface uses (planwork.NeedsAmend/AmendSync):
+	// amend the plan+workflow synchronously for a new instruction before
+	// Execute runs, instead of relying solely on the post-turn async
+	// refresh, which would otherwise leave a CLI turn running one turn
+	// behind. "plan" here is always plan.md (the implementation plan) — the
+	// console used to pass context.md (conversational memory) instead,
+	// disagreeing with what the kernel documents this argument as.
+	amendingPlan := false
 	if c.activeProject != "" && c.projects != nil {
+		plan, _ := c.projects.GetPlan(c.activeProject)
 		workflow, _ := c.projects.GetWorkflow(c.activeProject)
-		plan, _ := c.projects.GetContext(c.activeProject)
-		if strings.TrimSpace(plan) == "" {
-			plan, _ = c.projects.GetPlan(c.activeProject)
+		amendingPlan = planwork.NeedsAmend(origQuery, c.kernel.RecentSTM(), c.cfg.SkipAuxForReadOnly)
+		if amendingPlan {
+			plan, workflow = planwork.AmendSync(reqCtx, c.projects, c.kernel, c.emitter, c.activeProject, origQuery, plan, workflow)
 		}
-		c.kernel.SetProjectContext(plan, workflow)
+		if amendingPlan {
+			c.kernel.SetProjectContext(plan, workflow)
+		} else {
+			c.kernel.SetProjectContext("", workflow)
+		}
 		defer c.kernel.ClearProjectContext()
 	}
 
-	// Minimal progress indicator (cleared on completion).
+	// Minimal progress indicator (cleared on completion) — a status line plus,
+	// while a model is composing, up to streamPreviewLines of its growing
+	// answer beneath it. Both are redrawn in place via region; see
+	// liveRegion's doc comment for why that's safe here specifically (the
+	// permanent ├─ feed printed elsewhere never goes through it).
 	done := make(chan struct{})
 	go func() {
 		sp := newSpinner()
@@ -573,7 +632,15 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 				if msg == "" {
 					msg = "working…"
 				}
-				fmt.Printf("\r%s %s", paint(cOrange, sp.tick()), paint(cGray, padRight(msg, 60)))
+				statusLine := fmt.Sprintf("%s %s", paint(cOrange, sp.tick()), paint(cGray, padRight(msg, 60)))
+				lines := []string{statusLine}
+				if strings.TrimSpace(streamBuf) != "" {
+					w := termWidth() - 4
+					for _, l := range wrapText(streamBuf, w, streamPreviewLines) {
+						lines = append(lines, "  "+paint(cGrayLt, l))
+					}
+				}
+				c.region.redraw(lines)
 				c.mu.Unlock()
 			}
 		}
@@ -590,18 +657,21 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 	// so path confinement, which permits everything when the workspace is
 	// empty, was inert for every interactive session.
 	result, err := c.port.Execute(reqCtx, uiport.Request{
-		Query:     resolvedQuery,
-		Surface:   uiport.SurfaceCLI,
-		Workspace: c.workspace,
-		Project:   c.activeProject,
-		Mode:      st.Mode,
-		Brain:     c.brain,
-		Loop:      st.Loop,
-		Tools:     st.Tools,
-		Plan:      st.Plan,
+		Query:              resolvedQuery,
+		Surface:            uiport.SurfaceCLI,
+		Workspace:          c.workspace,
+		Project:            c.activeProject,
+		Mode:               st.Mode,
+		Brain:              c.brain,
+		Loop:               st.Loop,
+		Tools:              st.Tools,
+		Plan:               st.Plan,
+		PlanAlreadyAmended: amendingPlan,
 	})
 	close(done)
-	fmt.Print("\r" + ansiClearLine + "\r") // clear spinner
+	c.mu.Lock()
+	c.region.clear() // clear spinner + any live streaming preview
+	c.mu.Unlock()
 
 	if err != nil {
 		if reqCtx.Err() == context.Canceled {
@@ -634,9 +704,11 @@ func (c *Console) runQuery(ctx context.Context, query string, atts []attach.Atta
 		}
 	}
 
-	// Final answer
+	// Final answer. Always the return value of Execute — never the
+	// accumulated streaming preview, which is discarded here along with the
+	// spinner (see the streaming-tail comment above).
 	fmt.Println(paint(cAmber+clrBold, "▣ DARKCODE"))
-	fmt.Println(paint(cWhite, result))
+	fmt.Println(renderAnswerMarkdown(result))
 	fmt.Println()
 	c.printUsageDelta(beforeReqs)
 
@@ -686,8 +758,11 @@ func (c *Console) requestApproval(req permission.ApprovalRequest) permission.Ver
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Pause/clear the spinner so the prompt is clean.
-	fmt.Print("\r" + ansiClearLine + "\r")
+	// Pause/clear the spinner (and any live streaming preview under it) so
+	// the prompt is clean. c.region, not a fixed one-line clear — the
+	// streaming preview can be several lines tall when a tool call needing
+	// approval interrupts mid-generation.
+	c.region.clear()
 
 	riskColor := cYellow
 	switch req.Risk {
@@ -699,25 +774,26 @@ func (c *Console) requestApproval(req permission.ApprovalRequest) permission.Ver
 		riskColor = cGreen
 	}
 
-	fmt.Println(paint(cAmber+clrBold, "╭─ PERMISSION REQUIRED ────────────────────────────"))
+	const approvalBoxWidth = 52
+	fmt.Println(paint(cAmber+clrBold, roundedTop("PERMISSION REQUIRED", approvalBoxWidth)))
 	fmt.Printf("%s %s  %s  %s\n",
-		paint(cGray, "│"),
+		paint(cGray, roundedLine),
 		paint(cWhite+clrBold, padRight(req.Tool, 14)),
 		paint(riskColor, "["+string(req.Risk)+" risk]"),
 		paint(cGray, req.Summary))
 	if req.Preview != "" {
 		for _, line := range strings.Split(req.Preview, "\n") {
-			fmt.Printf("%s %s\n", paint(cGray, "│"), paint(cGrayLt, strutil.Truncate(line, 76)))
+			fmt.Printf("%s %s\n", paint(cGray, roundedLine), paint(cGrayLt, strutil.Truncate(line, 76)))
 		}
 	}
-	fmt.Printf("%s %s\n", paint(cGray, "│"), paint(cGray, "allow this action?"))
+	fmt.Printf("%s %s\n", paint(cGray, roundedLine), paint(cGray, "allow this action?"))
 	fmt.Printf("%s   %s allow once   %s allow session   %s deny   %s\n",
-		paint(cGray, "│"),
+		paint(cGray, roundedLine),
 		paint(cGreen, "[1]"),
 		paint(cBlue, "[2]"),
 		paint(cRed, "[3]"),
 		paint(cGray, "(default: 1)"))
-	fmt.Printf("%s %s\n", paint(cGray, "│"), paint(cGrayLt, "tip: append feedback, e.g. \"3 use /tmp instead\""))
+	fmt.Printf("%s %s\n", paint(cGray, roundedLine), paint(cGrayLt, "tip: append feedback, e.g. \"3 use /tmp instead\""))
 
 	if c.rl != nil {
 		c.rl.SetPrompt("")
@@ -728,15 +804,16 @@ func (c *Console) requestApproval(req permission.ApprovalRequest) permission.Ver
 	// AllowOnce — the user must actively decide (1/2/3, or blank for the
 	// visibly-advertised default of 1). Only a real interrupt (Ctrl+C/EOF)
 	// or an explicit deny answers on the user's behalf.
+	closeBox := func() { fmt.Println(paint(cGray, roundedBottom(approvalBoxWidth))) }
 	for {
-		fmt.Print(paint(cGray, "│ ") + paint(cOrange, "> "))
+		fmt.Print(paint(cGray, roundedLine+" ") + paint(cOrange, "> "))
 
 		var input string
 		if c.rl != nil {
 			var err error
 			input, err = c.rl.Readline()
 			if err != nil {
-				fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+				closeBox()
 				return permission.Verdict{Decision: permission.DecisionDeny, Feedback: "interrupted"}
 			}
 		}
@@ -748,16 +825,16 @@ func (c *Console) requestApproval(req permission.ApprovalRequest) permission.Ver
 
 		switch first {
 		case "1", "y", "yes", "o", "once", "":
-			fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+			closeBox()
 			return permission.Verdict{Decision: permission.DecisionAllowOnce, Feedback: feedback}
 		case "2", "s", "session", "a":
-			fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+			closeBox()
 			return permission.Verdict{Decision: permission.DecisionAllowSession, Feedback: feedback}
 		case "3", "n", "no", "deny", "d":
-			fmt.Println(paint(cGray, "╰───────────────────────────────────────────────────"))
+			closeBox()
 			return permission.Verdict{Decision: permission.DecisionDeny, Feedback: feedback}
 		default:
-			fmt.Printf("%s %s\n", paint(cGray, "│"), paint(cRed, "invalid choice — enter 1, 2, or 3 (blank = 1)"))
+			fmt.Printf("%s %s\n", paint(cGray, roundedLine), paint(cRed, "invalid choice — enter 1, 2, or 3 (blank = 1)"))
 		}
 	}
 }
@@ -793,7 +870,7 @@ func (c *Console) printActivityLog() {
 	}
 	fmt.Println()
 	fmt.Printf("%s %s\n", paint(cAmber+clrBold, "ACTIVITY LOG"), paint(cGray, "("+fmtNum(len(entries))+" events)"))
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 	for _, e := range entries {
 		label := e.kind
 		if e.tool != "" {
@@ -805,7 +882,7 @@ func (c *Console) printActivityLog() {
 			paint(cBlue, padRight(label, 16)),
 			paint(cGray, strutil.Truncate(e.msg, w-34)))
 	}
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 
 	// Detailed changes: full before → after diffs and command outputs.
 	if c.recorder != nil {

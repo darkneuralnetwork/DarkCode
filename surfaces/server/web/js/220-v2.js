@@ -15,6 +15,21 @@
   // into a collapsible toggle under the assistant message on completion —
   // replaces the removed global "View/Hide Execution Details" toggle.
   let currentExecTrace = [];
+  // Live streamed answer text (Stream fix). Every model call the run makes
+  // — each ReAct iteration, the general no-tools path, each DAG subagent —
+  // emits its own token deltas as task_update/status:"streaming" events
+  // tagged with a source id (evt.task_id). streamBuf accumulates the
+  // CURRENTLY active source only; it resets whenever a different source
+  // starts streaming (a subagent taking over, or a fresh ReAct iteration —
+  // see the "thinking" check in handleTaskUpdate below), the same "last
+  // write wins, a stray interleave costs nothing" rule the CLI's own
+  // streaming preview already uses (surfaces/cli/console.go) — nothing here
+  // is authoritative; finalizeAssistantMessage always overwrites it with the
+  // real returned answer once the run completes.
+  let streamBuf = "";
+  let streamSourceID = null;
+  let streamGenPending = false;
+  let streamFlushScheduled = false;
   // Coalescing state: consecutive identical trace rows (e.g. the same tool
   // called again and again) collapse into one row with a "×N" counter instead
   // of stacking dozens of duplicate lines.
@@ -48,6 +63,9 @@
     currentExecTrace = [];
     lastExecKey = null;
     lastExecCount = 1;
+    streamBuf = "";
+    streamSourceID = null;
+    streamGenPending = false;
 
     execActive = true;
     execStartTime = Date.now();
@@ -80,6 +98,11 @@
   function setExecStage(stage, state) {
     const el = document.querySelector(`.exec-stage[data-stage="${stage}"]`);
     if (el) { el.className = `exec-stage ${state}`; }
+    // Mirror into the shared snapshot so a future view (e.g. Blueprint) can
+    // read "what stage is the current turn in" without re-deriving it from
+    // raw events itself.
+    EventBus.currentActivity.stage = stage;
+    EventBus.currentActivity.stageState = state;
   }
 
   function startExecTimer() {
@@ -203,18 +226,65 @@
 
 
 
-  // ── Enhanced SSE Event Router ──────────────────────────────────────
-  // Extend the existing SSE handler to process V2 event types.
-  // We hook into the global event system by wrapping the existing addEvent.
-  const _origAddEvent = window.addEvent;
-  if (typeof _origAddEvent === "function") {
-    window.addEvent = function(evt) {
-      // Call original handler first
-      _origAddEvent(evt);
-      // V2 event routing
-      handleV2Event(evt);
-    };
+  // ── Structured pipeline-stage inference ────────────────────────────
+  // Every EmitTaskUpdate(source, status, detail) call carries two enums the
+  // backend itself controls (source → evt.task_id, status → evt.status) and
+  // one free-text field a tool/LLM output can contain anything, including a
+  // stage word by coincidence (e.g. editing plan.md tripped the old
+  // content.includes("plan") branch, wrongly flashing "planning" while a file
+  // tool ran). Stage inference below reads only the two enums — never
+  // evt.content — closing that false-positive class entirely.
+  const KERNEL_STEP_STAGE = { // kernel/orchestrator/kernel.go's k.log() step vocabulary
+    plan: "planning", chat: "planning",
+    budget: "retrieval", memory: "retrieval", store: "retrieval",
+    compress: "compression", compression: "compression",
+    execute: "execution", loop: "execution", model: "execution",
+    merge: "execution", cascade: "execution", checkpoint: "execution", consensus: "execution",
+    verify: "verification",
+    observe: "reflection", improve: "reflection", escalate: "reflection", confidence: "reflection",
+  };
+  const LOOP_STATUS_STAGE = { // kernel/loop/loop.go's agentic-loop status vocabulary
+    started: "execution", budget: "execution", thinking: "execution",
+    verifying: "verification", acceptance: "verification",
+    "self-eval": "reflection", critique: "reflection", reflect: "reflection",
+    stuck: "execution", aborted: "completion", max_reached: "completion",
+  };
+  const STAGE_BY_SOURCE = { // remaining EmitTaskUpdate(source, ...) callers
+    planner: "planning", router: "planning", direct: "planning", chat: "planning", general: "planning",
+    executor: "execution", repair: "execution", consensus: "execution",
+    verification: "verification",
+  };
+  const FAILED_STATUSES = new Set(["failed", "error", "aborted", "stuck", "rejected"]);
+  const DONE_STATUSES = new Set(["completed", "done", "passed", "planned", "max_reached", "rolled_back"]);
+
+  // stageForTaskUpdate resolves (stage, state) for a task_update event from
+  // its source/status enums alone. Returns null when the event doesn't map to
+  // one of the exec bar's 8 stages (e.g. "confidence" scoring, "kernel"/"cascade"
+  // bookkeeping steps with no stage-relevant meaning).
+  function stageForTaskUpdate(evt) {
+    const source = String(evt.task_id || "");
+    const status = String(evt.status || "");
+    let stage = null;
+    if (source === "kernel") stage = KERNEL_STEP_STAGE[status] || null;
+    else if (source === "agentic-loop") stage = LOOP_STATUS_STAGE[status] || null;
+    else if (source in STAGE_BY_SOURCE) stage = STAGE_BY_SOURCE[source];
+    else if (source) stage = "execution"; // a DAG node id lands here directly
+    if (!stage) return null;
+    let state = "running";
+    if (FAILED_STATUSES.has(status)) state = "failed";
+    else if (DONE_STATUSES.has(status)) state = "completed";
+    return { stage, state };
   }
+
+  // ── Enhanced SSE Event Router ──────────────────────────────────────
+  // handleV2Event sees every event via EventBus.onAny (below) — the direct
+  // replacement for wrapping window.addEvent. That wrap chain was the reason
+  // token_usage's tiles below never populated: 10-sse.js special-cased
+  // token_usage and returned before ever calling the (possibly wrapped)
+  // addEvent, so this switch's "case token_usage" was unreachable no matter
+  // how it was wired in. 10-sse.js now emits every type unconditionally, so
+  // this switch — unchanged below — actually runs for token_usage now.
+  EventBus.onAny(handleV2Event);
 
   function handleV2Event(evt) {
     if (!evt || !evt.type) return;
@@ -263,6 +333,15 @@
           // Coalesce repeats of the same tool+status into one ×N row.
           pushExecRow(timeline, "tool|" + evt.tool + "|" + msg, rowLabel);
         }
+        break;
+      case "file_change":
+        handleFileChange(evt);
+        break;
+      case "plan_updated":
+        pushSimpleExecRow("plan", "plan", "Updated plan");
+        break;
+      case "workflow_updated":
+        pushSimpleExecRow("workflow", "workflow", "Updated workflow");
         break;
       case "chat_query":
         showExecBar();
@@ -316,29 +395,95 @@
     }
   }
 
+  // CHANGE_ICON/LABEL mirror the CLI's changeKindLabel (surfaces/cli/diff.go)
+  // so a modified/created/deleted file reads the same way in both surfaces.
+  const CHANGE_KIND = {
+    file_create: { icon: "+", label: "created" },
+    file_modify: { icon: "✎", label: "modified" },
+    file_delete: { icon: "✗", label: "deleted" },
+    command:     { icon: "$", label: "ran" },
+    git:         { icon: "⎇", label: "git" },
+  };
+
+  // pushSimpleExecRow adds a plain labeled row (no tool/change payload) to
+  // the live inline timeline on the current loading message — used for
+  // plan/workflow updates so they show up the same way tool calls do,
+  // instead of only appearing in the raw events panel as JSON.
+  function pushSimpleExecRow(key, tag, text) {
+    const timeStr = new Date().toLocaleTimeString();
+    const rowLabel = `<span style="color:var(--text-mute)">[${timeStr}]</span> <span style="color:var(--accent-2)">[${tag}]</span> ${esc(text)}`;
+    const loadingMsg = document.querySelector(".msg.loading");
+    const timeline = loadingMsg ? loadingMsg.querySelector(".inline-exec-timeline") : null;
+    if (timeline) timeline.hidden = false;
+    pushExecRow(timeline, key + "|" + text, rowLabel);
+  }
+
+  // handleFileChange renders a file_change event (payload: core.Change) as a
+  // readable "✎ modified path/to/file.go (ok)" row instead of leaving file
+  // edits invisible in the live trace (previously file_change had no case in
+  // this switch at all, so it never touched the exec bar or timeline).
+  function handleFileChange(evt) {
+    const c = (typeof evt.content === "object" && evt.content) ? evt.content : {};
+    const kind = CHANGE_KIND[c.kind] || { icon: "•", label: c.kind || "change" };
+    const target = c.path || c.command || "";
+    const status = c.success === false ? "failed" : "ok";
+    const text = `${kind.icon} ${kind.label} ${target} (${status})`;
+    setExecStage("tools", "running");
+    pushSimpleExecRow("file|" + target, "file", text);
+  }
+
+  // flushStreamedAnswer redraws .msg-stream-text from streamBuf, throttled to
+  // one paint per animation frame regardless of how many chunks arrived —
+  // re-rendering markdown on every individual token would be wasted work on
+  // a fast stream.
+  function flushStreamedAnswer() {
+    streamFlushScheduled = false;
+    const loadingMsg = document.querySelector(".msg.loading");
+    const el = loadingMsg ? loadingMsg.querySelector(".msg-stream-text") : null;
+    if (!el) return;
+    el.innerHTML = renderMarkdown(streamBuf);
+    const container = document.getElementById("chat-messages");
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+
+  function scheduleStreamFlush() {
+    if (streamFlushScheduled) return;
+    streamFlushScheduled = true;
+    requestAnimationFrame(flushStreamedAnswer);
+  }
+
   function handleTaskUpdate(evt) {
-    const content = String(evt.content || "").toLowerCase();
     const status = String(evt.status || "").toLowerCase();
-    
-    // Streaming token chunks are the live LLM output — the model composing its
-    // answer in real time ("thinking"). They are NOT part of the orchestration
-    // trace (which stays a readable plan/route/compress/tools/verify log), so
-    // route them to a separate, auto-shown "thinking" panel on the loading
-    // message. finalizeAssistantMessage folds it away (auto-hide) when the final
-    // answer is ready, behind a "💭 Thinking" toggle next to Execution Details.
+
+    // Streaming token chunks are the live LLM output — the model composing
+    // its answer in real time. They ARE the answer bubble's content while
+    // it grows (Stream fix — this used to go to a separate "thinking" panel
+    // nobody's response text ever visibly grew from). A new source (a
+    // different task_id — a subagent taking over, or the general no-tools
+    // path) or a fresh ReAct iteration (the "thinking" case below) starts a
+    // new buffer: only the CURRENT generation's text is shown, never a
+    // concatenation of abandoned earlier attempts.
     if (status === "streaming") {
       if (evt.content) {
-        const loadingMsg = document.querySelector(".msg.loading");
-        if (loadingMsg) {
-          const panel = loadingMsg.querySelector(".msg-thinking-live");
-          if (panel) {
-            panel.hidden = false;
-            panel.textContent += evt.content; // OnContent emits per-token deltas
-            panel.scrollTop = panel.scrollHeight;
-          }
+        const source = evt.task_id || "";
+        if (source !== streamSourceID || streamGenPending) {
+          streamSourceID = source;
+          streamGenPending = false;
+          streamBuf = "";
         }
+        streamBuf += evt.content;
+        scheduleStreamFlush();
       }
       return;
+    }
+    if (status === "thinking" && evt.task_id === "agentic-loop") {
+      // Marks a fresh ReAct iteration about to call the model — task_id
+      // stays "agentic-loop" across every iteration, so this is the only
+      // signal that the NEXT streaming chunk starts a new generation rather
+      // than continuing the last one. Consumed by the next streaming chunk
+      // above; falls through so the normal timeline/stage handling below
+      // still runs for this event too.
+      streamGenPending = true;
     }
 
     // Append to timeline (coalescing consecutive identical status rows).
@@ -351,39 +496,18 @@
       pushExecRow(timeline, "task|" + (evt.status || "") + "|" + evt.content, rowLabel);
     }
 
-    // Map task updates to pipeline stages
-    if (content.includes("plan") || content.includes("classif")) {
-      if (status === "completed" || status === "done") { setExecStage("planning", "completed"); setExecStage("retrieval", "running"); }
-      else setExecStage("planning", "running");
-    }
-    if (content.includes("context") || content.includes("retriev") || content.includes("inject")) {
-      if (status === "completed" || status === "done") { setExecStage("retrieval", "completed"); setExecStage("execution", "running"); }
-      else setExecStage("retrieval", "running");
-    }
-    if (content.includes("compress") || content.includes("summary")) {
-      if (status === "completed" || status === "done") setExecStage("compression", "completed");
-      else setExecStage("compression", "running");
-    }
-    if (content.includes("route") || content.includes("routed")) {
-      setExecStage("planning", "completed");
-    }
-    if (content.includes("verif")) {
-      if (status === "completed" || status === "done" || status === "passed") setExecStage("verification", "completed");
-      else setExecStage("verification", "running");
-
-      // Light up the per-stage Verification Pipeline panel (telemetry). The
-      // backend emits, per stage:
-      //   "Running verification stage: <name>"   → running
-      //   "Stage <name> passed successfully"      → passed
-      //   "Stage <name> failed checks" / "…: err" → failed
-    }
-    if (content.includes("reflect")) {
-      if (status === "completed" || status === "done") setExecStage("reflection", "completed");
-      else setExecStage("reflection", "running");
-    }
-    if (content.includes("execut")) {
-      if (status === "completed" || status === "done") setExecStage("execution", "completed");
-      else setExecStage("execution", "running");
+    // Map task updates to pipeline stages — from the source/status enums
+    // (see stageForTaskUpdate above), never from evt.content's free text.
+    const resolved = stageForTaskUpdate(evt);
+    if (resolved) {
+      setExecStage(resolved.stage, resolved.state);
+      // A stage's completion is also the next stage's start, for the two
+      // transitions the exec bar visualizes as adjacent.
+      if (resolved.state === "completed") {
+        if (resolved.stage === "planning") setExecStage("retrieval", "running");
+        else if (resolved.stage === "retrieval") setExecStage("execution", "running");
+        else if (resolved.stage === "verification") setExecStage("reflection", "running");
+      }
     }
   }
 
@@ -402,6 +526,11 @@
     updateExecMetric("exec-cost", "$" + cost.toFixed(4));
     updateExecMetric("exec-latency", latency > 0 ? latency + "ms" : "—");
     updateExecMetric("exec-context", prompt > 0 ? prompt.toLocaleString() + " tok" : "—");
+
+    EventBus.currentActivity.tokens = execTokenCount;
+    EventBus.currentActivity.cost = cost;
+    EventBus.currentActivity.latencyMs = latency;
+    EventBus.currentActivity.contextTokens = prompt;
 
     // Store for per-message metadata
     lastMsgMeta = {

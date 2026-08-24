@@ -31,9 +31,13 @@ type Store interface {
 // Router supplies the model for auxiliary work. Named for the kernel's
 // RouteAux, which is the existing single decision point for calls that are not
 // the user's request — it prefers a healthy local model, so a plan refresh does
-// not spend cloud tokens.
+// not spend cloud tokens. PlannerClient is the fallback AmendSync (sync_amend.go)
+// uses when no aux model is available — the same planner-tier client the
+// kernel itself uses, so a pre-turn amend never picks a model neither surface
+// would otherwise use.
 type Router interface {
 	RouteAux(task string, promptTokens int) (core.LLMClient, string, bool)
+	PlannerClient() (core.LLMClient, string, error)
 }
 
 // Notifier receives plan/workflow updates so a connected UI redraws.

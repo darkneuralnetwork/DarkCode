@@ -7,6 +7,7 @@ import (
 
 	"github.com/darkcode/infra/config"
 	"github.com/darkcode/infra/metrics"
+	"github.com/darkcode/infra/safeurl"
 	"github.com/darkcode/kernel/orchestrator"
 )
 
@@ -64,35 +65,36 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"model":             model,
-		"provider":          provider,
-		"base_url":          baseURL,
-		"routing_mode":      routingMode,
-		"safety_level":      safetyLevel,
-		"sandbox":           sandboxMode,
-		"max_turns":         maxTurns,
-		"compress_context":  compressContext,
-		"compressor_model":  compressorModel,
-		"ui_mode":           uiMode,
-		"context_length":    contextLength,
-		"max_concurrent":    maxConcurrent,
-		"temperature":       temperature,
-		"execution_profile": executionProfile,
-		"plan_approval":     planApproval,
-		"plan_depth":        planDepth,
-		"enable_local_llm":  s.cfg.LocalEnabled(),
-		"background_work":   s.cfg.ResolvedBackgroundWork(),
-		"debate":            s.cfg.Debate,
-		"reviewer":          s.cfg.Reviewer,
-		"local_mode":        s.cfg.ResolvedLocalMode(),
-		"force_local":       s.cfg.ForceLocal(),
-		"local_model_role":  s.cfg.LocalModelRole,
-		"memory_profile":    s.cfg.MemoryProfile,
-		"has_api_key":       hasKey,
-		"models":            safeModels,
-		"embedded":          s.embeddedStatus(),
-		"registered_models": s.kernelRegisteredModels(),
-		"metrics":           metrics.Default.Snapshot(),
+		"model":                model,
+		"provider":             provider,
+		"base_url":             baseURL,
+		"routing_mode":         routingMode,
+		"safety_level":         safetyLevel,
+		"sandbox":              sandboxMode,
+		"max_turns":            maxTurns,
+		"compress_context":     compressContext,
+		"compressor_model":     compressorModel,
+		"ui_mode":              uiMode,
+		"context_length":       contextLength,
+		"max_concurrent":       maxConcurrent,
+		"temperature":          temperature,
+		"execution_profile":    executionProfile,
+		"plan_approval":        planApproval,
+		"plan_depth":           planDepth,
+		"enable_local_llm":     s.cfg.LocalEnabled(),
+		"background_work":      s.cfg.ResolvedBackgroundWork(),
+		"debate":               s.cfg.Debate,
+		"reviewer":             s.cfg.Reviewer,
+		"enable_self_critique": s.cfg.EnableSelfCritique,
+		"local_mode":           s.cfg.ResolvedLocalMode(),
+		"force_local":          s.cfg.ForceLocal(),
+		"local_model_role":     s.cfg.LocalModelRole,
+		"memory_profile":       s.cfg.MemoryProfile,
+		"has_api_key":          hasKey,
+		"models":               safeModels,
+		"embedded":             s.embeddedStatus(),
+		"registered_models":    s.kernelRegisteredModels(),
+		"metrics":              metrics.Default.Snapshot(),
 	})
 }
 
@@ -127,15 +129,26 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// | "max" | "" (auto). Pointer so an unset field leaves it unchanged.
 		MemoryProfile *string `json:"memory_profile,omitempty"`
 
-		EnableLocalLLM *bool   `json:"enable_local_llm,omitempty"`
-		BackgroundWork *string `json:"background_work,omitempty"`
-		Debate         *bool   `json:"debate,omitempty"`
-		Reviewer       *bool   `json:"reviewer,omitempty"`
+		EnableLocalLLM     *bool   `json:"enable_local_llm,omitempty"`
+		BackgroundWork     *string `json:"background_work,omitempty"`
+		Debate             *bool   `json:"debate,omitempty"`
+		Reviewer           *bool   `json:"reviewer,omitempty"`
+		EnableSelfCritique *bool   `json:"enable_self_critique,omitempty"`
 		// LocalMode sets the three-plus-state local preference directly:
 		// "off" | "auto" | "on" | "force". "force" pins routing to the local
 		// model (no cloud fallback) and starts it on demand. Pointer so an
 		// unset field leaves the current mode unchanged.
 		LocalMode *string `json:"local_mode,omitempty"`
+
+		// AirGap, CostLimitPerDayUSD and BlastRadiusThreshold back the
+		// settings-surface schema's TierPrimary/TierAdvanced fields of the same
+		// name (config/surface.go) — previously described by the schema but
+		// editable from nowhere: the schema view rendered them read-only, and no
+		// hand-written control existed either. Pointers so an unset field leaves
+		// the current value unchanged, matching every other toggle here.
+		AirGap               *bool    `json:"air_gap,omitempty"`
+		CostLimitPerDayUSD   *float64 `json:"cost_limit_per_day_usd,omitempty"`
+		BlastRadiusThreshold *float64 `json:"blast_radius_threshold,omitempty"`
 
 		ModelName       string `json:"model_name,omitempty"`
 		Provider        string `json:"provider,omitempty"`
@@ -317,6 +330,20 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		if req.EnableLocalLLM != nil {
 			s.cfg.EnableLocalLLM = *req.EnableLocalLLM
 		}
+		// Air-gap takes effect immediately, not just on the next restart —
+		// SetAirGap is what app_wireup.go itself calls at startup, and a
+		// security boundary that only applies after a restart is one a user
+		// can believe is on when it isn't.
+		if req.AirGap != nil {
+			s.cfg.AirGap = *req.AirGap
+			safeurl.SetAirGap(*req.AirGap)
+		}
+		if req.CostLimitPerDayUSD != nil {
+			s.cfg.CostLimitPerDayUSD = *req.CostLimitPerDayUSD
+		}
+		if req.BlastRadiusThreshold != nil {
+			s.cfg.BlastRadiusThreshold = *req.BlastRadiusThreshold
+		}
 		// Memory profile (local model context/RAM knob). Validated against the
 		// known names; empty means auto. Takes effect on the next local-model
 		// (re)load.
@@ -343,6 +370,12 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Reviewer = *req.Reviewer
 			if s.kernel != nil {
 				s.kernel.SetReviewer(*req.Reviewer)
+			}
+		}
+		if req.EnableSelfCritique != nil {
+			s.cfg.EnableSelfCritique = *req.EnableSelfCritique
+			if s.kernel != nil {
+				s.kernel.SetSelfCritique(*req.EnableSelfCritique)
 			}
 		}
 		if req.BackgroundWork != nil {

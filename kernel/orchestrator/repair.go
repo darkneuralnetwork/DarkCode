@@ -38,7 +38,14 @@ const maxRepairRounds = 2
 // repairFailedAcceptance runs the graph's acceptance criteria and, when a
 // machine-checkable one fails, hands the failure to the ReAct loop to fix.
 // Returns the merged answer with the final evidence appended.
-func (k *Kernel) repairFailedAcceptance(ctx context.Context, g *plan.Graph, merged string) string {
+//
+// preCheckpointID/hasPreCheckpoint (from snapshotBeforeGraph, taken before
+// the graph's first node ran) name the state to auto-revert to if repair
+// exhausts its rounds and acceptance is still failing — a change whose own
+// verification fails should not sit in the working tree waiting for a human
+// to notice, the same way a person would git-checkout after a broken
+// attempt rather than leave it.
+func (k *Kernel) repairFailedAcceptance(ctx context.Context, g *plan.Graph, merged string, preCheckpointID int, hasPreCheckpoint bool) string {
 	if g == nil || len(g.Nodes) == 0 {
 		return merged
 	}
@@ -94,6 +101,25 @@ func (k *Kernel) repairFailedAcceptance(ctx context.Context, g *plan.Graph, merg
 			if n.Status == core.TaskCompleted && hasFailingProof(n) {
 				n.Status = core.TaskFailed
 			}
+		}
+	}
+
+	// Repair rounds are exhausted and the graph is still provably broken —
+	// revert to the state before this run started rather than leave a
+	// proven-broken tree for the user to find. Not silent: the rollback
+	// itself takes a "before rollback" snapshot (checkpoint.Manager.Rollback),
+	// so nothing here is unrecoverable — a user who wants the broken attempt
+	// back can still find it in the checkpoint history.
+	if verdict.Checked > 0 && !verdict.Passed && hasPreCheckpoint {
+		if _, _, err := k.RollbackTo(preCheckpointID); err != nil {
+			k.log("repair", "Auto-rollback failed: "+err.Error())
+		} else {
+			k.log("repair", "Acceptance still failing after repair — reverted to the pre-run checkpoint")
+			if k.emitter != nil {
+				k.emitter.EmitTaskUpdate("repair", "rolled_back",
+					"Acceptance checks still failing after repair — workspace automatically reverted to its state before this run")
+			}
+			merged += "\n\n⚠ Acceptance checks did not pass after repair. The workspace was automatically reverted to its state before this run — no broken or partial changes were left behind."
 		}
 	}
 

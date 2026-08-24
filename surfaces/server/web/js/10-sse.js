@@ -13,7 +13,7 @@ function setConn(state, label) {
 // ════════════════════════════════════════════════════════════════════════
 // SSE EVENT STREAM
 // ════════════════════════════════════════════════════════════════════════
-function connectSSE() {
+async function connectSSE() {
   if (evtSource) evtSource.close();
   try {
     evtSource = new EventSource(API + "/api/events");
@@ -25,7 +25,7 @@ function connectSSE() {
   evtSource.addEventListener("connected", (e) => {
     setConn("connected", "Live");
     const el = $("#evt-live"); if (el) { el.textContent = "● LIVE"; el.classList.remove("paused"); }
-    addEvent({ type: "connected", content: JSON.parse(e.data).status, timestamp: new Date().toISOString(), status: "connected" });
+    EventBus.emit("connected", { type: "connected", content: JSON.parse(e.data).status, timestamp: new Date().toISOString(), status: "connected" });
     // If an approval request arrived while the SSE was disconnected, pick it up now.
     pollPendingApprovals();
   });
@@ -37,52 +37,32 @@ function connectSSE() {
 
   // EventSource only delivers a named event to a listener registered for that
   // exact name, so this list is the whole contract: a type missing here is
-  // broadcast by the server and dropped by the browser. Keep it in step with
-  // core.EventType.
-  const types = ["task_update","agent_spawn","agent_complete","tool_execution","model_route","compression","final_output","skill_extract","memory_store","dag_update","consensus","token_usage","error","approval","file_change","plan_updated","workflow_updated","chat_query","chat_response","sync_gui"];
+  // broadcast by the server and dropped by the browser. Sourced from
+  // /api/event-types (06-eventtypes.js) rather than hardcoded here — that
+  // registry is generated from core.EventType itself, so it can't go stale
+  // the way a second hand-written copy already had (see event_meta.go).
+  //
+  // This callback is now pure transport: parse the frame, fan it out on
+  // EventBus, done. Every type-specific reaction (token meters, approval
+  // popup, GUI resync, Auto Mode project detection, the live plan/workflow
+  // board, the raw feed, the exec-status-bar) is a listener registered near
+  // where it's defined, not a branch inlined here — see EventBus.on calls in
+  // 20-approvals.js, 30-tokens.js, 40-events.js, 60-filetree.js,
+  // 100-projects.js, 220-v2.js, 260-cascade.js, and this file (below, for
+  // sync_gui and the small "compression" toast that has no better home).
+  const eventTypes = await getEventTypes();
+  const types = eventTypes.map((t) => t.type);
   types.forEach((t) => {
     evtSource.addEventListener(t, (e) => {
       try {
-        const data = JSON.parse(e.data);
-        if (t === "token_usage") { handleTokenUsage(data); return; }
-        if (t === "approval") { handleApprovalEvent(data); return; }
-        if (t === "sync_gui") { handleSyncGUI(); return; }
-        // Auto Mode announces a detected project as a task_update, not an
-        // event type of its own — server/chat_handler.go emits
-        // EmitTaskUpdate("project_auto_created", proj.ID, proj.Name), so the
-        // id arrives in `status` and the name in `content`. This used to
-        // listen for a "project_auto_created" event that the server never
-        // sends, so Auto Mode never activated the project it had just found.
-        if (t === "task_update" && data.task_id === "project_auto_created") {
-          toast("success", "Auto Mode detected a project! Activating " + data.content);
-          setActiveProject(data.status);
-          switchTab("blueprint");
-          return;
-        }
-        if (t === "plan_updated" && data.task_id === activeProjectId) {
-          const v = $("#workflow-plan-view");
-          if (v) renderPlanBoard(data.content || "", v, "plan");
-          return;
-        }
-        if (t === "workflow_updated" && data.task_id === activeProjectId) {
-          const v = $("#workflow-arch-view");
-          if (v) renderPlanBoard(data.content || "", v, "workflow");
-          return;
-        }
-        addEvent(data);
-        if (t === "compression") {
-          toast("info", "Context Compressed: " + data.content);
-        }
-        if (t === "tool_execution") { handleFileToolEvent(data); }
-        // final_output / chat_response rendering is handled by the V2 event
-        // router (220-v2.js) via finalizeAssistantMessage + the fetch path
-        // in 50-chat.js. The old activeTab==="studio" branch here was dead
-        // (activeTab is never "studio" after the nav refactor → nexus) and
-        // would have created duplicate messages; removed.
+        EventBus.emit(t, JSON.parse(e.data));
       } catch (err) { /* ignore */ }
     });
   });
 }
+
+EventBus.on("sync_gui", handleSyncGUI);
+EventBus.on("compression", (data) => toast("info", "Context Compressed: " + data.content));
 
 async function handleSyncGUI() {
   // Clear the chat container to prevent duplicates

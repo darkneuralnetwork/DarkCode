@@ -10,6 +10,7 @@ import (
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/kernel/orchestrator"
 	"github.com/darkcode/kernel/router"
+	"github.com/darkcode/memory/memory"
 	"github.com/darkcode/model/llm"
 	"github.com/darkcode/surfaces/cli"
 	"github.com/darkcode/tools/tools"
@@ -325,7 +326,7 @@ func listToolsStandalone() {
 }
 
 func printHelp() {
-	fmt.Println(`DarkCode - The next-generation autonomous AI engineering platform.
+	fmt.Printf(`DarkCode - The next-generation autonomous AI engineering platform.
 
 Usage:
   darkcode [flags]
@@ -350,7 +351,7 @@ Architecture (6 Layers):
   1. Orchestration Kernel  - planning, delegating, verifying
   2. Model Router          - multi-model: single/escalation/consensus
   3. Compression Agent     - context reduction between steps
-  4. Memory System         - STM, episodic, semantic, procedural
+  4. Memory System         - %s
   5. Sub-Agent System      - executive, planner, worker, critic, UI
   6. Tool Runtime          - terminal, file, search, web, memory
 
@@ -380,5 +381,19 @@ Slash Commands (in interactive mode):
   /permissions            Show approval stats (or /permissions reset)
   /new, /reset            Start new session (clear STM)
   /help                   Show help
-  /quit                   Exit`)
+  /quit                   Exit`, memoryTierList())
+}
+
+// memoryTierList renders memory.TierNames() the same way
+// surfaces/cli/banner.go's memoryTierDesc does — lowercase, joined with
+// " · " — so this --help text can't drift from the banner's own memory-tier
+// claim the way it had (a hardcoded 4-item list here vs. TierNames' 7; see
+// TierNames' doc comment for that history).
+func memoryTierList() string {
+	names := memory.TierNames()
+	lower := make([]string, len(names))
+	for i, n := range names {
+		lower[i] = strings.ToLower(n)
+	}
+	return strings.Join(lower, " · ")
 }

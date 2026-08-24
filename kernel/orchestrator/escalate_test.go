@@ -20,7 +20,7 @@ func TestStuckLoopEscalatesToAGraph(t *testing.T) {
 	client := &fakeLLMClient{name: "fake", responses: []string{testPlanJSON, "worked"}}
 	deps := newTestKernel(t, client)
 
-	out, res, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rewrite the parser", "", 5)
+	out, res, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rewrite the parser", "rewrite the parser", "", 5)
 	if !ok {
 		t.Fatal("a stuck loop did not escalate to a graph")
 	}
@@ -44,7 +44,7 @@ func TestSingleNodePlanDeEscalates(t *testing.T) {
 	client := &fakeLLMClient{name: "fake", responses: []string{singleTaskPlanJSON, "worked"}}
 	deps := newTestKernel(t, client)
 
-	out, _, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rename a field", "", 5)
+	out, _, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rename a field", "rename a field", "", 5)
 	if ok {
 		t.Error("a one-task plan was executed as a graph anyway")
 	}
@@ -86,12 +86,62 @@ func TestEscalationSurvivesAFailedPlanner(t *testing.T) {
 	client := &fakeLLMClient{name: "fake", err: context.DeadlineExceeded}
 	deps := newTestKernel(t, client)
 
-	out, res, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rewrite the parser", "", 5)
+	out, res, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rewrite the parser", "rewrite the parser", "", 5)
 	if ok {
 		t.Error("escalation claimed success with an unreachable planner")
 	}
 	if out != "" || res != nil {
 		t.Errorf("failed escalation produced output: %q", out)
+	}
+}
+
+// TestSetSelfCritiqueReachesTheLoop is the wiring regression test for Phase
+// 6: Kernel.SetSelfCritique must actually reach the ReActLoop it holds, off
+// by default until an explicit call turns it on — same shape as
+// TestSetCostGovernorReachesTheLoop, for a different setter.
+func TestSetSelfCritiqueReachesTheLoop(t *testing.T) {
+	deps := newTestKernel(t, &fakeLLMClient{name: "fake"})
+
+	if deps.Kernel.agenticLoop == nil {
+		t.Fatal("the kernel has no loop, so nothing could be wired")
+	}
+	if deps.Kernel.agenticLoop.SelfCritiqueEnabled() {
+		t.Error("self-critique was on by default; it must stay off until explicitly enabled")
+	}
+
+	deps.Kernel.SetSelfCritique(true)
+	if !deps.Kernel.agenticLoop.SelfCritiqueEnabled() {
+		t.Error("SetSelfCritique(true) did not reach the loop")
+	}
+
+	deps.Kernel.SetSelfCritique(false)
+	if deps.Kernel.agenticLoop.SelfCritiqueEnabled() {
+		t.Error("SetSelfCritique(false) did not reach the loop")
+	}
+}
+
+// TestLogConfidenceScoresAndSurfacesTheAnswer is the regression test for
+// Phase 5's confidence-scoring wiring: router.ConfidenceScorer previously had
+// zero callers anywhere in the codebase (the same "built, tested, never
+// connected" shape as ctxfit's importance scorer from Phase 1). It must now
+// actually run on a run's output and the result must be visible — in the
+// task log, and to any GUI/CLI listening on the emitter — without touching
+// the escalation ladder itself (see logConfidence's doc comment for why it
+// deliberately stops at observability).
+func TestLogConfidenceScoresAndSurfacesTheAnswer(t *testing.T) {
+	deps := newTestKernel(t, &fakeLLMClient{name: "fake"})
+
+	deps.Kernel.logConfidence("Here is the answer: 42.")
+
+	if !loggedContains(deps.Kernel, "confidence") {
+		t.Error("logConfidence did not log anything — router.ConfidenceScorer is still uncalled in practice")
+	}
+
+	// An empty answer has nothing to score and must not log a bogus number.
+	before := len(deps.Kernel.GetTaskLog())
+	deps.Kernel.logConfidence("   ")
+	if len(deps.Kernel.GetTaskLog()) != before {
+		t.Error("logConfidence logged something for an empty answer")
 	}
 }
 
@@ -132,5 +182,44 @@ func TestSetCostGovernorReachesTheLoop(t *testing.T) {
 	deps.Kernel.SetCostGovernor(nil)
 	if deps.Kernel.agenticLoop.BudgetCheckInstalled() {
 		t.Error("clearing the governor left the loop's check installed")
+	}
+}
+
+// TestCostCapDampensEscalation is the regression test for Phase 5's
+// cost-aware escalation: a stuck loop must not decompose into a (roughly
+// more expensive) graph once the configured spend cap is already reached,
+// even though the signal that would normally trigger it (SignalStuck) is
+// present. Same stuck-loop setup as TestStuckLoopEscalatesToAGraph, but with
+// an already-exceeded cost governor installed first.
+func TestCostCapDampensEscalation(t *testing.T) {
+	client := &fakeLLMClient{name: "fake", responses: []string{testPlanJSON, "worked"}}
+	deps := newTestKernel(t, client)
+
+	// An isolated tracker (not the shared metrics.Default, whose accumulated
+	// cost depends on what other tests in this process happened to run) with
+	// a known cost recorded directly, so the cap is deterministically
+	// exceeded regardless of test order.
+	tracker := metrics.NewUsageTracker()
+	tracker.Record(metrics.RequestRecord{Cost: 5.00})
+	gov := metrics.NewCostGovernor(tracker, metrics.BudgetLimits{
+		PerSessionUSD: 1.00,
+		Action:        metrics.BudgetActionWarn, // warn, not block — the request itself may still proceed; only the escalation should be damped
+	})
+	deps.Kernel.SetCostGovernor(gov)
+
+	out, res, ok := deps.Kernel.escalateStuckLoop(context.Background(), "rewrite the parser", "rewrite the parser", "", 5)
+	if ok {
+		t.Fatal("escalation proceeded despite the spend cap already being reached")
+	}
+	if out != "" || res != nil {
+		t.Errorf("a damped escalation produced output: %q, %+v", out, res)
+	}
+	// No planning call should have been spent trying to decompose — the cap
+	// was checked before deepPlan, not after.
+	if n := client.callCount(); n != 0 {
+		t.Errorf("client was called %d time(s); a damped escalation must not spend anything", n)
+	}
+	if !loggedContains(deps.Kernel, "Not escalating") {
+		t.Error("the dampening was silent — no log line explains why the escalation didn't happen")
 	}
 }

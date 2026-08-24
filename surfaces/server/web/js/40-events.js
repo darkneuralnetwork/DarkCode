@@ -6,10 +6,28 @@
 // carries a *ToolResult, file_change carries a Change struct); the previous
 // `String(content || "")` turned those into "[object Object]" in the events
 // panel. Objects are now JSON-stringified (and truncated) for readability.
+// EVT_CHANGE_KIND mirrors the CLI's changeKindLabel (surfaces/cli/diff.go)
+// so a file_change event (core.Change) reads the same in the web events
+// panel as it does in the terminal, instead of dumping raw JSON.
+const EVT_CHANGE_KIND = {
+  file_create: { icon: "+", label: "created" },
+  file_modify: { icon: "✎", label: "modified" },
+  file_delete: { icon: "✗", label: "deleted" },
+  command:     { icon: "$", label: "ran" },
+  git:         { icon: "⎇", label: "git" },
+};
+
 function evtContentText(c) {
   if (c === null || c === undefined) return "";
   if (typeof c === "string") return c;
   if (typeof c === "object") {
+    // core.Change: {tool, kind, path, before, after, command, output, success}
+    if (typeof c.kind === "string" && (c.path !== undefined || c.command !== undefined)) {
+      const kind = EVT_CHANGE_KIND[c.kind] || { icon: "•", label: c.kind };
+      const target = c.path || c.command || "";
+      const status = c.success === false ? "failed" : "ok";
+      return `${kind.icon} ${kind.label} ${target} (${status})`;
+    }
     try {
       let s = JSON.stringify(c);
       if (s.length > 800) s = s.slice(0, 800) + "…";
@@ -28,7 +46,13 @@ let lastGroupEl = null;
 // Types that are expanded by default (significant). Everything else collapses
 // to a count summary — click the chevron to expand. Streaming chunks always
 // coalesce into a single live-updating row (no per-chunk DOM).
-const EVT_EXPANDED_TYPES = new Set(["error", "approval", "final_output"]);
+// Starts with the same defaults the registry itself defines (so addEvent
+// behaves correctly even before the async fetch below resolves — and stays
+// correct if it never does), then is replaced with the live
+// core.EventTypes Significant set once /api/event-types resolves
+// (06-eventtypes.js). This used to be the only copy of this list.
+let EVT_EXPANDED_TYPES = new Set(["error", "approval", "final_output", "file_change", "plan_updated", "workflow_updated"]);
+significantEventTypes().then((types) => { if (types.size) EVT_EXPANDED_TYPES = types; });
 
 function addEvent(evt) {
   const list = $("#events-list");
@@ -197,5 +221,22 @@ function buildEventDetail(evt) {
 
 function showEvtBadge(n) { const b = $("#evt-badge"); if (!b) return; b.hidden = false; b.textContent = n > 99 ? "99+" : n; }
 function hideEvtBadge() { const b = $("#evt-badge"); if (b) b.hidden = true; }
+
+// The raw feed sees every event, unconditionally — the same "sees
+// everything" role window.addEvent used to play as the innermost function in
+// 220-v2.js/260-cascade.js's wrap chain, now an explicit onAny registration
+// instead of being whatever happened to be assigned to a global name first.
+//
+// token_usage is the one exception: 30-tokens.js's handleTokenUsage already
+// pushes its own friendly "+1234 tokens ($0.01) — model" line into this feed
+// (a raw TokenUsageStats object has no readable string form here the way
+// core.Change does via evtContentText's special case above). Letting the raw
+// wire event through too — now that 10-sse.js no longer intercepts and
+// returns before reaching this listener — would show every token_usage
+// event twice.
+EventBus.onAny((evt) => {
+  if (evt && evt.type === "token_usage") return;
+  addEvent(evt);
+});
 
 // ════════════════════════════════════════════════════════════════════════

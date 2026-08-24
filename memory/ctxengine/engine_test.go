@@ -94,6 +94,42 @@ func TestAssembleKeepsSurvivorsChronologicalAndSummaryLast(t *testing.T) {
 	}
 }
 
+// TestAssembleOverflowCompressionUsesTheRealClientAfterSetClient is the
+// regression test for wiring Engine.SetClient into the summarizer AdaptiveCompressor
+// wraps: before this fix, Assemble's own overflow-compression step was
+// permanently extractive-only in production (the summarizer's client stayed
+// nil regardless of SetClient), even though it looked LLM-backed. Same
+// overflow scenario as TestAssembleKeepsSurvivorsChronologicalAndSummaryLast,
+// but with a real client wired via SetClient — the fake client must actually
+// receive the summarization request.
+func TestAssembleOverflowCompressionUsesTheRealClientAfterSetClient(t *testing.T) {
+	e := NewEngine(nil)
+	fake := &compressFakeClient{reply: "the LLM's own summary"}
+	e.SetClient(fake, "model")
+
+	convo := []core.Message{
+		{Role: core.RoleUser, Content: strings.Repeat("a", 40)},
+		{Role: core.RoleAssistant, Content: strings.Repeat("b", 40)},
+		{Role: core.RoleUser, Content: strings.Repeat("c", 40)},
+		{Role: core.RoleUser, Content: "banana banana banana banana"},
+	}
+	window, err := e.Assemble(context.Background(), AssembleRequest{
+		Query:           "banana banana banana banana",
+		Conversation:    convo,
+		AvailableTokens: 25,
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if fake.got == nil {
+		t.Fatal("overflow compression did not reach the client wired via SetClient — still extractive-only")
+	}
+	last := window.Messages[len(window.Messages)-1]
+	if !strings.Contains(last.ContentString(), "the LLM's own summary") {
+		t.Errorf("last message = %q, want it to contain the LLM's summary, not the extractive fallback", last.ContentString())
+	}
+}
+
 // TestAssembleIncludesInjectionsWhenTheyFit also pins the ordering: an
 // injection that survives alongside the conversation lands AFTER it
 // (injections are appended to convo before ranking, so they sort as the most

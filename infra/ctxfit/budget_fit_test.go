@@ -82,6 +82,45 @@ func TestFitToWindow_TruncatesWhenAnchorsExceedBudget(t *testing.T) {
 	}
 }
 
+// TestFitToWindow_ShedsLeastImportantFirst is the regression test for wiring
+// ScoreMessage (importance.go) into the shedding loop: before this, an old
+// message carrying the one error explaining everything after it was shed
+// before a recent, contentless "ok" — age order didn't know the difference.
+// Constructed so removing exactly one non-protected message reaches budget:
+// under pure age order the oldest (the error message) would go; under
+// importance order the lower-scoring filler messages go first and the error
+// message survives.
+func TestFitToWindow_ShedsLeastImportantFirst(t *testing.T) {
+	// Padded well above FitToWindow's 256-token floor so the forced budget
+	// below (full minus one message) doesn't get overridden by that floor.
+	pad := strings.Repeat("word ", 300)
+	msgs := []core.Message{
+		{Role: core.RoleSystem, Content: "sys"},
+		{Role: core.RoleUser, Content: "error: build failed critically " + pad}, // oldest, high importance
+		{Role: core.RoleAssistant, Content: "sure, continuing with routine updates " + pad},
+		{Role: core.RoleUser, Content: "ok " + pad},
+		{Role: core.RoleUser, Content: "CURRENT-TURN " + pad}, // protected (last)
+	}
+	// Budget: fits everything except one of the two low-importance middle
+	// messages (msg[2], msg[3] — both padded to roughly the same size as
+	// msg[1]) once the anchors (system + last turn) are accounted for.
+	full := EstimateTokens(msgs)
+	oneMiddle := EstimateStringTokens(msgs[2].ContentString()) + 4
+	window := full - oneMiddle - 5
+	out := FitToWindow(msgs, window, 0)
+
+	found := map[string]bool{}
+	for _, m := range out {
+		found[m.ContentString()] = true
+	}
+	if !found[msgs[1].ContentString()] {
+		t.Errorf("the error message (oldest, highest importance) was shed — importance ordering isn't wired in:\n%+v", out)
+	}
+	if found[msgs[2].ContentString()] && found[msgs[3].ContentString()] {
+		t.Errorf("nothing was shed — test didn't force a trim, budget too generous:\n%+v", out)
+	}
+}
+
 // FitClient reads the client's effective window via ModelInfo().Context.
 type fakeWindowClient struct {
 	core.LLMClient

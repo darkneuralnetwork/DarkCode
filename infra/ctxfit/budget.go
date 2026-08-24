@@ -1,7 +1,9 @@
 package ctxfit
 
 import (
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/darkcode/infra/core"
 )
@@ -76,7 +78,9 @@ func EstimateStringTokens(s string) int { return core.EstimateTokens(s) }
 //
 // Invariants: the system prompt (a leading role=="system" message) and the
 // most recent user turn are NEVER dropped — they are the irreducible request.
-// Everything between them is shed oldest-first, then the largest survivor is
+// Everything between them is shed least-important-first (infra/ctxfit's
+// ScoreMessage — tool usage, error content, user intent, file references,
+// and position all weigh in, not just age), then the largest survivor is
 // middle-truncated, until the estimate fits.
 //
 // window<=0 means "unknown" (a client that can't report its size): the caller
@@ -117,14 +121,31 @@ func FitToWindow(messages []core.Message, window, reserve int) []core.Message {
 	for i := range kept {
 		kept[i] = true
 	}
-	for i := 0; i < len(messages); i++ {
+	// Shed least-important-first rather than pure age order: ScoreMessage
+	// weighs tool usage, error content, user intent and file references
+	// alongside position, so an old message carrying the one error that
+	// explains everything after it outranks a recent "ok" — this scorer
+	// existed, was tested (importance_test.go), and had no caller before
+	// this; age-only shedding was the actual behavior despite it.
+	now := time.Now()
+	total := len(messages)
+	type sheddable struct {
+		idx   int
+		score float64
+	}
+	var candidates []sheddable
+	for i := 0; i < total; i++ {
 		if i == sysIdx || protected[i] {
 			continue
 		}
+		candidates = append(candidates, sheddable{i, ScoreMessage(messages[i], i, total, now).Total})
+	}
+	sort.SliceStable(candidates, func(a, b int) bool { return candidates[a].score < candidates[b].score })
+	for _, c := range candidates {
 		if estimateKept(messages, kept) <= budget {
 			break
 		}
-		kept[i] = false
+		kept[c.idx] = false
 	}
 	if estimateKept(messages, kept) <= budget {
 		return repairToolPairs(collectKept(messages, kept))

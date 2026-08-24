@@ -1,0 +1,268 @@
+<!--
+  Telemetry — what the system is doing, what it cost, and what happened
+  before now.
+
+  Four different time horizons on the same underlying activity, which is why
+  they are sub-tabs of one page rather than four separate ones: Live is this
+  second (the raw event stream), Metrics is the running total (tokens, cost,
+  charts), History is a finished run you can scrub through, and Audit is the
+  permission ledger. Absorbs what were four separate top-level tabs
+  (Monitoring, Live Events, Execution Replay, and Status's audit log) — see
+  the Phase 9 GUI report for why System Telemetry's other sections (live
+  usage, model & routing, memory counts, tool runtime, architecture layers)
+  did not move here: they duplicated Monitoring's KPIs and Config's
+  Connection Status, which Phase 8 had just finished de-duplicating.
+-->
+<div class="blueprint-layout" id="telemetry-layout">
+
+  <div class="bp-topbar">
+    <div>
+      <h2 class="gradient-text bp-h2">Telemetry</h2>
+      <div class="bp-subtitle">Live activity, running totals, past runs, and the permission ledger.</div>
+    </div>
+  </div>
+
+  <div class="bp-subtabs" role="tablist">
+    <button class="bp-subtab active" id="tel-subtab-live" role="tab" aria-selected="true" aria-controls="tel-panel-live">Live</button>
+    <button class="bp-subtab" id="tel-subtab-metrics" role="tab" aria-selected="false" aria-controls="tel-panel-metrics">Metrics</button>
+    <button class="bp-subtab" id="tel-subtab-history" role="tab" aria-selected="false" aria-controls="tel-panel-history">History</button>
+    <button class="bp-subtab" id="tel-subtab-audit" role="tab" aria-selected="false" aria-controls="tel-panel-audit">Audit</button>
+  </div>
+
+  <!-- ══ Live — the raw stream, unaggregated (formerly pages/events.html) ══ -->
+  <div class="bp-subpanel" id="tel-panel-live" role="tabpanel" aria-labelledby="tel-subtab-live" style="padding:20px; display:flex; flex-direction:column; height:100%; box-sizing:border-box;">
+    <div class="glass-panel" id="tel-events-panel" style="padding:20px; display:flex; flex-direction:column; flex:1; min-height:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0;">📡 Live events</h3>
+        <div style="display:flex; gap:10px; align-items:center; font-size:11px; color:var(--text-mute);">
+          <span id="evt-live">● LIVE</span>
+          <span id="evt-count">0</span>
+          <label style="display:inline-flex; align-items:center; gap:4px;">
+            <input type="checkbox" id="evt-autoscroll" checked> Auto-scroll
+          </label>
+          <button class="fe-btn xs" id="evt-clear">Clear</button>
+        </div>
+      </div>
+      <div class="events-list custom-scrollbar" id="events-list" style="flex:1; overflow-y:auto;">
+        <div class="events-empty">Waiting for the first event…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Metrics — cost/tokens over time (formerly pages/monitoring.html) ══ -->
+  <div class="bp-subpanel" id="tel-panel-metrics" role="tabpanel" aria-labelledby="tel-subtab-metrics" hidden>
+    <div class="status-content custom-scrollbar" style="display:flex; flex-direction:column; gap:20px; padding:20px;">
+
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-size:12px; color:var(--text-mute);">
+          Counting since <span id="kpi-since" style="font-family:var(--font-mono); color:var(--text-dim);">—</span>.
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-glow" id="mon-refresh">Refresh</button>
+          <button class="btn-glow" id="mon-reset">Reset</button>
+        </div>
+      </div>
+
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <span class="kpi-icon">🪙</span>
+          <div class="kpi-body">
+            <div class="kpi-label">Total tokens</div>
+            <div class="kpi-value" id="kpi-total-tokens">0</div>
+            <div class="kpi-sub"><span id="kpi-prompt">0</span> in · <span id="kpi-completion">0</span> out</div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon">💲</span>
+          <div class="kpi-body">
+            <div class="kpi-label">Estimated cost</div>
+            <div class="kpi-value" id="kpi-cost">$0.00</div>
+            <div class="kpi-sub" id="kpi-cache"></div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon">📡</span>
+          <div class="kpi-body">
+            <div class="kpi-label">Model calls</div>
+            <div class="kpi-value" id="kpi-requests">0</div>
+            <div class="kpi-sub" id="kpi-rpm">0 req/min</div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon">💬</span>
+          <div class="kpi-body">
+            <div class="kpi-label">Questions asked</div>
+            <div class="kpi-value" id="kpi-turns">0</div>
+            <div class="kpi-sub"><span id="kpi-calls-per-turn">0</span> calls per question</div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon">⏱</span>
+          <div class="kpi-body">
+            <div class="kpi-label">Average latency</div>
+            <div class="kpi-value" id="kpi-latency">—</div>
+            <div class="kpi-sub">per model call</div>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon">✓</span>
+          <div class="kpi-body">
+            <div class="kpi-label">Success rate</div>
+            <div class="kpi-value" id="kpi-success-rate">100% success</div>
+            <div class="kpi-sub" id="kpi-errors">0 errors</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-grid">
+        <div class="chart-card span-2">
+          <div class="chart-head">
+            <h3>Tokens over time</h3>
+            <span class="chart-sub">prompt vs completion, per minute</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-tokens-time"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>By model</h3>
+            <span class="chart-sub">share of tokens</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-model-tokens"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>Cost</h3>
+            <span class="chart-sub">cumulative USD</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-cost-time"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>Calls per minute</h3>
+            <span class="chart-sub">request rate</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-rpm"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>Latency</h3>
+            <span class="chart-sub">last 30 calls</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
+        </div>
+      </div>
+
+      <div class="glass-panel" style="padding:20px;">
+        <div class="chart-head" style="margin-bottom:14px;">
+          <h3>Recent model calls</h3>
+          <span class="chart-sub">most recent 100</span>
+        </div>
+        <div class="req-table-wrap custom-scrollbar">
+          <table class="req-table">
+            <thead>
+              <tr>
+                <th>Time</th><th>Provider</th><th>Model</th>
+                <th>Prompt</th><th>Completion</th><th>Total</th>
+                <th>Cost</th><th>Latency</th><th>Mode</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="req-tbody">
+              <tr><td colspan="10" class="mem-empty">No requests recorded yet. Send a chat to generate telemetry.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ History — scrub a finished run (formerly pages/replay.html) ══ -->
+  <div class="bp-subpanel" id="tel-panel-history" role="tabpanel" aria-labelledby="tel-subtab-history" hidden>
+    <div class="status-content custom-scrollbar rp-page" style="padding:20px;">
+
+      <div class="rp-head">
+        <div>
+          <div style="font-size:12px; color:var(--text-mute);">
+            Scrub a recorded run. State is folded from the start each time, so moving
+            backwards is as accurate as moving forwards.
+          </div>
+        </div>
+        <button class="btn-glow" id="rp-refresh">Reload runs</button>
+      </div>
+
+      <div class="glass-panel rp-picker">
+        <label class="rp-label" for="rp-run">Run</label>
+        <select id="rp-run" class="custom-select rp-select">
+          <option value="">No recorded runs yet</option>
+        </select>
+      </div>
+
+      <div class="glass-panel rp-player" id="rp-player" style="display:none;">
+        <div class="rp-readout">
+          <div class="rp-position" id="rp-position">—</div>
+          <div class="rp-meta">
+            <span id="rp-elapsed"></span>
+            <span id="rp-status"></span>
+          </div>
+        </div>
+
+        <input type="range" class="rp-slider" id="rp-slider" min="0" max="0" value="0" step="1"
+               aria-label="Position in the run">
+
+        <div class="rp-transport">
+          <button class="rp-btn" id="rp-first" title="First event">⏮</button>
+          <button class="rp-btn" id="rp-prev" title="Previous event">◀</button>
+          <button class="rp-btn rp-btn-play" id="rp-play" title="Play or pause">▶</button>
+          <button class="rp-btn" id="rp-next" title="Next event">▶</button>
+          <button class="rp-btn" id="rp-last" title="Last event">⏭</button>
+        </div>
+      </div>
+
+      <div class="rp-split">
+        <div class="glass-panel rp-timeline-panel" id="rp-timeline-panel" style="display:none;">
+          <div class="chart-head" style="margin-bottom:12px;">
+            <h3>Timeline</h3>
+            <span class="chart-sub">click any step to jump</span>
+          </div>
+          <div class="rp-timeline custom-scrollbar" id="rp-timeline"></div>
+        </div>
+
+        <div class="glass-panel rp-detail-panel" id="rp-detail-panel" style="display:none;">
+          <div class="chart-head" style="margin-bottom:12px;">
+            <h3>This step</h3>
+          </div>
+          <pre class="rp-detail custom-scrollbar" id="rp-detail"></pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ Audit — the permission ledger (formerly part of pages/status.html) ══ -->
+  <div class="bp-subpanel" id="tel-panel-audit" role="tabpanel" aria-labelledby="tel-subtab-audit" hidden>
+    <div class="status-content custom-scrollbar" style="padding:20px;">
+      <div class="glass-panel" style="padding:20px;">
+        <div class="chart-head" style="margin-bottom:14px;">
+          <h3>📋 Audit</h3>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <span class="chart-sub" id="audit-stats">—</span>
+            <button class="fe-btn xs" id="audit-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="audit-list custom-scrollbar" id="audit-list" style="margin:0; max-height:360px;">
+          <div class="mem-empty">No actions recorded yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

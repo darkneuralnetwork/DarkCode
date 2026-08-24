@@ -49,6 +49,23 @@ func (s *Server) projectIndex(workspace string) *intelligence.ProjectIndex {
 	return idx
 }
 
+// EnsureWorkspaceIndexed starts (or re-attaches to) push-based code +
+// retrieval indexing for workspace, exactly as an HTTP request touching that
+// workspace would via projectIndex — this is that same lazy build-or-reuse,
+// exported so a surface with no HTTP requests at all (surfaces/cli) can
+// trigger it too.
+//
+// Before this, IngestInBackground()'s "on by default" config only ever took
+// effect for a workspace some HTTP handler happened to touch — every CLI
+// session ran with zero push-based ingestion regardless of the setting,
+// because nothing on that path ever called projectIndex. The CLI's
+// workspace never changes for the life of a session (see
+// surfaces/cli.Console's workspace field), so one call at startup is
+// sufficient — there is no switch-workspace path to re-hook.
+func (s *Server) EnsureWorkspaceIndexed(workspace string) {
+	s.projectIndex(workspace)
+}
+
 // stopIndexes halts every workspace watcher. Called on shutdown so the
 // polling goroutines do not outlive the server.
 func (s *Server) stopIndexes() {

@@ -20,7 +20,6 @@ import (
 	"github.com/darkcode/infra/core"
 	"github.com/darkcode/internal/strutil"
 	"github.com/darkcode/kernel/modelport"
-	"github.com/darkcode/kernel/orchestrator"
 	"github.com/darkcode/kernel/planwork"
 	"github.com/darkcode/model/llm"
 )
@@ -224,54 +223,6 @@ func (s *Server) regeneratePlanWorkflow(projID, kind string) {
 	s.seedProjectPlanWorkflow(projID, p.Name, p.Description, p.Context)
 }
 
-// needsPlanAmend reports whether query should trigger a synchronous plan
-// rewrite before Execute runs. It skips the amend only for a bare continuation
-// ("continue"/"yes") after a real prior turn, using the same signal as the
-// clarification gate; anything else is a plausible new instruction.
-func needsPlanAmend(query string, stm []core.Message, skipReadOnly bool) bool {
-	trimmed := strings.TrimSpace(query)
-	if orchestrator.HasActiveConversation(stm) && len(trimmed) < shortContinuationMaxLen {
-		return false
-	}
-	// A read-only / question turn ("what does X do?", "explain the plan")
-	// can't change the plan, so amending it is 2 wasted cloud calls
-	// (Part 5b). Skip when SkipAuxForReadOnly is on.
-	if skipReadOnly && orchestrator.QueryIsInformational(query) {
-		return false
-	}
-	return true
-}
-
-// amendPlanWorkflowSync synchronously rewrites the plan+workflow for a new
-// instruction before the kernel executes it, so execution runs against a fresh
-// plan. Bounded by a tight sub-timeout; on timeout/error the old plan/workflow
-// are returned unchanged (fail-open).
-func (s *Server) amendPlanWorkflowSync(ctx context.Context, projID, query, oldPlan, oldWorkflow string) (string, string) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	// Prefer the local model for these two rewrites when one is healthy
-	// (Part 5b) — else the cloud primary, unchanged. RouteAux returns a
-	// core.LLMClient; fall back to primaryClient when no model routes.
-	client, clientModel := s.primaryClientModel()
-	if s.kernel != nil {
-		if lc, lm, ok := s.kernel.RouteAux("plan_amend", 0); ok && lc != nil {
-			client, clientModel = lc, lm
-		}
-	}
-	// One implementation, shared with the console. This used to be a second
-	// copy of the same prompt; see planwork's package comment for what the two
-	// copies disagreed about.
-	plan, workflow := planwork.Amend(ctx, client, clientModel, query, oldPlan, oldWorkflow)
-
-	plan = planwork.InjectNodeStatus(plan, workflow)
-
-	if projID != "" && s.projects != nil {
-		_ = s.projects.SetPlan(projID, plan)
-		_ = s.projects.SetWorkflow(projID, workflow)
-		if s.emitter != nil {
-			s.emitter.EmitPlanUpdated(projID, plan)
-			s.emitter.EmitWorkflowUpdated(projID, workflow)
-		}
-	}
-	return plan, workflow
-}
+// needsPlanAmend / amendPlanWorkflowSync moved to kernel/planwork
+// (NeedsAmend / AmendSync) so the console can call the exact same pre-turn
+// gate instead of never amending at all. See that package's sync_amend.go.

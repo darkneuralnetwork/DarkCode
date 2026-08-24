@@ -12,6 +12,7 @@ import (
 	"github.com/darkcode/infra/metrics"
 	"github.com/darkcode/kernel/orchestrator"
 	"github.com/darkcode/kernel/plan"
+	"github.com/darkcode/kernel/planwork"
 	"github.com/darkcode/kernel/router"
 	"github.com/darkcode/kernel/verb"
 	"github.com/darkcode/memory/project"
@@ -249,9 +250,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.cfgMu.RLock()
 		skipReadOnly := s.cfg.SkipAuxForReadOnly
 		s.cfgMu.RUnlock()
-		amending := needsPlanAmend(req.Query, s.kernel.RecentSTM(), skipReadOnly)
+		amending := planwork.NeedsAmend(req.Query, s.kernel.RecentSTM(), skipReadOnly)
 		if amending {
-			plan, workflow = s.amendPlanWorkflowSync(ctx, req.Project, req.Query, plan, workflow)
+			plan, workflow = planwork.AmendSync(ctx, s.projects, s.kernel, s.emitter, req.Project, req.Query, plan, workflow)
 			// Amending before the turn is what lets the plan drive execution.
 			// Tell the shared post-turn refresh not to rewrite the same two
 			// documents again afterwards.

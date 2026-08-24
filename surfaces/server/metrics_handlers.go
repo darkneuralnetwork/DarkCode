@@ -248,15 +248,6 @@ func (s *Server) handleMetricsTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, metrics.Default.Snapshot())
 }
 
-// handleMetricsRequests returns recent request records.
-func (s *Server) handleMetricsRequests(w http.ResponseWriter, r *http.Request) {
-	snap := metrics.Default.Snapshot()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"requests": snap.Recent,
-		"count":    len(snap.Recent),
-	})
-}
-
 // handleMetricsReset clears all accumulated usage metrics.
 func (s *Server) handleMetricsReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

@@ -4,6 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/darkcode/infra/core"
+	"github.com/darkcode/kernel/router"
 )
 
 // The spend cap used to be checked once, before the request started. A single
@@ -69,5 +72,47 @@ func TestBudgetErrorReachesTheUser(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("the reason was lost: %q", err.Error())
+	}
+}
+
+// codingTierRouter registers a single client under ModelTierCoding with the
+// given context window — the tier historyBudgetTokens routes to
+// (PurposeExecute's tier), so this is enough to exercise per-model sizing
+// without pulling in the full newTestRouter multi-tier setup.
+func codingTierRouter(t *testing.T, contextWindow int) *router.Router {
+	t.Helper()
+	r := router.NewRouter(core.RouteSingle, nil)
+	r.RegisterModel(core.ModelTierCoding, &fakeLLMClient{name: "fake", contextWindow: contextWindow}, "fake-model")
+	r.MarkPrimary("fake-model")
+	return r
+}
+
+// TestHistoryBudgetTokensSizedPerModel is the regression test for the fixed,
+// init-time-computed loopHistoryBudgetTokens this replaced: a 32K-context
+// model and a 200K-context model used to get the identical history budget
+// (both sized against ctxfit.DefaultContextWindow, 128K) because the budget
+// was computed once at package init, before any model was ever routed to.
+// historyBudgetTokens computes it per call against whatever the loop will
+// actually route to, so the two must now differ.
+func TestHistoryBudgetTokensSizedPerModel(t *testing.T) {
+	small := historyBudgetTokens(codingTierRouter(t, 32000), 3, "a query")
+	large := historyBudgetTokens(codingTierRouter(t, 200000), 3, "a query")
+
+	if small >= large {
+		t.Fatalf("expected the 32K-context model's budget (%d) to be smaller than the 200K-context model's (%d) — they were sized identically", small, large)
+	}
+	if small <= 0 || large <= 0 {
+		t.Fatalf("expected positive budgets, got small=%d large=%d", small, large)
+	}
+}
+
+// TestHistoryBudgetTokensFallsBackWhenRoutingFails ensures a router with no
+// model registered degrades to the old fixed default rather than panicking
+// or returning a nonsensical (zero/negative) budget.
+func TestHistoryBudgetTokensFallsBackWhenRoutingFails(t *testing.T) {
+	r := router.NewRouter(core.RouteSingle, nil) // nothing registered
+	got := historyBudgetTokens(r, 3, "a query")
+	if got != fallbackHistoryBudgetTokens {
+		t.Errorf("got %d, want the fallback %d when routing fails", got, fallbackHistoryBudgetTokens)
 	}
 }

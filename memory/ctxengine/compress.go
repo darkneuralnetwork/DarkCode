@@ -36,11 +36,18 @@ func loraLogf(format string, args ...interface{}) {
 // SetClient hot-swaps the LLM client and model name used for compression.
 // Called by the kernel's ReloadModels so a compressor-model change made via
 // the GUI takes effect immediately, without restart.
+//
+// Also propagates to e.summarizer (IncrementalSummarizer.SetClient), so
+// Assemble's own overflow-compression step (AdaptiveCompressor, which wraps
+// this same summarizer instance) gets a real client too, instead of staying
+// nil forever regardless of what this method sets — see SetClient's own
+// comment for why splitting the two used to be the deliberate choice.
 func (e *Engine) SetClient(client core.LLMClient, model string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.client = client
 	e.model = model
+	e.summarizer.SetClient(client)
 }
 
 // SetRouter configures the router Compress consults (when UseLocal is on) to

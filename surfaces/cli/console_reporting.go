@@ -18,7 +18,7 @@ func (c *Console) printUsageFull() {
 	}
 	fmt.Println()
 	fmt.Println(paint(cAmber+clrBold, "  USAGE REPORT") + paint(cGray, "  since "+fmtTimeShort(snap.Since)))
-	fmt.Println(paint(cGray, "  "+strings.Repeat("─", w-4)))
+	fmt.Println("  " + divider(w-4))
 
 	// KPI line
 	fmt.Printf("  %s  %s   %s  %s   %s  %s   %s  %s\n",

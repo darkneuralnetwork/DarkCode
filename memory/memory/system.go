@@ -609,9 +609,12 @@ func (s *System) EpisodicPrune(cutoff time.Time) int {
 // ============================================================================
 
 // SemanticAdd stores a knowledge entry.
+// SemanticAdd records a knowledge entry. The vector is filled in afterwards,
+// not before the write — this used to embed inline, blocking the caller up
+// to embeddingTimeout (5s) per call; ingesting a few hundred files paid that
+// serially and could stall for minutes. Mirrors EpisodicAdd's fix (see its
+// comment) for the exact same bug, applied here too.
 func (s *System) SemanticAdd(key, content, category string, tags []string) error {
-	vec, _ := s.GetEmbedding(key + " " + content)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -620,11 +623,34 @@ func (s *System) SemanticAdd(key, content, category string, tags []string) error
 		Content:   content,
 		Category:  category,
 		Tags:      tags,
-		Vector:    vec,
 		CreatedAt: time.Now(),
 	}
 	s.semanticWriter.MarkDirty()
+	s.embedSemanticLater(key, key+" "+content)
 	return nil
+}
+
+// embedSemanticLater computes an entry's vector off the write path and fills
+// it in when it arrives — the semantic-tier counterpart of
+// embedEpisodicLater. Must be called with s.mu held.
+func (s *System) embedSemanticLater(key, text string) {
+	if s.embedder == nil || key == "" {
+		return
+	}
+	s.embedWG.Add(1)
+	observability.Go("semantic-embed", func() {
+		defer s.embedWG.Done()
+		vec, err := s.GetEmbedding(text)
+		if err != nil || len(vec) == 0 {
+			return // keyword recall still works; this was only a ranking signal
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if entry, ok := s.semantic[key]; ok {
+			entry.Vector = vec
+			s.semanticWriter.MarkDirty()
+		}
+	})
 }
 
 // SemanticGet retrieves a knowledge entry by key.
@@ -848,6 +874,22 @@ func (s *System) ArchitectureDecisions() map[string]string {
 // ============================================================================
 // SUMMARY
 // ============================================================================
+
+// TierNames is the canonical, ordered list of memory's stores — the single
+// definition every other surface names a tier count from (the CLI banner's
+// "N-Layer Memory" capability line and its L4 architecture-layer
+// description), rather than each maintaining its own count. Before this,
+// three different numbers were in circulation for the same fact: this list
+// has 7 entries, Summary() below enumerates 7 lines (one per entry, though
+// its STM line adds a "(max N)" detail this list doesn't carry), and the
+// CLI banner separately hardcoded "6-Layer Memory" and a 4-item L4
+// description — three counts that could each be edited without the others
+// noticing. Keep this list and Summary()'s field list in the same order and
+// in sync by hand; there's no way to generate one from the other without
+// losing Summary()'s per-field formatting.
+func TierNames() []string {
+	return []string{"STM", "Episodic", "Semantic", "Procedural", "Knowledge Graph", "Learned Strategies", "Audit Log"}
+}
 
 // Summary returns a summary of all memory systems.
 func (s *System) Summary() string {

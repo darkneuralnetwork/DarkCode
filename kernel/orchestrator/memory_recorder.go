@@ -222,6 +222,43 @@ func (k *Kernel) injectRecall(goal string, block string) string {
 	return block + "\n## Task\n" + goal
 }
 
+// loopInjections builds the recall block and (if a project is active) the
+// plan/workflow directive as separate ranked/budgeted injection messages for
+// the ReAct loop's RunWithInjections, instead of the fixed-byte-cap prepend
+// injectRecall/injectProjectContext do for callers that don't go through
+// Assemble (deepPlan's one-shot planning calls, executeDirectNoTools).
+//
+// No byte cap here deliberately: unlike the baked-string path, this content
+// now genuinely competes for Assemble's real per-model budget (see
+// ctxengine.AssembleRequest.Injections), so a fixed cap independent of that
+// budget would just be a second, redundant limit.
+func (k *Kernel) loopInjections(recallBlock string) []core.Message {
+	var injections []core.Message
+	k.mu.Lock()
+	plan := strings.TrimSpace(k.projectPlan)
+	workflow := strings.TrimSpace(k.projectWorkflow)
+	k.mu.Unlock()
+	if plan != "" || workflow != "" {
+		var sb strings.Builder
+		sb.WriteString("IMPORTANT EXECUTION DIRECTIVE:\nAll your implementations, tool calls, and responses MUST strictly adhere to the provided Implementation Plan, Architecture, and Task Workflow below. You are not allowed to deviate from these documents.\n\n")
+		if plan != "" {
+			sb.WriteString("## Implementation Plan & Architecture\n")
+			sb.WriteString(plan)
+			sb.WriteString("\n\n")
+		}
+		if workflow != "" {
+			sb.WriteString("## Task Workflow\n")
+			sb.WriteString(workflow)
+			sb.WriteString("\n\n")
+		}
+		injections = append(injections, core.Message{Role: core.RoleSystem, Content: sb.String()})
+	}
+	if recallBlock != "" {
+		injections = append(injections, core.Message{Role: core.RoleSystem, Content: "## Relevant Past Context\n" + recallBlock})
+	}
+	return injections
+}
+
 // annotateUncited appends a warning when an answer makes concrete structural
 // claims without citing any of the facts it was handed.
 //

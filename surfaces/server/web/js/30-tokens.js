@@ -27,8 +27,10 @@ function handleTokenUsage(data) {
     timestamp: new Date().toISOString(),
   });
 
-  if (activeTab === "monitoring") debouncedMetricsRefresh();
+  if (activeTab === "telemetry") debouncedMetricsRefresh();
 }
+
+EventBus.on("token_usage", handleTokenUsage);
 
 function flashMeter(id, value) {
   const el = $("#" + id);
@@ -50,7 +52,7 @@ function startMetricsPolling() {
   stopMetricsPolling();
   // (P4) Skip the fetch while the document is hidden — the monitoring tab
   // is not visible, so the chart redraw would be wasted work.
-  metricsPollTimer = setInterval(() => { if (activeTab === "monitoring" && !document.hidden) loadMetrics(); }, 5000);
+  metricsPollTimer = setInterval(() => { if (activeTab === "telemetry" && !document.hidden) loadMetrics(); }, 5000);
 }
 function stopMetricsPolling() {
   if (metricsPollTimer) { clearInterval(metricsPollTimer); metricsPollTimer = null; }

@@ -41,8 +41,8 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m inputModel) View() string {
-	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f97316")).Bold(true)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0"))
+	promptStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	textStyle := lipgloss.NewStyle().Foreground(colorText)
 
 	displayValue := m.value
 	if m.password && len(displayValue) > 0 {
@@ -52,7 +52,7 @@ func (m inputModel) View() string {
 	// Blinking cursor simulation (static for simplicity unless we add a tick, but this is fine)
 	displayValue += "█"
 
-	return promptStyle.Render("? ") + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f8fafc")).Render(m.prompt) + " " + textStyle.Render(displayValue) + "\n"
+	return promptStyle.Render("? ") + lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(m.prompt) + " " + textStyle.Render(displayValue) + "\n"
 }
 
 // Input shows an interactive text input prompt and returns the string, and a boolean indicating if it was cancelled.

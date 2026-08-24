@@ -16,7 +16,7 @@
 // executor is worse than one that lags it.
 
 (function () {
-  const $ = (id) => document.getElementById(id);
+  const $id = (id) => document.getElementById(id);
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -44,10 +44,10 @@
   // needs a layout engine, and at the handful of nodes a plan actually has, the
   // dependency list is easier to read than crossing edges would be.
   function renderNodes() {
-    const box = $('bp-nodes');
+    const box = $id('bp-nodes');
     if (!box) return;
     const nodes = (graph && graph.nodes) || [];
-    $('bp-node-count').textContent = nodes.length ? `${nodes.filter(n => statusOf(n).cls === 'ok').length}/${nodes.length}` : '';
+    $id('bp-node-count').textContent = nodes.length ? `${nodes.filter(n => statusOf(n).cls === 'ok').length}/${nodes.length}` : '';
 
     if (!nodes.length) {
       box.innerHTML = '<div class="bp-empty">Nothing running.</div>';
@@ -74,17 +74,17 @@
 
   // ── the task column ──────────────────────────────────────────────────
   function renderTask() {
-    const body = $('bp-task-body');
+    const body = $id('bp-task-body');
     if (!body) return;
     const node = ((graph && graph.nodes) || []).find((n) => n.id === selected);
     if (!node) {
-      $('bp-task-title').textContent = 'Task';
-      $('bp-task-agent').textContent = '';
+      $id('bp-task-title').textContent = 'Task';
+      $id('bp-task-agent').textContent = '';
       body.innerHTML = '<div class="bp-empty">Select a task to see its goal, acceptance criteria and what it produced.</div>';
       return;
     }
-    $('bp-task-title').textContent = node.id;
-    $('bp-task-agent').textContent = node.agent || '';
+    $id('bp-task-title').textContent = node.id;
+    $id('bp-task-agent').textContent = node.agent || '';
 
     const parts = [`<div class="bp-goal-text">${esc(node.goal || node.name)}</div>`];
 
@@ -147,7 +147,7 @@
   // has already touched (checkpoints), and what it is asking permission to do
   // (the approval queue). Both are answers to "should I let this proceed".
   async function renderImpact() {
-    const body = $('bp-impact-body');
+    const body = $id('bp-impact-body');
     if (!body) return;
     const parts = [];
 
@@ -155,7 +155,7 @@
       const res = await fetch('/api/approvals');
       const data = await res.json();
       const pending = data.approvals || [];
-      $('bp-impact-count').textContent = pending.length ? `${pending.length} waiting` : '';
+      $id('bp-impact-count').textContent = pending.length ? `${pending.length} waiting` : '';
       if (pending.length) {
         parts.push(`<div class="bp-sec"><div class="bp-sec-h bp-warn">Waiting on you</div>${
           pending.map((a) => `<div class="bp-approval">
@@ -184,19 +184,19 @@
   }
 
   function renderHeader() {
-    const goalEl = $('bp-goal');
-    const state = $('bp-state');
+    const goalEl = $id('bp-goal');
+    const state = $id('bp-state');
     if (!graph) {
       if (goalEl) goalEl.textContent = 'No run yet — ask for something and its plan appears here.';
       if (state) state.hidden = true;
-      const fill = $('bp-progress-fill');
+      const fill = $id('bp-progress-fill');
       if (fill) fill.style.width = '0%';
       return;
     }
     if (goalEl) goalEl.textContent = graph.goal || '';
     const nodes = graph.nodes || [];
     const done = nodes.filter((n) => statusOf(n).cls === 'ok').length;
-    const fill = $('bp-progress-fill');
+    const fill = $id('bp-progress-fill');
     if (fill) fill.style.width = nodes.length ? `${Math.round((done / nodes.length) * 100)}%` : '0%';
 
     if (state) {
@@ -240,8 +240,8 @@
   }
 
   function init() {
-    if (!$('bp-nodes')) return false;
-    const btn = $('blueprint-refresh');
+    if (!$id('bp-nodes')) return false;
+    const btn = $id('blueprint-refresh');
     if (btn) btn.addEventListener('click', load);
     load();
     // The plan changes while a run is in flight; a stale board is the failure

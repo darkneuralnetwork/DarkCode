@@ -169,12 +169,6 @@ func (s *Server) primaryClientModel() (core.LLMClient, string) {
 	return c, model
 }
 
-// shortContinuationMaxLen bounds what counts as a "bare continuation"
-// ("continue", "yes", "go on") for needsPlanAmend — long enough to cover
-// short acknowledgements, short enough that a real (if terse) instruction
-// still triggers a real amend.
-const shortContinuationMaxLen = 30
-
 // workflowTaskLineRe matches a workflow checklist line, capturing the
 // checkbox state and the task ID — the read side of the same "- [ ] T1: ..."
 // format project.Store.MarkTaskStatus writes.
@@ -198,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/chat/cancel", s.csrfMiddleware(http.HandlerFunc(s.handleCancelChat)))
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/verbs", s.handleVerbs)
+	mux.HandleFunc("/api/event-types", s.handleEventTypes)
 	mux.HandleFunc("/api/config/schema", s.handleConfigSchema)
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/tools/execute", s.handleToolExecute)
@@ -223,8 +218,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/models/disable", s.handleModelsDisable)
 	mux.HandleFunc("/api/models/enable", s.handleModelsEnable)
 	mux.HandleFunc("/api/metrics/tokens", s.handleMetricsTokens)
-	mux.HandleFunc("/api/metrics/requests", s.handleMetricsRequests)
-	mux.HandleFunc("/api/analytics/history", s.handleMetricsRequests) // Alias for Observability
 	mux.HandleFunc("/api/metrics/reset", s.handleMetricsReset)
 	mux.HandleFunc("/api/cascade", s.handleCascade)
 	mux.HandleFunc("/api/capability", s.handleCapability)

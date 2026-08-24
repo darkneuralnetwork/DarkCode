@@ -381,7 +381,7 @@ func (c *Console) handleSlash(input string) bool {
 			if plan == "" {
 				fmt.Println(paint(cGray, "  no implementation plan found for the active project."))
 			} else {
-				fmt.Printf("%s\n%s\n", paint(cAmber+clrBold, "IMPLEMENTATION PLAN"), paint(cWhite, plan))
+				fmt.Printf("%s\n%s\n", paint(cAmber+clrBold, "IMPLEMENTATION PLAN"), renderAnswerMarkdown(plan))
 			}
 		}
 
@@ -389,11 +389,17 @@ func (c *Console) handleSlash(input string) bool {
 		if c.activeProject == "" {
 			fmt.Println(paint(cGray, "  no active project. activate one with /project <id>"))
 		} else {
-			workflow, _ := c.projects.GetWorkflow(c.activeProject)
-			if workflow == "" {
+			wf, err := c.projects.GetWorkflowStruct(c.activeProject)
+			if err != nil || (len(wf.Tasks) == 0 && strings.TrimSpace(wf.Notes) == "") {
 				fmt.Println(paint(cGray, "  no workflow architecture found for the active project."))
 			} else {
-				fmt.Printf("%s\n%s\n", paint(cAmber+clrBold, "WORKFLOW ARCHITECTURE"), paint(cWhite, workflow))
+				fmt.Println(paint(cAmber+clrBold, "WORKFLOW ARCHITECTURE"))
+				if notes := strings.TrimSpace(wf.Notes); notes != "" {
+					fmt.Println(renderAnswerMarkdown(notes))
+				}
+				if tasks := renderWorkflowTasks(wf.Tasks); tasks != "" {
+					fmt.Println(tasks)
+				}
 			}
 		}
 

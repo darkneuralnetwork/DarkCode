@@ -254,16 +254,19 @@ function renderPlanControls(approval, depth) {
 }
 
 // renderActiveProvider populates the "Active Provider" connection-details
-// panel from the /api/config response.
-function renderActiveProvider(d) {
+// panel from the /api/config response. modelList is resolveModelList(d) —
+// passed in rather than recomputed, so "is the embedded model the one
+// showing here" answers the same question resolveModelList already decided
+// for the topbar switcher and the model cards, instead of this tile's own
+// narrower two-condition check drifting from theirs.
+function renderActiveProvider(d, modelList) {
   const set = (id, val) => {
     const el = $(id);
     if (el) el.textContent = (val === undefined || val === null || val === "") ? "—" : val;
   };
-  // When no cloud model is configured but the embedded LLM is running, show
-  // the embedded model's details instead of empty dashes.
   const emb = d.embedded || {};
-  if ((!d.model || d.model === "") && emb.is_running) {
+  const primary = (modelList || []).find((m) => m.isPrimary);
+  if (primary && primary.isLocal && emb.is_running) {
     set("#ac-model", emb.model_id);
     set("#ac-provider", "embedded (llama.cpp)");
     set("#ac-base-url", emb.base_url);
@@ -346,8 +349,13 @@ async function loadConfig() {
     // init(); only fetch if empty (e.g. loadConfig ran before init finished).
     if (!providerCatalog || providerCatalog.length === 0) await loadProviders();
 
+    // The one resolution of "which model is primary" this whole render pass
+    // shares — see resolveModelList's doc comment.
+    const modelList = resolveModelList(d);
+    const primaryModelName = (modelList.find((m) => m.isPrimary) || {}).name || "";
+
     // Active provider / connection details
-    renderActiveProvider(d);
+    renderActiveProvider(d, modelList);
 
     // Local LLM status row (state / model / endpoint)
     renderLocalLLMStatus(d.embedded);
@@ -361,7 +369,7 @@ async function loadConfig() {
     } else {
       keys.forEach((k) => {
         const v = models[k];
-        const isPrimary = k === d.model;
+        const isPrimary = k === primaryModelName || v.model === primaryModelName;
         const tier = v.tier || "coding";
         // Resolve catalogue metadata for this provider+model (if known).
         const prov = providerCatalog.find(x => x.id === v.provider);
@@ -451,7 +459,7 @@ async function loadConfig() {
     // This card supports "Set Primary" and consensus-role assignment via the
     // same #models-list event delegation as cloud model cards — but has no
     // "Remove" button (local models are toggled, not removed).
-    renderEmbeddedModelCard(d.embedded, d.model, d.registered_models || []);
+    renderEmbeddedModelCard(d.embedded, primaryModelName, d.registered_models || []);
 
     if (d.max_turns) $("#cfg-max-turns").value = d.max_turns;
 
@@ -523,7 +531,7 @@ function renderLocalLLMStatus(emb) {
 function renderEmbeddedModelCard(emb, primaryModel, registeredModels) {
   const mList = $("#models-list");
   if (!mList || !emb || !emb.is_running || !emb.model_id) return;
-  const isPrimary = emb.is_primary || primaryModel === "";
+  const isPrimary = emb.model_id === primaryModel;
   // Look up the actual tier from the router's registered-models list so the
   // CSS class matches (.mc-tier.coding / .mc-tier.reasoning / .mc-tier.local).
   let tier = "local";
@@ -568,71 +576,82 @@ function renderEmbeddedModelCard(emb, primaryModel, registeredModels) {
   mList.appendChild(card);
 }
 
-function updateModelSwitcher(cfg) {
-  const sel = $("#model-select");
-  if (!sel) return;
+// resolveModelList is the one place that turns a /api/config response into
+// "what models exist and which is primary". Every "which model" surface on
+// the config page — the topbar switcher, the Active Provider tile's
+// embedded-vs-cloud branch, the Registered Model cards' ★ Primary badge, and
+// the embedded virtual card — reads loadConfig's single resolveModelList(d)
+// call rather than re-deriving the primary/fallback rule itself; each used
+// to have its own version of this decision (topbar via resolveModelList,
+// but the tile and both card renderers each reimplemented the embedded-
+// fallback check independently, and could disagree with each other and with
+// the topbar on which model was "primary").
+//
+// Built from registered_models (the kernel's actual runtime state) as the
+// source of truth — previously each reader used cfg.models + cfg.embedded
+// directly, which could drift (e.g. a model registered at runtime that isn't
+// in the config map). Falls back to the legacy path only when the kernel
+// hasn't registered anything yet (still booting).
+function resolveModelList(cfg) {
   const models = cfg.models || {};
   const keys = Object.keys(models);
   const emb = cfg.embedded || {};
   const registered = cfg.registered_models || [];
 
-  // D3: Build the option list from registered_models (the kernel's actual
-  // runtime state) as the source of truth. This keeps the dropdown in sync
-  // with what the router really has — previously it only used cfg.models +
-  // cfg.embedded, which could drift (e.g. a model registered at runtime that
-  // isn't in the config map). Fall back to the legacy path only when the
-  // kernel hasn't registered anything yet (still booting).
-  //
-  // Dedup by model name + group local vs cloud with <optgroup> for
-  // readability. Labels get a provider icon (🖥️ local / ☁️ cloud) and a
-  // (primary) tag on the active primary.
-
-  let localOpts = "";
-  let cloudOpts = "";
   const seen = {}; // dedup by model name
-
-  function modelLabel(name, isPrimary) {
-    const isLocal = name.startsWith("embedded/");
-    const icon = isLocal ? "🖥️" : "☁️";
-    const display = isLocal ? name.replace("embedded/", "") : name;
-    const tag = isPrimary ? " (primary)" : "";
-    return icon + " " + display + tag;
-  }
-
-  function addOption(name, isPrimary) {
+  const list = [];
+  function add(name, isPrimary) {
     if (seen[name]) return;
     seen[name] = true;
-    const opt = `<option value="${esc(name)}">${esc(modelLabel(name, isPrimary))}</option>`;
-    if (name.startsWith("embedded/")) localOpts += opt;
-    else cloudOpts += opt;
+    list.push({ name, isPrimary: !!isPrimary, isLocal: name.startsWith("embedded/") });
   }
 
   if (registered.length > 0) {
-    registered.forEach((m) => addOption(m.name, m.is_primary));
+    registered.forEach((m) => add(m.name, m.is_primary));
   } else {
-    // Fallback: legacy path (embedded + config map) for the still-booting case.
-    if (emb.is_running && emb.model_id) addOption(emb.model_id, emb.is_primary);
-    if (cfg.model) addOption(cfg.model, true);
-    keys.forEach((k) => addOption(k, k === cfg.model));
+    if (emb.is_running && emb.model_id) add(emb.model_id, emb.is_primary);
+    if (cfg.model) add(cfg.model, true);
+    keys.forEach((k) => add(k, k === cfg.model));
   }
+
+  if (!list.some((m) => m.isPrimary)) {
+    let primaryName = "";
+    if (cfg.model) primaryName = cfg.model;
+    else if (emb.is_running && emb.model_id) primaryName = emb.model_id;
+    else if (keys.length > 0) primaryName = keys[0];
+    const p = list.find((m) => m.name === primaryName);
+    if (p) p.isPrimary = true;
+  }
+  return list;
+}
+
+function updateModelSwitcher(cfg) {
+  const sel = $("#model-select");
+  if (!sel) return;
+  const list = resolveModelList(cfg);
+
+  // Group local vs cloud with <optgroup> for readability. Labels get a
+  // provider icon (🖥️ local / ☁️ cloud) and a (primary) tag on the active
+  // primary.
+  function modelLabel(m) {
+    const icon = m.isLocal ? "🖥️" : "☁️";
+    const display = m.isLocal ? m.name.replace("embedded/", "") : m.name;
+    return icon + " " + display + (m.isPrimary ? " (primary)" : "");
+  }
+
+  let localOpts = "", cloudOpts = "";
+  let primaryName = "";
+  list.forEach((m) => {
+    const opt = `<option value="${esc(m.name)}">${esc(modelLabel(m))}</option>`;
+    if (m.isLocal) localOpts += opt; else cloudOpts += opt;
+    if (m.isPrimary) primaryName = m.name;
+  });
 
   let opts = "";
   if (localOpts) opts += `<optgroup label="Local">${localOpts}</optgroup>`;
   if (cloudOpts) opts += `<optgroup label="Cloud">${cloudOpts}</optgroup>`;
   if (!opts) opts = `<option value="">No models registered</option>`;
   sel.innerHTML = opts;
-
-  // Select the active primary.
-  let primaryName = "";
-  if (registered.length > 0) {
-    const p = registered.find((m) => m.is_primary);
-    if (p) primaryName = p.name;
-  }
-  if (!primaryName) {
-    if (cfg.model) primaryName = cfg.model;
-    else if (emb.is_running && emb.model_id) primaryName = emb.model_id;
-    else if (keys.length > 0) primaryName = keys[0];
-  }
   sel.value = primaryName;
 }
 
@@ -650,6 +669,19 @@ async function configAction(action, modelName) {
   } catch (err) {
     toast("error", "Error: " + err.message);
   }
+}
+
+// patchSetting POSTs one update_settings field — the same action every other
+// settings control in this file uses (see the plan-phase segment toggles
+// above), factored out so the settings-surface schema view (135-cfgsurface.js)
+// can write a field without a bespoke request shape of its own.
+async function patchSetting(key, value) {
+  const res = await fetch(API + "/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "update_settings", [key]: value }),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 // modelDisable / modelEnable — GUI counterpart of the CLI's "/models disable"

@@ -72,6 +72,13 @@ const (
 
 	// PurposeAdjudicate settles a disagreement between models.
 	PurposeAdjudicate Purpose = "adjudicate"
+
+	// PurposeCritique checks a loop's own answer against a rubric derived
+	// from its goal, for the case PurposeReview does not cover: work with
+	// nothing machine-checkable to prove it (see kernel/loop's
+	// evaluateCritique). Auxiliary — same reasoning as Compress/Classify,
+	// it is work about the work, not the work itself.
+	PurposeCritique Purpose = "critique"
 )
 
 // policy is the tier preference and limits for a purpose.
@@ -116,6 +123,7 @@ var policies = map[Purpose]policy{
 	// question are what small models are good at, and they are free.
 	PurposeCompress: {aux, 1200, 0.1},
 	PurposeClassify: {aux, 256, 0.0},
+	PurposeCritique: {aux, 500, 0.2},
 
 	// Review wants the critic model when there is one, but it is still
 	// advisory, so it degrades to the auxiliary ladder rather than to the

@@ -147,6 +147,7 @@ function closeProjectModal() {
   if (modal) modal.classList.remove("active");
   projEditingId = null;
 }
+window.ModalShell?.register("proj-modal", closeProjectModal);
 
 async function saveProject() {
   const name = ($("#pf-name").value || "").trim();
@@ -249,6 +250,7 @@ function closeContextEditor() {
   if (modal) modal.classList.remove("active");
   ctxEditingId = null;
 }
+window.ModalShell?.register("ctx-modal", closeContextEditor);
 
 // saveContext persists the markdown body. When setActive is true it also
 // marks the project active (so the notes are injected into the next chat).
@@ -368,6 +370,36 @@ async function fetchProjectPlanAndWorkflow(id) {
     console.error("Failed to fetch plan/workflow", e);
   }
 }
+
+// Live plan/workflow updates for the active project. These used to be
+// handled inline in 10-sse.js's SSE dispatch loop, which updated the
+// Blueprint board directly and returned BEFORE calling addEvent — meaning a
+// plan/workflow update for the active project never reached the raw event
+// feed or the exec-status-bar's dispatch at all (a third, separate
+// event-routing path). Now they're ordinary EventBus subscribers like
+// everything else, so those live updates also show up everywhere else an
+// event normally would.
+EventBus.on("plan_updated", (data) => {
+  if (data.task_id !== activeProjectId) return;
+  const v = $("#workflow-plan-view");
+  if (v) renderPlanBoard(data.content || "", v, "plan");
+});
+EventBus.on("workflow_updated", (data) => {
+  if (data.task_id !== activeProjectId) return;
+  const v = $("#workflow-arch-view");
+  if (v) renderPlanBoard(data.content || "", v, "workflow");
+});
+
+// Auto Mode announces a detected project as a task_update, not an event type
+// of its own — server/chat_handler.go emits
+// EmitTaskUpdate("project_auto_created", proj.ID, proj.Name), so the id
+// arrives in `status` and the name in `content`.
+EventBus.on("task_update", (data) => {
+  if (data.task_id !== "project_auto_created") return;
+  toast("success", "Auto Mode detected a project! Activating " + data.content);
+  setActiveProject(data.status);
+  switchTab("blueprint");
+});
 
 // updateProjectBanner fetches the active project's name + context length and
 // reflects them in the chat-tab toolbar (project dropdown label). It also
@@ -626,27 +658,42 @@ function updateBoardProgress(kind, done, total) {
 }
 
 // togglePlanTask flips the [ ]/[x] state of the i-th checkbox line in the
-// board's source markdown and PUTs it to the server. The SSE
-// plan_updated/workflow_updated event (or the PUT response) then re-renders.
+// board's source markdown, then tells the server. A workflow task with a
+// stable ID (the "- [ ] T3: ..." shape MarkTaskStatus understands) PATCHes
+// just that task; the plan panel has no such IDs, and any workflow line
+// without one, so those still PUT the whole document — the same fallback
+// this always did, kept for exactly the case the new endpoint can't target.
 function togglePlanTask(container, kind, index) {
   const raw = container.dataset.raw || "";
   const lines = raw.split("\n");
   let count = 0;
+  let taskID = null, nowDone = false;
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$/);
     if (!m) continue;
     if (count === index) {
       const isChecked = m[2].toLowerCase() === "x";
       lines[i] = m[1] + "- [" + (isChecked ? " " : "x") + "] " + m[3];
+      nowDone = !isChecked;
+      const idMatch = m[3].match(/^([A-Za-z0-9_-]+):\s*/);
+      if (kind === "workflow" && idMatch) taskID = idMatch[1];
       break;
     }
     count++;
   }
   const next = lines.join("\n");
   container.dataset.raw = next;
-  // PUT to the server; re-render locally for immediate feedback.
+  // Re-render locally for immediate feedback, then tell the server.
   renderPlanBoard(next, container, kind);
   if (!activeProjectId) return;
+  if (taskID) {
+    fetch(API + "/api/projects/" + encodeURIComponent(activeProjectId) + "/workflow/tasks/" + encodeURIComponent(taskID), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: nowDone ? "done" : "pending" }),
+    }).catch(e => console.warn("toggle task PATCH failed", e));
+    return;
+  }
   const endpoint = kind === "plan" ? "plan" : "workflow";
   fetch(API + "/api/projects/" + encodeURIComponent(activeProjectId) + "/" + endpoint, {
     method: "PUT",

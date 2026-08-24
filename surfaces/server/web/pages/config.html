@@ -283,6 +283,30 @@
     </div>
   </div>
 
+  <!-- ═══ System Capabilities ═══
+       Hardware readout — what this machine can actually run, distinct from
+       what model is configured (Connection Status above). Previously lived
+       on the now-retired System Telemetry page as part of a larger dump
+       (live usage, model & routing, memory counts, tool runtime) that
+       duplicated Monitoring's KPIs and Connection Status above; only this
+       hardware section had no duplicate anywhere, so only it moved here —
+       see the Phase 9 GUI report for the rest of that page's disposition. -->
+  <div class="glass-panel" style="margin-top: 16px; padding: 24px;">
+    <h3 class="cfg-h3" style="margin-top: 0;">🖥️ System Capabilities</h3>
+    <p class="cfg-help" style="margin-top: 4px;" id="hw-os-arch">—</p>
+    <div class="s-grid" id="hw-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px;">
+      <!-- updateHardwareUI (js/110-status.js) writes the full "Execution
+           Tier: <tier>" string into this element itself; it is not a
+           label+value pair like its siblings. -->
+      <div class="s-tile"><div class="s-tile-value" id="hw-execution-tier">Execution Tier: —</div></div>
+      <div class="s-tile"><div class="s-tile-label">CPU</div><div class="s-tile-value" id="hw-cpu">—</div></div>
+      <div class="s-tile"><div class="s-tile-label">RAM</div><div class="s-tile-value" id="hw-ram">—</div></div>
+      <div class="s-tile"><div class="s-tile-label">Goroutines</div><div class="s-tile-value" id="hw-threads">—</div></div>
+      <div class="s-tile"><div class="s-tile-label">Go Heap</div><div class="s-tile-value" id="hw-heap">—</div></div>
+      <div class="s-tile"><div class="s-tile-label">GPU VRAM</div><div class="s-tile-value" id="hw-vram">—</div></div>
+    </div>
+  </div>
+
   <!-- Full settings surface, rendered from /api/config/schema rather than
        written out here. Everything above is the handful of settings with a
        bespoke control; this is the rest, which was previously reachable from

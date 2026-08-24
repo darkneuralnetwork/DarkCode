@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/darkcode/infra/core"
 )
@@ -141,5 +142,73 @@ func TestFailedEmbeddingIsNotCached(t *testing.T) {
 	s.mu.RUnlock()
 	if n != 0 {
 		t.Errorf("a failed embedding was cached (%d entries)", n)
+	}
+}
+
+// slowEmbedder blocks for delay before returning a vector — used to prove a
+// write call doesn't wait for it.
+type slowEmbedder struct {
+	countingEmbedder
+	delay time.Duration
+}
+
+func (s *slowEmbedder) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	select {
+	case <-time.After(s.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.countingEmbedder.CreateEmbedding(ctx, text)
+}
+
+// blockingAddDeadline is how long TestSemanticAddDoesNotBlockOnEmbedding
+// waits for SemanticAdd to return before failing — well under the
+// slowEmbedder's delay, so the test can only pass if embedding truly moved
+// off the write path.
+const blockingAddDeadline = 200 * time.Millisecond
+
+// TestSemanticAddDoesNotBlockOnEmbedding is the regression test for the bug
+// EpisodicAdd already fixed and SemanticAdd never got: embedding used to run
+// synchronously on SemanticAdd's write path (up to embeddingTimeout, 5s, per
+// call), so ingesting a batch of files could stall for minutes. It must now
+// return promptly regardless of how slow the embedder is.
+func TestSemanticAddDoesNotBlockOnEmbedding(t *testing.T) {
+	s, err := NewSystem(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Shutdown)
+	e := &slowEmbedder{delay: 2 * time.Second}
+	s.SetEmbedder(e)
+
+	done := make(chan error, 1)
+	go func() { done <- s.SemanticAdd("k", "content", "note", nil) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SemanticAdd: %v", err)
+		}
+	case <-time.After(blockingAddDeadline):
+		t.Fatal("SemanticAdd blocked on the embedder instead of returning promptly")
+	}
+
+	// The entry exists immediately, without a vector yet.
+	entry, ok := s.SemanticGet("k")
+	if !ok {
+		t.Fatal("entry was not written")
+	}
+	if len(entry.Vector) != 0 {
+		t.Error("vector was already populated synchronously — embedding did not move off the write path")
+	}
+
+	// It backfills once the slow embed resolves.
+	s.WaitForEmbeddings()
+	entry, _ = s.SemanticGet("k")
+	if len(entry.Vector) == 0 {
+		t.Error("vector was never backfilled after the embed resolved")
+	}
+	if e.n() != 1 {
+		t.Errorf("embedder called %d times, want 1", e.n())
 	}
 }

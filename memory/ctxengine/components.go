@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/darkcode/infra/core"
@@ -36,6 +37,7 @@ func contentStr(m core.Message) string {
 // extractive summary (top-scoring sentences) so the engine is useful even
 // with no model configured.
 type IncrementalSummarizer struct {
+	mu  sync.RWMutex
 	llm core.LLMClient // optional; nil → extractive fallback
 }
 
@@ -43,6 +45,20 @@ type IncrementalSummarizer struct {
 // extractive fallback only.
 func NewIncrementalSummarizer(llm core.LLMClient) *IncrementalSummarizer {
 	return &IncrementalSummarizer{llm: llm}
+}
+
+// SetClient hot-swaps the LLM client this summarizer uses — called from
+// Engine.SetClient so the block-summarizer AdaptiveCompressor wraps (see
+// Compress below) shares the exact client Engine.Compress/Summarize use,
+// instead of construction-time nil that a later SetClient never reached. A
+// prior version of this code deliberately left that wiring out to avoid two
+// independently-set client pointers drifting apart on a hot-swap; routing
+// both through this one setter is what actually closes that gap, rather
+// than leaving the summarizer permanently nil to avoid it.
+func (s *IncrementalSummarizer) SetClient(llm core.LLMClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.llm = llm
 }
 
 // Summarize produces a single system message capturing the gist of msgs.
@@ -67,8 +83,11 @@ func (s *IncrementalSummarizer) Summarize(ctx context.Context, msgs []core.Messa
 	// LLM fast path. CompleteWith applies PurposeCompress's shared ceiling/
 	// temperature (this ran with no ceiling before), fits the transcript to
 	// the client's window, and tags the call log with purpose="compress".
-	if s.llm != nil {
-		ans, err := ctxengineModelManager.CompleteWith(ctx, s.llm, s.llm.ModelInfo().ID, modelport.Ask{
+	s.mu.RLock()
+	llm := s.llm
+	s.mu.RUnlock()
+	if llm != nil {
+		ans, err := ctxengineModelManager.CompleteWith(ctx, llm, llm.ModelInfo().ID, modelport.Ask{
 			Purpose: modelport.PurposeCompress,
 			Messages: []core.Message{
 				{Role: core.RoleSystem, Content: "Summarize the following conversation block concisely, preserving key decisions, file paths, and outcomes. Output a compact briefing."},

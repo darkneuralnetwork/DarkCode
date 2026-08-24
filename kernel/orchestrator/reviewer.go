@@ -55,6 +55,17 @@ func (k *Kernel) reviewerEnabled() bool {
 	return k.reviewerOn
 }
 
+// SetSelfCritique turns the loop's opt-in self-critique pass on or off at
+// runtime — same hot-toggle contract as SetReviewer, forwarded straight to
+// the loop since (unlike reviewerOn) nothing on the Kernel itself needs to
+// read the flag back. See loop.ReActLoop.SetSelfCritique and
+// Config.EnableSelfCritique for why it defaults off.
+func (k *Kernel) SetSelfCritique(on bool) {
+	if k.agenticLoop != nil {
+		k.agenticLoop.SetSelfCritique(on)
+	}
+}
+
 // reviewProvenWork returns improvement notes for work whose acceptance checks
 // passed, or "" when review is off, the work was not proven, or the call fails.
 //

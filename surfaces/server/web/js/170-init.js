@@ -88,7 +88,14 @@ async function init() {
       const hist = await histRes.value.json();
       if (hist && hist.events && Array.isArray(hist.events)) {
         hist.events.forEach(evt => {
-          addEvent(evt);
+          // emitAny (not emit): reaches the same "whatever holds addEvent"
+          // consumers the old wrap chain did (raw feed, exec-status-bar,
+          // cascade rungs) without ALSO re-firing type-specific side effects
+          // like project auto-activation or a live plan-board re-render —
+          // history replay never triggered those before (that logic lived
+          // only inside 10-sse.js's live SSE callback), and firing them from
+          // stale history on every reload would be new, unwanted behavior.
+          EventBus.emitAny(evt.type, evt);
           if (evt.type === "chat_query") appendMsg("user", String(evt.content || ""));
           if (evt.type === "chat_response") appendMsg("assistant", String(evt.content || ""));
         });

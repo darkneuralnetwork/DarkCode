@@ -322,6 +322,8 @@ function handleFileToolEvent(evt) {
   }
 }
 
+EventBus.on("tool_execution", handleFileToolEvent);
+
 // Record a modification in the log + highlight map.
 function recordFileMod(path, action, tool) {
   const norm = path.replace(/^\.\//, "");
@@ -400,5 +402,6 @@ function closeFilePreview() {
   const modal = $("#file-viewer-modal");
   if (modal) modal.style.display = "none";
 }
+window.ModalShell?.register("file-viewer-modal", closeFilePreview);
 
 // ════════════════════════════════════════════════════════════════════════

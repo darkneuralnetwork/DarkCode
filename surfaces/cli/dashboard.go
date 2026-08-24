@@ -165,17 +165,7 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 		{"AVG LAT", fmtDur(int64(snap.AvgLatencyMs)), cYellow},
 		{"RPM", fmtNum(rpm), cPurple},
 	}
-	colW := (w - 2) / len(kpis)
 	var kpiLine strings.Builder
-	kpiLine.WriteString(paint(cOrange, vt))
-	for _, k := range kpis {
-		cell := fmt.Sprintf("%s\n%s", paint(cGray, k.label), paint(k.color+clrBold, center(k.value, colW-2)))
-		// single-line cell instead:
-		cell = paint(cGray, padRight(k.label, colW-4-len(k.value))) + paint(k.color+clrBold, k.value)
-		kpiLine.WriteString(" " + cell + " ")
-	}
-	// Use a simpler single-line KPI layout
-	kpiLine.Reset()
 	kpiLine.WriteString(paint(cOrange, vt))
 	for i, k := range kpis {
 		cell := paint(cGray, k.label+" ") + paint(k.color+clrBold, k.value)
@@ -189,7 +179,7 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 		kpiLine.WriteString(strings.Repeat(" ", pad))
 	}
 	b.WriteString(kpiLine.String() + paint(cOrange, vt) + "\n")
-	b.WriteString(paint(cOrange, ml) + strings.Repeat(hz, w-2) + mr + "\n")
+	b.WriteString(boxDivider(w) + "\n")
 
 	// ---- Usage Stats ----
 	series := snap.Series
@@ -210,7 +200,7 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 	b.WriteString(renderRow(w, "COST TREND",
 		fmt.Sprintf("Current: %s/min  |  Cumulative: %s", paint(cGreen, fmtCost(currentCost)), paint(cGreen, fmtCost(snap.TotalCost)))))
 
-	b.WriteString(paint(cOrange, ml) + strings.Repeat(hz, w-2) + mr + "\n")
+	b.WriteString(boxDivider(w) + "\n")
 
 	// ---- Per-model breakdown ----
 	b.WriteString(renderSectionHeader(w, "TOKENS BY MODEL"))
@@ -228,7 +218,7 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 		}
 	}
 
-	b.WriteString(paint(cOrange, ml) + strings.Repeat(hz, w-2) + mr + "\n")
+	b.WriteString(boxDivider(w) + "\n")
 
 	// ---- Event ticker ----
 	b.WriteString(renderSectionHeader(w, "RECENT EVENTS"))
@@ -252,7 +242,7 @@ func (c *Console) renderDashboardFrame(evRing []dashboardEvent) string {
 	}
 
 	// ---- Footer ----
-	b.WriteString(paint(cOrange, bl) + strings.Repeat(hz, w-2) + br + "\n")
+	b.WriteString(boxBottom(w) + "\n")
 	return b.String()
 }
 
@@ -276,42 +266,33 @@ func renderSectionHeader(w int, title string) string {
 	if rem < 0 {
 		rem = 0
 	}
-	return paint(cOrange, ml) + inner + paint(cOrange, strings.Repeat(hz, rem)) + mr + "\n"
+	return paint(cOrange, ml) + inner + paint(cOrange, strings.Repeat(hz, rem)+mr) + "\n"
 }
 
 // ---- event helpers ----
 
-func eventIcon(t string) string {
-	switch t {
-	case "task_update":
-		return "►"
-	case "agent_spawn":
-		return "✦"
-	case "agent_complete":
-		return "✓"
-	case "tool_execution":
-		return "⚡"
-	case "model_route":
-		return "↓"
-	case "compression":
-		return "⊕"
-	case "memory_store":
-		return "⟐"
-	case "final_output":
-		return "▣"
-	case "error":
-		return "✗"
-	case "dag_update":
-		return "⬡"
-	case "skill_extract":
-		return "★"
-	case "consensus":
-		return "⚖"
-	case "token_usage":
-		return "🪙"
-	default:
-		return "•"
+// eventIconFor picks the icon for an event, special-casing task_update by
+// its status (e.g. "thinking" gets its own glyph) since eventIcon alone
+// only sees the event type and every status inside task_update otherwise
+// renders identically.
+func eventIconFor(e core.UIEvent) string {
+	if e.Type == core.EventTaskUpdate {
+		switch e.Status {
+		case "thinking":
+			return "◌"
+		case "budget":
+			return "⏳"
+		}
 	}
+	return eventIcon(string(e.Type))
+}
+
+// eventIcon looks up the display icon for an event type name. The mapping
+// itself lives in core.EventTypes (infra/core/event_meta.go) — the single
+// registry the GUI also serves over /api/event-types, so a new event type
+// only needs an icon defined once, not once per surface.
+func eventIcon(t string) string {
+	return core.Lookup(core.EventType(t)).Icon
 }
 
 func eventMessage(e core.UIEvent) string {
@@ -345,6 +326,26 @@ func eventMessage(e core.UIEvent) string {
 			return formatTokenUsage(u)
 		}
 		return fmt.Sprintf("%v", e.Content)
+	case core.EventFileChange:
+		if c, ok := e.Content.(core.Change); ok {
+			icon, label := changeKindLabel(c)
+			target := c.Path
+			if target == "" {
+				target = c.Command
+			}
+			status := "ok"
+			if !c.Success {
+				status = "failed"
+			}
+			return fmt.Sprintf("%s %s %s (%s)", icon, label, target, status)
+		}
+		return fmt.Sprintf("%v", e.Content)
+	case core.EventPlanUpdated:
+		return "plan updated"
+	case core.EventWorkflowUpdated:
+		return "workflow updated"
+	case core.EventApproval:
+		return fmt.Sprintf("%s — %v", e.Status, e.Content)
 	default:
 		return fmt.Sprintf("%v", e.Content)
 	}

@@ -14,6 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"github.com/darkcode/memory/project"
 )
 
 // ---- Theme (matches the web UI orange/amber dark industrial palette) ----
@@ -254,30 +257,188 @@ func barRow(label string, value int, max int, width int, color string) string {
 	)
 }
 
-// padRight pads s to width with spaces.
+// padRight pads s to width (in runes, not bytes — a multi-byte glyph like the
+// event icons in dashboard.go must count as one column, not three or four)
+// with spaces.
 func padRight(s string, width int) string {
-	if len(s) >= width {
+	n := utf8.RuneCountInString(s)
+	if n >= width {
 		return s
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	return s + strings.Repeat(" ", width-n)
 }
 
-// padLeft pads s on the left to width.
+// padLeft pads s on the left to width (in runes — see padRight).
 func padLeft(s string, width int) string {
-	if len(s) >= width {
+	n := utf8.RuneCountInString(s)
+	if n >= width {
 		return s
 	}
-	return strings.Repeat(" ", width-len(s)) + s
+	return strings.Repeat(" ", width-n) + s
 }
 
-// center centers s in width.
+// center centers s in width (in runes — see padRight).
 func center(s string, width int) string {
-	if len(s) >= width {
+	n := utf8.RuneCountInString(s)
+	if n >= width {
 		return s
 	}
-	gap := width - len(s)
+	gap := width - n
 	left := gap / 2
 	return strings.Repeat(" ", left) + s + strings.Repeat(" ", gap-left)
+}
+
+// streamPreviewLines caps how many wrapped lines of the live streaming
+// answer the spinner region shows (see liveRegion below) — enough to read
+// actual sentences forming, bounded so a long answer doesn't scroll the
+// visible terminal area away every tick (the redraw is in-place, not
+// scrollback, so this cap is a viewport choice, not a memory one).
+const streamPreviewLines = 5
+
+// wrapText greedily word-wraps s to width-rune lines, then returns only the
+// LAST maxLines of the result — the live preview should scroll forward as
+// new tokens arrive, so the useful lines to keep are the most recent ones.
+// Rune-safe (padRight's note applies here too: a multi-byte glyph counts as
+// one column). A word longer than width is placed on its own line rather
+// than split — this is a preview, not a hard column terminal.
+func wrapText(s string, width, maxLines int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var lines []string
+	var cur strings.Builder
+	curLen := 0
+	flush := func() {
+		lines = append(lines, cur.String())
+		cur.Reset()
+		curLen = 0
+	}
+	for _, word := range strings.Fields(s) {
+		wl := utf8.RuneCountInString(word)
+		if curLen > 0 && curLen+1+wl > width {
+			flush()
+		}
+		if curLen > 0 {
+			cur.WriteByte(' ')
+			curLen++
+		}
+		cur.WriteString(word)
+		curLen += wl
+	}
+	if curLen > 0 || len(lines) == 0 {
+		flush()
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return lines
+}
+
+// ---- Answer markdown (final-answer formatting only) ----
+
+// renderAnswerMarkdown lightly formats a final answer for terminal display:
+// fenced code blocks become a bordered block with a language label, headings
+// get the accent color, and inline **bold**/`code` spans get colored. This
+// is not a CommonMark implementation — no dependency was added for it (see
+// Phase 5 plan notes) — just enough structure that a multi-paragraph,
+// code-containing answer reads as formatted rather than one grey wall of
+// text. Applies only to the final printed answer; the live streaming
+// preview (console.go's spinner tail) stays plain, since it is discarded
+// wholesale the moment the real answer prints.
+func renderAnswerMarkdown(s string) string {
+	lines := strings.Split(s, "\n")
+	var b strings.Builder
+	inFence := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if !inFence {
+				inFence = true
+				label := strings.TrimSpace(trimmed[3:])
+				if label == "" {
+					label = "code"
+				}
+				b.WriteString(paint(cGray, "  ┌─ "+label+" "+strings.Repeat("─", max(0, 40-utf8.RuneCountInString(label)))))
+			} else {
+				inFence = false
+				b.WriteString(paint(cGray, "  └"+strings.Repeat("─", 44)))
+			}
+		} else if inFence {
+			b.WriteString(paint(cGray, "  │ ") + paint(cCyan, line))
+		} else {
+			b.WriteString(renderInlineMarkdown(line))
+		}
+		if i < len(lines)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// renderInlineMarkdown formats one non-fenced line: a leading "# "..."###### "
+// run becomes a heading, and inline **bold**/`code` spans are colored.
+// Delimiters are ASCII, so byte-indexed splitting here never cuts a
+// multi-byte rune in half.
+func renderInlineMarkdown(line string) string {
+	if trimmed := strings.TrimLeft(line, "#"); trimmed != line {
+		if n := len(line) - len(trimmed); n <= 6 && strings.HasPrefix(trimmed, " ") {
+			return paint(cOrange+clrBold, strings.TrimSpace(trimmed))
+		}
+	}
+	var b, plain strings.Builder
+	flush := func() {
+		if plain.Len() > 0 {
+			b.WriteString(paint(cWhite, plain.String()))
+			plain.Reset()
+		}
+	}
+	for i := 0; i < len(line); {
+		switch {
+		case strings.HasPrefix(line[i:], "**"):
+			if end := strings.Index(line[i+2:], "**"); end >= 0 {
+				flush()
+				b.WriteString(paint(cWhite+clrBold, line[i+2:i+2+end]))
+				i += 2 + end + 2
+				continue
+			}
+		case line[i] == '`':
+			if end := strings.IndexByte(line[i+1:], '`'); end >= 0 {
+				flush()
+				b.WriteString(paint(cCyan, line[i+1:i+1+end]))
+				i += 1 + end + 1
+				continue
+			}
+		}
+		plain.WriteByte(line[i])
+		i++
+	}
+	flush()
+	return b.String()
+}
+
+// renderWorkflowTasks renders a project's structured workflow tasks as a
+// status-badged list — the CLI counterpart of the GUI's checkbox board, both
+// reading the same project.Workflow the store persists rather than each
+// re-parsing workflow markdown their own way.
+func renderWorkflowTasks(tasks []project.WorkflowTask) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, t := range tasks {
+		badge, color := "TODO", cGray
+		switch t.Status {
+		case project.TaskDone:
+			badge, color = "DONE", cGreen
+		case project.TaskRunning:
+			badge, color = "RUNNING", cAmber
+		}
+		fmt.Fprintf(&b, "  %s %s %s", paint(color+clrBold, "["+badge+"]"), paint(cOrange, t.ID+":"), paint(cWhite, t.Title))
+		if i < len(tasks)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // ---- Box drawing ----
@@ -315,9 +476,7 @@ func box(title, content string, width int) string {
 		b.WriteString(paint(cOrange, vt) + "\n")
 	}
 
-	b.WriteString(paint(cOrange, bl))
-	b.WriteString(paint(cOrange, strings.Repeat(hz, width-2)))
-	b.WriteString(paint(cOrange, br))
+	b.WriteString(boxBottom(width))
 	return b.String()
 }
 
@@ -326,10 +485,57 @@ func divider(w int) string {
 	return paint(cGray, strings.Repeat("─", w))
 }
 
-// visibleLen returns the visible length of s (stripping ANSI codes).
+// boxDivider renders a double-line box-connecting mid-rule ("╠═══╣"), the
+// companion to box()'s top/bottom border — the style dashboard.go's live
+// monitoring panel uses between its sections. Named and shared here instead
+// of the three identical ml+strings.Repeat(hz,...)+mr constructions that
+// used to be typed out individually in dashboard.go.
+func boxDivider(w int) string {
+	return paint(cOrange, ml+strings.Repeat(hz, w-2)+mr)
+}
+
+// boxBottom renders the closing double-line border ("╚═══╝") — shared by
+// box() and dashboard.go rather than each repeating the same three-piece
+// construction.
+func boxBottom(w int) string {
+	return paint(cOrange, bl+strings.Repeat(hz, w-2)+br)
+}
+
+// ---- Rounded single-line prompt box (streaming) ----
+//
+// Unlike box(), which takes finished multi-line content and renders the
+// whole thing in one call, this style is built incrementally — content
+// lines print one at a time between roundedTop and roundedBottom as they
+// become available (e.g. while waiting on interactive input, possibly
+// looping to re-prompt), so it can't be a single pure function the way
+// box() is. Used by the interactive approval prompt (console.go).
+
+// roundedTop renders the top rule of a rounded box with an embedded title.
+func roundedTop(title string, width int) string {
+	inner := " " + title + " "
+	rem := width - visibleLen(inner) - 2 // "╭─" prefix
+	if rem < 0 {
+		rem = 0
+	}
+	return "╭─" + inner + strings.Repeat("─", rem)
+}
+
+// roundedBottom renders the closing rule of a rounded box.
+func roundedBottom(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return "╰" + strings.Repeat("─", width-1)
+}
+
+// roundedLine is the left-edge glyph for a content line inside a rounded box.
+const roundedLine = "│"
+
+// visibleLen returns the visible width of s in runes (stripping ANSI codes
+// first) — byte length overcounts any multi-byte glyph, which box()'s
+// padding math depends on being exact to keep its right border aligned.
 func visibleLen(s string) int {
-	out := stripANSI(s)
-	return len(out)
+	return utf8.RuneCountInString(stripANSI(s))
 }
 
 // stripANSI removes ANSI escape sequences from s.
@@ -366,7 +572,66 @@ const (
 
 func clearScreen() { fmt.Print(ansiClearScreen + ansiHome) }
 func hideCursor()  { fmt.Print(ansiHideCursor) }
-func showCursor()  { fmt.Print(ansiShowCursor) }
+
+// cursorUp returns the escape sequence to move the cursor up n lines. n<=0
+// is a no-op (empty string) rather than an ill-defined "\033[0A".
+func cursorUp(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("\033[%dA", n)
+}
+
+// liveRegion redraws a small block of terminal lines in place — the CLI's
+// only "grows while you watch" surface. Everything else the CLI prints
+// during a run (the ├─ event feed) is permanent scrollback and must never be
+// touched once written; this is the opposite: nothing it draws is
+// authoritative or meant to persist, so it's always safe to erase and
+// redraw. It tracks how many lines it drew last time so every redraw knows
+// exactly how far to move the cursor up first — the previous design's whole
+// reason for staying single-line was the risk of a redraw miscounting how
+// much of the terminal it owns; tracking that count here removes the risk
+// instead of avoiding the feature.
+type liveRegion struct {
+	lastLines int
+}
+
+// redraw replaces whatever this region drew last with lines. The cursor must
+// be sitting immediately after the region's own last redraw when this is
+// called — i.e. nothing else may print to the terminal between two redraw
+// calls (or a redraw and a clear) without going through this region, or its
+// line-count bookkeeping desyncs from the real cursor position.
+func (r *liveRegion) redraw(lines []string) {
+	if r.lastLines > 0 {
+		fmt.Print(cursorUp(r.lastLines))
+	}
+	n := len(lines)
+	if r.lastLines > n {
+		n = r.lastLines
+	}
+	for i := 0; i < n; i++ {
+		fmt.Print("\r" + ansiClearLine)
+		if i < len(lines) {
+			fmt.Print(lines[i])
+		}
+		fmt.Print("\n")
+	}
+	if n > len(lines) {
+		// This redraw was shorter than the last one: the loop above already
+		// cleared the now-stale trailing lines, but printing all n of them
+		// (rather than just len(lines)) left the cursor n lines below the
+		// real content instead of len(lines) below it. Move back up to sit
+		// right after the actual new content, same as every other redraw.
+		fmt.Print(cursorUp(n - len(lines)))
+	}
+	r.lastLines = len(lines)
+}
+
+// clear erases the region and leaves the cursor where the region used to
+// start — equivalent to redraw(nil), named for what it's used for at call
+// sites (a real event superseding the preview, or the run ending).
+func (r *liveRegion) clear() { r.redraw(nil) }
+func showCursor()            { fmt.Print(ansiShowCursor) }
 
 // ---- Spinner ----
 

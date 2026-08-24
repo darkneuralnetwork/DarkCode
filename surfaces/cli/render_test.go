@@ -143,6 +143,33 @@ func TestSplitCmd(t *testing.T) {
 	}
 }
 
+func TestSplitCmdHonorsQuoting(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"double-quoted arg with a space", `/project new "my project" ./path`, []string{"/project", "new", "my project", "./path"}},
+		{"single-quoted arg with a space", `/project new 'my project' ./path`, []string{"/project", "new", "my project", "./path"}},
+		{"escaped quote inside double quotes", `/say "she said \"hi\""`, []string{"/say", `she said "hi"`}},
+		{"backslash-escaped space outside quotes", `/tools connect mcp my\ server`, []string{"/tools", "connect", "mcp", "my server"}},
+		{"empty quoted arg", `/tag ""`, []string{"/tag", ""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitCmd(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("splitCmd(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("splitCmd(%q) arg %d = %q, want %q", tc.in, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestSafetyLabelRoundTrips. The label and the parser are two halves of one
 // mapping; if they disagree, setting a level from its own displayed name
 // changes it to something else.
@@ -155,6 +182,101 @@ func TestSafetyLabelRoundTrips(t *testing.T) {
 		}
 		if got := parseSafetyInt(strings.ToLower(label)); got != level {
 			t.Errorf("safetyLabel(%d) = %q, which parses back to %d", level, label, got)
+		}
+	}
+}
+
+// TestWrapTextKeepsLastLines covers the live streaming preview's
+// truncation: it must keep the END of a growing answer (the most recently
+// arrived tokens), not the start, and must cap total line count rather than
+// per-line width alone.
+func TestWrapTextKeepsLastLines(t *testing.T) {
+	s := "one two three four five six seven eight nine ten"
+	lines := wrapText(s, 12, 2)
+	if len(lines) != 2 {
+		t.Fatalf("wrapText lines = %d, want 2 (capped)", len(lines))
+	}
+	if !strings.HasSuffix(lines[len(lines)-1], "ten") {
+		t.Errorf("last line = %q, want it to end with the most recently streamed word", lines[len(lines)-1])
+	}
+	if strings.Contains(strings.Join(lines, " "), "one") {
+		t.Errorf("wrapped output still contains an early word after capping to the last 2 lines: %v", lines)
+	}
+}
+
+// TestWrapTextGrowsAsChunksAccumulate mirrors how console.go's streaming
+// handler calls this on every chunk — the visible preview should always
+// reflect the most recently streamed text, not freeze on whatever arrived
+// first, and must never split a multi-byte rune even though model output
+// routinely contains one.
+func TestWrapTextGrowsAsChunksAccumulate(t *testing.T) {
+	var buf string
+	for _, chunk := range []string{"The quick ", "brown 🪙 fox ", "jumps over ", "the lazy dog"} {
+		buf += chunk
+	}
+	lines := wrapText(buf, 12, 3)
+	if !strings.HasSuffix(strings.Join(lines, " "), "the lazy dog") {
+		t.Errorf("wrapped lines = %v, want it to end with the most recently streamed text", lines)
+	}
+}
+
+// TestLiveRegionRedrawTracksLineCount covers the one property that matters
+// for terminal correctness: after any sequence of redraws (growing,
+// shrinking, or clearing), the region's bookkeeping must match how many
+// lines it actually left on screen, or the next redraw moves the cursor to
+// the wrong place. This can't watch real terminal output, but it can assert
+// the invariant the escape sequences are built from.
+func TestLiveRegionRedrawTracksLineCount(t *testing.T) {
+	var r liveRegion
+	r.redraw([]string{"a", "b", "c"})
+	if r.lastLines != 3 {
+		t.Fatalf("after growing redraw, lastLines = %d, want 3", r.lastLines)
+	}
+	r.redraw([]string{"x"})
+	if r.lastLines != 1 {
+		t.Fatalf("after shrinking redraw, lastLines = %d, want 1", r.lastLines)
+	}
+	r.clear()
+	if r.lastLines != 0 {
+		t.Fatalf("after clear, lastLines = %d, want 0", r.lastLines)
+	}
+}
+
+// TestRenderAnswerMarkdownCodeFence covers the final-answer formatter's one
+// structural feature: a fenced code block keeps its content and language
+// label and does not eat the prose around it.
+func TestRenderAnswerMarkdownCodeFence(t *testing.T) {
+	in := "before\n```go\nfmt.Println(1)\n```\nafter"
+	out := renderAnswerMarkdown(in)
+	for _, want := range []string{"go", "fmt.Println(1)", "before", "after"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderAnswerMarkdown(%q) = %q, missing %q", in, out, want)
+		}
+	}
+}
+
+// TestRenderAnswerMarkdownUnclosedFenceDoesNotPanic. A truncated or
+// mid-stream answer can end inside a fence; formatting it must degrade
+// gracefully, not panic.
+func TestRenderAnswerMarkdownUnclosedFenceDoesNotPanic(t *testing.T) {
+	renderAnswerMarkdown("```go\nfmt.Println(1)")
+}
+
+// TestRenderInlineMarkdownHeadingAndSpans. Color codes are a no-op under
+// `go test` (colorEnabled() requires a real terminal), so these assert on
+// the literal text the markers are stripped down to.
+func TestRenderInlineMarkdownHeadingAndSpans(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"# Title", "Title"},
+		{"a **bold** word", "a bold word"},
+		{"call `foo()` now", "call foo() now"},
+		{"this **never closes", "this **never closes"},
+		{"a `dangling backtick", "a `dangling backtick"},
+		{"###", "###"}, // hashes with no following text are not a heading
+	}
+	for _, tc := range cases {
+		if got := renderInlineMarkdown(tc.in); got != tc.want {
+			t.Errorf("renderInlineMarkdown(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

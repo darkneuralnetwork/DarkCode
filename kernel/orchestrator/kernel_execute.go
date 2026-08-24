@@ -217,6 +217,14 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		}
 	}
 
+	// rawGoal is the bare user ask, captured before injectProjectContext bakes
+	// the plan/workflow directive into userGoal below. Every scoring/gating
+	// decision downstream (complexity, clarification, deepPlan) deliberately
+	// keeps using the baked userGoal, unchanged from before — only the ReAct
+	// loop call sites (which route through Assemble) use rawGoal, pairing it
+	// with loopInjections so plan/workflow/recall compete for real budget
+	// there instead of being an unconditional prefix. See loopInjections.
+	rawGoal := userGoal
 	userGoal = k.injectProjectContext(userGoal)
 
 	// Step 2: Compress context (if enabled and history is long enough to be
@@ -299,7 +307,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// "answer, don't build" while still seeing the project.
 	if k.readOnlyForRequest(ctx) {
 		k.log("plan", "Chat mode (read-only tools) — answer without writing")
-		return k.executeChatReadOnly(ctx, userGoal, recallBlock)
+		return k.executeChatReadOnly(ctx, rawGoal, userGoal, recallBlock)
 	}
 
 	// Step 3.05: General mode fast path — when tool access is disabled for
@@ -319,7 +327,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 	// scope, model decides whether to call anything.
 	if !k.loopEnabledForRequest(ctx) && !hasProjectGuidance && router.IsGeneralQuestion(userGoal) {
 		k.log("plan", "Obvious general question — read-only tools, no fan-out")
-		return k.executeChatReadOnly(ctx, userGoal, recallBlock)
+		return k.executeChatReadOnly(ctx, rawGoal, userGoal, recallBlock)
 	}
 
 	// Step 3.5: Agentic Loop — optional ReAct execution. When enabled, delegate
@@ -357,6 +365,12 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// answer than the one already in the prompt.
 		if criterion, task, ok := loop.ParseUntil(userGoal); ok {
 			userGoal = task
+			// ParseUntil only ever matches when userGoal is untouched by
+			// injectProjectContext (it requires the string to start with
+			// "until ", which the plan/workflow directive prefix never
+			// does) — so userGoal == rawGoal here, and the same strip
+			// applies to both.
+			rawGoal = task
 			contract = k.untilContract(ctx, criterion)
 			k.log("loop", "Running until the user's criterion holds: "+criterion)
 			if k.emitter != nil {
@@ -384,7 +398,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 			}
 		}
 
-		loopRes, err := k.agenticLoop.RunWithContract(ctx, k.injectRecall(userGoal, recallBlock), history, contract)
+		loopRes, err := k.agenticLoop.RunWithInjections(ctx, rawGoal, history, contract, k.loopInjections(recallBlock))
 		if err != nil {
 			k.storeEpisodic(userGoal, "", nil, false, recallBlock, nil)
 			return "", err
@@ -398,7 +412,7 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 		// when there was no plan already: a stuck run that WAS decomposed has
 		// nothing left to gain from decomposing again.
 		if loopRes.Stuck && planGraph == nil {
-			if out, res, ok := k.escalateStuckLoop(ctx, userGoal, recallBlock, complexity); ok {
+			if out, res, ok := k.escalateStuckLoop(ctx, rawGoal, userGoal, recallBlock, complexity); ok {
 				output, loopRes = out, res
 				planGraph = k.lastRunPlanSnapshot()
 			}
@@ -431,6 +445,8 @@ func (k *Kernel) Execute(ctx context.Context, userGoal string) (string, error) {
 				k.log("consensus", "Consensus synthesis failed: "+cerr.Error()+" — using agentic output")
 			}
 		}
+
+		k.logConfidence(output)
 
 		// Record to STM + episodic/learning/audit/KG so the rest of the system
 		// sees the task just like a DAG execution.

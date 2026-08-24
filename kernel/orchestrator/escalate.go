@@ -14,11 +14,43 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/darkcode/kernel/loop"
 	"github.com/darkcode/kernel/plan"
 	"github.com/darkcode/kernel/router"
 )
+
+// confidenceScorer is stateless (see router.ConfidenceScorer), so one
+// package-level instance is shared across every run rather than allocated
+// per call.
+var confidenceScorer = router.NewConfidenceScorer()
+
+// logConfidence records how confident a run's final answer reads, per
+// router.ConfidenceScorer.
+//
+// This is observability only. It deliberately does NOT feed the escalation
+// ladder above: the scorer is a keyword heuristic (ordinary hedge phrases
+// like "I think the best approach is" cost the same penalty whether the
+// answer is right or wrong), and escalating on it would mean triggering
+// strictly more expensive work — a second, independent escalation trigger
+// alongside SignalStuck — on a signal nobody has validated actually
+// correlates with wrong answers on this tool's own traffic. That validation
+// is exactly what kernel/eval/agent (Phase 4) exists to do once a live model
+// is available to run it against; until then, scoring and surfacing the
+// number is the honest way to close "built, tested, never connected"
+// without smuggling in an unvalidated behavior change.
+func (k *Kernel) logConfidence(output string) {
+	if strings.TrimSpace(output) == "" {
+		return
+	}
+	score := confidenceScorer.Score(output)
+	detail := fmt.Sprintf("Answer confidence: %.2f", score)
+	k.log("confidence", detail)
+	if k.emitter != nil {
+		k.emitter.EmitTaskUpdate("confidence", fmt.Sprintf("%.2f", score), detail)
+	}
+}
 
 // escalateStuckLoop re-runs a stuck loop as a decomposed graph.
 //
@@ -30,9 +62,30 @@ import (
 //
 // Returns ok=false when there is nothing better to try, in which case the
 // caller keeps the loop's own output rather than losing it.
-func (k *Kernel) escalateStuckLoop(ctx context.Context, userGoal, recallBlock string, complexity int) (string, *loop.Result, bool) {
+//
+// rawGoal is the bare user ask (pre-injectProjectContext), passed separately
+// from userGoal (the plan/workflow-baked version) so the retry loop below
+// can route recall/plan/workflow through Assemble's Injections pool instead
+// of baking them into the goal message — see kernel_execute.go's rawGoal
+// comment and memory_recorder.go's loopInjections. deepPlan keeps using the
+// baked userGoal: it's a one-shot call outside Assemble, so there's nothing
+// for the directive to compete against there.
+func (k *Kernel) escalateStuckLoop(ctx context.Context, rawGoal, userGoal, recallBlock string, complexity int) (string, *loop.Result, bool) {
 	next, why, ok := router.Next(router.EffortLoop, router.SignalStuck)
 	if !ok {
+		return "", nil, false
+	}
+	// Escalating to a decomposed graph roughly multiplies cost (a planning
+	// call plus a worker call per task, versus the loop's single stream) —
+	// the ladder's own package comment already says as much ("at multiplied
+	// cost on a metered tier"). If the session's configured spend cap is
+	// already reached, that multiplication is the wrong trade regardless of
+	// whether it might fix the task: cost_limit_per_day_usd exists precisely
+	// to bound spend, and an escalation the governor would have warned about
+	// anyway shouldn't happen silently just because it's mid-run rather than
+	// a fresh request.
+	if reason, damped := k.costDampensEscalation(); damped {
+		k.log("escalate", "Not escalating — "+reason)
 		return "", nil, false
 	}
 	k.announceEscalation(router.EffortLoop, next, why)
@@ -63,7 +116,7 @@ func (k *Kernel) escalateStuckLoop(ctx context.Context, userGoal, recallBlock st
 	}
 
 	contract := k.contractFor(g)
-	res, err := k.agenticLoop.RunWithContract(ctx, k.injectRecall(userGoal, recallBlock), nil, contract)
+	res, err := k.agenticLoop.RunWithInjections(ctx, rawGoal, nil, contract, k.loopInjections(recallBlock))
 	if err != nil || res == nil {
 		return "", nil, false
 	}

@@ -242,6 +242,24 @@ func (k *Kernel) SetCostGovernor(g *metrics.CostGovernor) {
 	})
 }
 
+// costDampensEscalation reports whether the configured spend cap has already
+// been reached, in which case an in-flight escalation to a more expensive
+// strategy should be skipped rather than silently multiplying cost — see
+// escalate.go's call site. No configured governor, or no cap reached, is
+// never damping (an unconfigured cap must never change behavior).
+func (k *Kernel) costDampensEscalation() (reason string, damped bool) {
+	k.mu.Lock()
+	gov := k.governor
+	k.mu.Unlock()
+	if gov == nil {
+		return "", false
+	}
+	if d := gov.Check(); d.Reason != "" {
+		return d.Reason, true
+	}
+	return "", false
+}
+
 // TaskLogEntry records a single step in the execution loop.
 type TaskLogEntry struct {
 	Step      string
@@ -401,7 +419,8 @@ func (k *Kernel) RunEvents(goal string) []ExecEvent {
 
 // RollbackTo restores the workspace to checkpoint n and rewinds the transcript
 // to match, so the agent's next turn reasons from the state on disk. Shared by
-// the CLI /rollback command and the HTTP API.
+// the CLI /rollback command, the HTTP API, and repairFailedAcceptance's
+// auto-rollback when repair doesn't fix a failing acceptance check.
 func (k *Kernel) RollbackTo(n int) (checkpoint.Entry, []checkpoint.Change, error) {
 	if k.checkpoints == nil {
 		return checkpoint.Entry{}, nil, fmt.Errorf("checkpoints are not enabled")
@@ -413,6 +432,25 @@ func (k *Kernel) RollbackTo(n int) (checkpoint.Entry, []checkpoint.Change, error
 	k.memory.STMTruncate(entry.Turn)
 	k.softenBeliefsAfterRollback(changes)
 	return entry, changes, nil
+}
+
+// snapshotBeforeGraph takes an explicit checkpoint before a plan graph starts
+// executing, giving repairFailedAcceptance a known-good point to revert to
+// if repair doesn't fix a failing acceptance check. Returns ok=false when
+// checkpoints aren't configured or the snapshot itself fails — a checkpoint
+// failure must never block execution (the same rule
+// tools/tools/registry.go's per-tool-call snapshot follows), it just means
+// auto-rollback can't happen for this run.
+func (k *Kernel) snapshotBeforeGraph(label string) (id int, ok bool) {
+	if k.checkpoints == nil {
+		return 0, false
+	}
+	entry, err := k.checkpoints.Snapshot("graph-execute", label)
+	if err != nil {
+		k.log("checkpoint", "pre-execution snapshot failed: "+err.Error())
+		return 0, false
+	}
+	return entry.ID, true
 }
 
 // rollbackConfidenceDecay is how much a rolled-back file's beliefs lose, and

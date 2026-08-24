@@ -22,6 +22,8 @@ function handleApprovalEvent(data) {
   }
 }
 
+EventBus.on("approval", handleApprovalEvent);
+
 function showApprovalPopup(req) {
   pendingApprovalId = req.id;
   pendingApprovalData = req;

@@ -51,7 +51,6 @@ async function sendChat() {
   const loadingEl = appendMsg("assistant", "Orchestrating workflow...", true);
   pendingChat = true;
   pendingChatAnswer = "";
-  window.currentStreamingMsgEl = null; // Reset streaming element
 
   // (P2) The previous code snapshotted the whole workspace tree BEFORE the
   // run (a full /api/files/list fetch) and again after, just to diff
@@ -83,14 +82,13 @@ async function sendChat() {
       finalizeAssistantMessage(loadingEl, formatted.formatted ? formatted.html : formatted.text, true, formatted.formatted);
       toast("error", "Request failed");
     } else if (pendingChat) {
-      if (window.currentStreamingMsgEl) {
-        // If we were streaming, the text is already in the UI. Just finalize it.
-        window.currentStreamingMsgEl.classList.remove("loading");
-        window.currentStreamingMsgEl = null;
-      } else {
-        pendingChatAnswer = String(data.output || "");
-        finalizeAssistantMessage(loadingEl, data.output || "(empty response)", false, false);
-      }
+      // The live .msg-stream-text (220-v2.js) is only ever a preview: the
+      // authoritative text is always this response's data.output, the same
+      // invariant the CLI keeps for its own streaming preview — a retry or
+      // correction inside the run can make the two differ, so finalize
+      // always writes the real answer rather than trusting what streamed.
+      pendingChatAnswer = String(data.output || "");
+      finalizeAssistantMessage(loadingEl, data.output || "(empty response)", false, false);
     }
   } catch (err) {
     const formatted = formatErrorForChat(err.message, true);
@@ -134,13 +132,13 @@ function appendMsg(role, text, loading, isError, isHtml = false) {
   textEl.className = "msg-text";
   if (loading) {
       textEl.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <div class="msg-loading-header">
               <span style="font-weight: 500; letter-spacing: 0.5px; opacity: 0.9;">${isHtml ? text : renderMarkdown(text || "")}</span>
               <button class="stop-btn" type="button" title="Stop Execution">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
               </button>
           </div>
-          <div class="msg-thinking-live custom-scrollbar" hidden></div>
+          <div class="msg-stream-text"></div>
           <div class="inline-exec-timeline custom-scrollbar msg-exec-live" hidden></div>
       `;
       // Wire the stop button via addEventListener (F4) instead of an inline
@@ -218,13 +216,17 @@ function finalizeAssistantMessage(msgEl, output, isError, isHtml) {
   const stopBtn = msgEl.querySelector(".stop-btn");
   if (stopBtn) stopBtn.remove();
 
-  // Capture the live trace nodes BEFORE swapping textEl.innerHTML below. They
-  // live *inside* textEl during the run, so the innerHTML swap detaches them —
-  // holding a JS reference here keeps the nodes (and their captured content)
-  // alive so we can fold them into the collapsible panels afterwards.
+  // Capture the live timeline node BEFORE swapping textEl.innerHTML below. It
+  // lives *inside* textEl during the run, so the innerHTML swap detaches it —
+  // holding a JS reference here keeps the node (and its captured content)
+  // alive so it can be folded into a collapsible panel afterwards. The live
+  // stream text (.msg-stream-text) needs no such capture: it's a preview of
+  // exactly the output about to replace it, so the swap below is the only
+  // update it needs — see 220-v2.js's streaming handler for why that's true
+  // (the buffer resets on every new generation, so what's on screen when a
+  // run finishes IS the answer, not a stale earlier attempt).
   const textEl = msgEl.querySelector(".msg-text");
   const liveTimeline = textEl ? textEl.querySelector(".inline-exec-timeline") : null;
-  const thinkingLive = textEl ? textEl.querySelector(".msg-thinking-live") : null;
 
   // Swap the loading text for the final output.
   if (textEl) {
@@ -246,13 +248,10 @@ function finalizeAssistantMessage(msgEl, output, isError, isHtml) {
   }
   msgEl.classList.remove("loading");
 
-  // Auto-hide the live trace panels now that the final answer is ready, folding
-  // each into a collapsed, re-expandable panel. Two panels sit side by side:
-  //   • "Execution Details" — the orchestration event trace (plan/route/tools/…).
-  //   • "💭 Thinking" — the live LLM token stream captured during the run (what
-  //     the model was composing). Both were shown live to keep the user engaged;
-  //     here they collapse so only the clean final answer remains, and the user
-  //     can click either chip to see it in full again.
+  // Auto-hide the execution trace now that the final answer is ready, folding
+  // it into a collapsed, re-expandable "Execution Details" panel (the
+  // orchestration event trace — plan/route/tools/…) so only the clean final
+  // answer remains by default; the user can click the chip to see it again.
   const panels = []; // { label, count|null, content }
   if (liveTimeline) {
       if (liveTimeline.children.length === 0) {
@@ -263,15 +262,6 @@ function finalizeAssistantMessage(msgEl, output, isError, isHtml) {
           panels.push({ label: "Execution Details", count: liveTimeline.children.length, content: liveTimeline });
       }
   }
-  if (thinkingLive) {
-      if ((thinkingLive.textContent || "").trim() === "") {
-          thinkingLive.remove();
-      } else {
-          thinkingLive.hidden = false;
-          panels.push({ label: "💭 Thinking", count: null, content: thinkingLive });
-      }
-  }
-
   if (panels.length && textEl && textEl.parentElement) {
       const wrap = document.createElement("div");
       wrap.className = "msg-exec-details";

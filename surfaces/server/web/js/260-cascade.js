@@ -19,7 +19,7 @@
     llm:           'var(--text-mute)',
   };
 
-  const $ = (id) => document.getElementById(id);
+  const $id = (id) => document.getElementById(id);
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => (
@@ -40,14 +40,14 @@
     });
     const total = avoided + escalated;
 
-    const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+    const set = (id, text) => { const el = $id(id); if (el) el.textContent = text; };
     set('cs-avoided', String(avoided));
     set('cs-total', String(total));
     set('cs-rate', total ? Math.round((avoided / total) * 100) + '%' : '–');
   }
 
   function renderRungs(stats) {
-    const box = $('cs-rungs');
+    const box = $id('cs-rungs');
     if (!box) return;
     if (!stats.length) {
       box.innerHTML = '<div style="color:var(--text-mute);font-size:12px;">No cascade activity recorded yet.</div>';
@@ -76,7 +76,7 @@
   }
 
   function renderLog(log) {
-    const box = $('cs-log');
+    const box = $id('cs-log');
     if (!box) return;
     if (!log.length) {
       box.innerHTML = '<div style="color:var(--text-mute);font-size:12px;">Nothing recorded yet — ask the agent something.</div>';
@@ -114,14 +114,14 @@
       renderRungs(stats);
       renderLog(data.log || []);
     } catch (e) {
-      const box = $('cs-rungs');
+      const box = $id('cs-rungs');
       if (box) box.innerHTML = `<div style="color:var(--red, #ef4444);font-size:12px;">Could not load cascade telemetry: ${esc(e.message)}</div>`;
     }
   }
 
   function init() {
-    if (!$('cs-rungs')) return false;
-    const btn = $('cs-refresh');
+    if (!$id('cs-rungs')) return false;
+    const btn = $id('cs-refresh');
     if (btn) btn.addEventListener('click', load);
     load();
     return true;
@@ -200,14 +200,8 @@
       </div>`).join("");
   }
 
-  // Ride the existing event feed rather than opening a second stream.
-  const _prevAddEvent = window.addEvent;
-  if (typeof _prevAddEvent === "function") {
-    window.addEvent = function (evt) {
-      _prevAddEvent(evt);
-      if (evt && evt.type === "consensus") {
-        try { renderConsensus(evt); } catch (e) { console.error("consensus panel:", e); }
-      }
-    };
-  }
+  // Ride the existing event bus rather than opening a second stream.
+  EventBus.on("consensus", (evt) => {
+    try { renderConsensus(evt); } catch (e) { console.error("consensus panel:", e); }
+  });
 })();

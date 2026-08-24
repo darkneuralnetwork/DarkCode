@@ -62,6 +62,16 @@
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
   --shadow-glow: 0 0 24px rgba(255,107,0,0.15);
 
+  /* Glass — moved here from a second :root block in styles.css that loaded
+     after this file and silently overrode --shadow-glow to green
+     (rgba(0,230,118,0.15)), an accident of load order rather than a design
+     choice. Kept orange: the signature accent is orange (see --accent
+     above, and the ASCII banner), and .modal (css/layout.css) is the only
+     currently visible consumer of --shadow-glow, so this file's value is
+     the one that should have always won. */
+  --glass-bg: rgba(18, 18, 18, 0.75);
+  --glass-border: rgba(255, 255, 255, 0.1);
+
   /* Transitions */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);

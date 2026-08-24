@@ -1,8 +1,8 @@
 package server
 
 import (
-	"os"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -14,37 +14,29 @@ import (
 // That is not hypothetical: file_change was emitted by every mutating tool
 // call and reached no renderer, because the list in 10-sse.js was maintained
 // by hand and had fallen behind core.EventType.
-//
-// The types are read out of core rather than restated here, so a constant
-// added there cannot make this check pass by not looking at it.
-var eventTypeDecl = regexp.MustCompile(`(?m)^\s*Event\w+\s+EventType\s*=\s*"([a-z_]+)"`)
 
-func declaredEventTypes(t *testing.T) []string {
-	t.Helper()
-	src, err := os.ReadFile("../../infra/core/orchestrator_types.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []string
-	for _, m := range eventTypeDecl.FindAllStringSubmatch(string(src), -1) {
-		out = append(out, m[1])
-	}
-	if len(out) < 15 {
-		t.Fatalf("found only %d event types; the declaration moved and this check stopped checking", len(out))
-	}
-	return out
-}
-
+// TestEveryEventTypeHasABrowserSubscription used to grep 10-sse.js for a
+// hardcoded array of quoted type names — the exact hand-maintained list that
+// let file_change go unsubscribed (see the package comment above). 10-sse.js
+// no longer hardcodes that list: it fetches it from /api/event-types
+// (06-eventtypes.js), which serves core.EventTypes (infra/core/event_meta.go)
+// — the same registry the CLI reads in-process. So the risk this test guards
+// against moved: it's no longer "did someone forget to add a type to the JS
+// list," it's "did someone reintroduce a second, hand-written list instead of
+// reading the shared one." The Go side of "does the registry itself cover
+// every declared type" is TestEventTypesCoversEveryConstant in
+// infra/core/event_meta_test.go, which independently regex-extracts the
+// declared constants from orchestrator_types.go's source rather than trusting
+// core.EventTypes itself (so a missing registry entry can't hide by also
+// being the thing doing the checking).
 func TestEveryEventTypeHasABrowserSubscription(t *testing.T) {
 	js, err := webFS.ReadFile("web/js/10-sse.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(js)
-	for _, et := range declaredEventTypes(t) {
-		if !regexp.MustCompile(`"` + et + `"`).MatchString(src) {
-			t.Errorf("the browser never subscribes to %q, so every one of those events is dropped", et)
-		}
+	if !strings.Contains(src, "getEventTypes()") {
+		t.Fatal("10-sse.js no longer reads its SSE listener types from the shared registry (getEventTypes) — a hand-written list here is exactly how file_change went unsubscribed before")
 	}
 }
 

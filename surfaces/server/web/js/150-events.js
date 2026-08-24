@@ -579,7 +579,6 @@ function attachEventListeners() {
     }
     if (activeTab === "projects") loadProjects();
   });
-  $("#learn-refresh")?.addEventListener("click", loadLearning);
   $("#audit-refresh")?.addEventListener("click", loadAudit);
   $("#status-refresh")?.addEventListener("click", loadStatus);
   $("#res-refresh")?.addEventListener("click", loadStatus);

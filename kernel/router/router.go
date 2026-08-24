@@ -37,13 +37,19 @@ type RegisteredModel struct {
 // It selects models dynamically based on task complexity and supports
 // three modes: single, escalation, and consensus.
 type Router struct {
-	mu                  sync.RWMutex
-	clients             map[core.ModelTier]core.LLMClient // one client per tier (legacy, for Route/escalation)
-	models              map[core.ModelTier]string         // model name per tier (legacy)
-	allModels           []RegisteredModel                 // ALL registered models (for consensus fan-out)
-	mode                core.RoutingMode
-	emitter             *ui.EventEmitter
-	escalationThreshold int // complexity score above which to escalate (0-10)
+	mu        sync.RWMutex
+	clients   map[core.ModelTier]core.LLMClient // one client per tier (legacy, for Route/escalation)
+	models    map[core.ModelTier]string         // model name per tier (legacy)
+	allModels []RegisteredModel                 // ALL registered models (for consensus fan-out)
+	mode      core.RoutingMode
+	emitter   *ui.EventEmitter
+	// escalationThreshold is the complexity score (0-10) above which Route's
+	// RouteEscalation mode picks the reasoning tier over the fast one. Was a
+	// second, independent magic number (7) from entryLoopComplexity (6, the
+	// same "how complex before doing more work" question the EntryEffort
+	// ladder in escalate.go answers) — defaulted to that constant below so
+	// there's one place this policy is decided, not two that could drift.
+	escalationThreshold int
 
 	// Phase 5 Multi-Model Routing Enhancements
 	classifier   *TaskClassifier
@@ -103,7 +109,7 @@ func NewRouter(mode core.RoutingMode, emitter *ui.EventEmitter) *Router {
 		models:              make(map[core.ModelTier]string),
 		mode:                mode,
 		emitter:             emitter,
-		escalationThreshold: 7,
+		escalationThreshold: entryLoopComplexity,
 		classifier:          NewTaskClassifier(),
 		roleTracker:         NewRoleTracker(),
 		roleSelector:        NewRoleSelector(),

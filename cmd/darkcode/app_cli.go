@@ -17,6 +17,16 @@ func (a *AppRunner) RunCLI() {
 	a.maybePromptEnableLocalLLM()
 	a.Emitter.SetMode(ui.OutputNone)
 	a.Server.SetGUIActive(false)
+	// Push-based semantic ingestion (memory/ingest.Auto) previously only ran
+	// for a workspace the embedded HTTP server had received a request for —
+	// a CLI-only session, which never sends itself HTTP requests, got none
+	// of it regardless of auto_ingest/background_work. a.Server already
+	// exists in CLI mode (built once in initKernelAndServer, only its
+	// listener is conditional on GUI mode), so this reuses the exact
+	// mechanism the GUI gets, keyed to the CLI's fixed cwd workspace.
+	if cwd, err := os.Getwd(); err == nil {
+		a.Server.EnsureWorkspaceIndexed(cwd)
+	}
 	if ma := a.Kernel.ModeApprover(); ma != nil {
 		ma.SetMode(permission.ModeCLI)
 	}

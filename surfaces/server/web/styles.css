@@ -524,9 +524,16 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .msg.loading .msg-text {
   background: transparent; border: none; box-shadow: none; padding: 10px 0;
   color: var(--accent-3); font-family: var(--font-mono); font-size: 13px;
-  display: flex; align-items: center; gap: 10px;
+  /* Was display:flex (row) on this whole container — with three stacked
+     children (status header, streamed answer, execution timeline) that laid
+     them out side by side instead of top to bottom. Block layout lets each
+     child's own margin do the stacking, same as it already visually reads. */
+  display: block;
 }
-.msg.loading .msg-text::after { content: ''; width: 14px; height: 14px; border: 2px solid var(--accent-3); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+.msg-loading-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+}
+.msg-loading-header::after { content: ''; width: 14px; height: 14px; border: 2px solid var(--accent-3); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
@@ -1480,12 +1487,9 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border);
 }
 
-/* Glassmorphism & Enterprise UI */
-:root {
-  --glass-bg: rgba(18, 18, 18, 0.75);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --shadow-glow: 0 0 20px rgba(0, 230, 118, 0.15);
-}
+/* Glassmorphism & Enterprise UI — --glass-bg/--glass-border/--shadow-glow
+   now live in css/theme.css's :root (the single canonical token source);
+   see that file's comment for why. */
 @keyframes slideUpFade {
   0% { opacity: 0; transform: translateY(10px); }
   100% { opacity: 1; transform: translateY(0); }
@@ -1597,34 +1601,24 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   line-height: 1.6;
 }
 .msg-exec-body > div { margin-bottom: 4px; }
-/* Row holding the "Execution Details" + "💭 Thinking" toggle chips side by
-   side under a finalized message. */
+/* Row holding the "Execution Details" toggle chip under a finalized message
+   (a second "💭 Thinking" chip sat beside it before the Stream fix folded
+   the live token preview into the answer itself — see .msg-stream-text). */
 .msg-trace-toggles {
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
 }
 
-/* Live "thinking" panel — the LLM token stream shown while the model composes
-   its answer (auto-shown during the run, folded away on completion). Mirrors
-   the execution timeline's look but tinted to read as model output, and
-   preserves newlines from the raw token stream. */
-.msg-thinking-live {
-  display: block; margin-top: 10px;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(120, 170, 255, 0.18);
-  border-radius: 8px;
-  padding: 12px;
-  /* Fixed height during the run so streaming thinking text scrolls INSIDE the
-     panel instead of growing the message and dragging the response down. */
-  height: 130px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--font-mono, 'Fira Code', monospace);
-  font-size: 11px;
-  color: var(--text-dim);
-  box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+/* The growing live answer (Stream fix) — the same LLM token stream that used
+   to go to a separate collapsed "thinking" panel now renders directly here,
+   in place, as the response is composed. Typography matches .msg-text's own
+   (non-loading) defaults so nothing visually jumps when
+   finalizeAssistantMessage swaps in the authoritative final text. */
+.msg-stream-text {
+  display: block; margin-top: 4px;
+  color: var(--text-main); font-family: var(--font-sans);
+  font-size: 15px; line-height: 1.7;
 }
-.msg-thinking-live[hidden] { display: none; }
+.msg-stream-text:empty { display: none; }
 
 /* ════════════════════════════════════════════════════════════════════════
    CONTEXT EXPLORER (Chat Sidebar)
@@ -2181,6 +2175,16 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 }
 .bp-badge.pending { background: rgba(245,158,11,.12); color: #f59e0b; border-color: rgba(245,158,11,.35); }
 
+/* Sub-tabs: the run graph (live, changes while you watch) vs the project
+   plan (a standing document). Same visual language as .cfg-tabs so a
+   sub-tab reads the same way anywhere in the app. */
+.bp-subtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.bp-subtab { padding: 8px 16px; font-size: 12px; font-weight: 700; color: var(--text-dim); cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent; transition: all 0.2s; }
+.bp-subtab.active { color: var(--accent-3); border-bottom-color: var(--accent); }
+.bp-subtab:hover { color: var(--text-main); }
+.bp-subpanel { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.bp-subpanel[hidden] { display: none; }
+
 .bp-progress-track { height: 5px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; flex-shrink: 0; }
 .bp-progress-fill {
   height: 100%; width: 0%; border-radius: 4px;
@@ -2255,15 +2259,7 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .bp-cp-label { color: var(--text-dim); overflow-wrap: anywhere; }
 
 /* the project's standing documents, secondary to the run */
-.bp-docs { border-top: 1px solid var(--border); padding-top: 12px; }
-.bp-docs-summary {
-  cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .08em; color: var(--text-dim); padding: 6px 0; user-select: none;
-}
-.bp-docs-summary:hover { color: var(--text-main); }
-.bp-docs-panel { padding: 16px; margin-top: 12px; max-height: 320px; display: flex; flex-direction: column; }
 .bp-docs-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
-.bp-docs-h3 { margin: 0; font-size: 13px; text-transform: uppercase; }
 .bp-docs-actions { display: flex; gap: 6px; align-items: center; }
 .bp-mini { padding: 4px 10px; font-size: 10px; }
 .bp-docs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 12px; }
@@ -2426,6 +2422,11 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
   overflow-wrap: anywhere;
 }
 .cfg-surface-value { color: var(--accent-3); font-family: var(--font-mono, ui-monospace, monospace); }
+.cfg-surface-toggle { display: flex; align-items: center; }
+.cfg-surface-input {
+  width: 100%; max-width: 120px; padding: 2px 6px; font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, monospace); color: var(--accent-3);
+}
 @media (max-width: 640px) {
   .cfg-surface-row { grid-template-columns: 1fr; gap: 2px; }
 }

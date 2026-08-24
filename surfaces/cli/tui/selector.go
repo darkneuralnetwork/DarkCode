@@ -89,16 +89,16 @@ func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m selectorModel) View() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0ea5e9")).MarginBottom(1)
-	searchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981"))
-	listStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#272c36")).Padding(0, 1)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).MarginBottom(1)
+	searchStyle := lipgloss.NewStyle().Foreground(colorOK)
+	listStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorMuted).Padding(0, 1)
 
 	s := titleStyle.Render("? "+m.title) + "\n"
 	s += searchStyle.Render("🔍 Filter: ") + m.filter + "\n\n"
 
 	var listContent string
 	if len(m.filtered) == 0 {
-		listContent = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")).Render("No matches found.")
+		listContent = lipgloss.NewStyle().Foreground(colorMuted).Render("No matches found.")
 	} else {
 		// Pagination (show up to 10 items)
 		start := 0
@@ -118,23 +118,23 @@ func (m selectorModel) View() string {
 		for i := start; i < end; i++ {
 			item := m.filtered[i]
 			cursor := "  "
-			itemTitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0"))
-			descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b"))
+			itemTitleStyle := lipgloss.NewStyle().Foreground(colorText)
+			descStyle := lipgloss.NewStyle().Foreground(colorMuted)
 
 			if m.cursor == i {
-				cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#0ea5e9")).Render("❯ ")
-				itemTitleStyle = itemTitleStyle.Foreground(lipgloss.Color("#0ea5e9")).Bold(true)
+				cursor = lipgloss.NewStyle().Foreground(colorAccent).Render("❯ ")
+				itemTitleStyle = itemTitleStyle.Foreground(colorAccent).Bold(true)
 			}
 
 			listContent += fmt.Sprintf("%s%s %s\n", cursor, itemTitleStyle.Render(item.Title), descStyle.Render(item.Description))
 		}
 		if len(m.filtered) > 10 {
-			listContent += lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")).Render(fmt.Sprintf("\n... %d more items", len(m.filtered)-10))
+			listContent += lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("\n... %d more items", len(m.filtered)-10))
 		}
 	}
 
 	s += listStyle.Render(listContent)
-	s += lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")).Render("\n\n(Type to filter, ↑/↓ to move, Enter to select, Esc to cancel)")
+	s += lipgloss.NewStyle().Foreground(colorMuted).Render("\n\n(Type to filter, ↑/↓ to move, Enter to select, Esc to cancel)")
 
 	return s
 }

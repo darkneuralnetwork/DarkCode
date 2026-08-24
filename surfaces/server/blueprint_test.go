@@ -9,7 +9,7 @@ import (
 )
 
 func TestNeedsPlanAmend_ColdStartAlwaysAmends(t *testing.T) {
-	if !needsPlanAmend("continue", nil, true) {
+	if !planwork.NeedsAmend("continue", nil, true) {
 		t.Error("a cold start (no STM) must always amend, even for a short message")
 	}
 }
@@ -20,7 +20,7 @@ func TestNeedsPlanAmend_ShortContinuationSkipsAmend(t *testing.T) {
 		{Role: core.RoleAssistant, Content: "done"},
 		{Role: core.RoleUser, Content: "continue"},
 	}
-	if needsPlanAmend("continue", stm, true) {
+	if planwork.NeedsAmend("continue", stm, true) {
 		t.Error("a short continuation after a real prior turn should skip the amend")
 	}
 }
@@ -31,7 +31,7 @@ func TestNeedsPlanAmend_LongInstructionAfterConversationAmends(t *testing.T) {
 		{Role: core.RoleAssistant, Content: "done"},
 		{Role: core.RoleUser, Content: "now also add rate limiting to the signup endpoint"},
 	}
-	if !needsPlanAmend("now also add rate limiting to the signup endpoint", stm, true) {
+	if !planwork.NeedsAmend("now also add rate limiting to the signup endpoint", stm, true) {
 		t.Error("a real new instruction (even mid-conversation) must trigger an amend")
 	}
 }
@@ -39,15 +39,15 @@ func TestNeedsPlanAmend_LongInstructionAfterConversationAmends(t *testing.T) {
 func TestNeedsPlanAmend_ReadOnlyQuestionSkipsAmend(t *testing.T) {
 	// A cold-start question can't change the plan → skip the 2 amend calls
 	// when SkipAuxForReadOnly is on…
-	if needsPlanAmend("what does the auth middleware do?", nil, true) {
+	if planwork.NeedsAmend("what does the auth middleware do?", nil, true) {
 		t.Error("a read-only question should skip the amend when skipReadOnly is on")
 	}
 	// …but honor it as an amend when the skip is disabled (opt-out preserved).
-	if !needsPlanAmend("what does the auth middleware do?", nil, false) {
+	if !planwork.NeedsAmend("what does the auth middleware do?", nil, false) {
 		t.Error("with skipReadOnly off, even a question should amend (no behavior change)")
 	}
 	// A concrete instruction still amends regardless of the flag.
-	if !needsPlanAmend("add a rate limiter to the login route", nil, true) {
+	if !planwork.NeedsAmend("add a rate limiter to the login route", nil, true) {
 		t.Error("a concrete instruction must always amend")
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/darkcode/memory/project"
 )
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +134,10 @@ func (s *Server) handleProjectItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sub-resource: workflow body.
+	// Sub-resource: workflow body. GET returns both the rendered markdown
+	// (unchanged shape, every existing caller keeps working) and the
+	// structured tasks (workflow.json's actual content) so a consumer can
+	// render a real task list without re-parsing markdown itself.
 	if sub == "workflow" {
 		switch r.Method {
 		case http.MethodGet:
@@ -141,7 +146,8 @@ func (s *Server) handleProjectItem(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusNotFound, err.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"id": id, "workflow": workflow})
+			wf, _ := s.projects.GetWorkflowStruct(id)
+			writeJSON(w, http.StatusOK, map[string]interface{}{"id": id, "workflow": workflow, "tasks": wf.Tasks, "notes": wf.Notes})
 		case http.MethodPut, http.MethodPost:
 			var req struct {
 				Workflow string `json:"workflow"`
@@ -158,6 +164,42 @@ func (s *Server) handleProjectItem(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "use GET or PUT")
 		}
+		return
+	}
+
+	// Sub-resource: one workflow task's status — PATCH /workflow/tasks/{taskID}.
+	// The Blueprint checkbox board used to flip a checkbox by rewriting and
+	// PUTing the whole workflow document; this targets exactly the task that
+	// changed, straight through to MarkTaskStatus's structured mutation.
+	if taskID, ok := strings.CutPrefix(sub, "workflow/tasks/"); ok && taskID != "" {
+		if r.Method != http.MethodPatch {
+			writeError(w, http.StatusMethodNotAllowed, "use PATCH")
+			return
+		}
+		var req struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		status := project.TaskStatus(req.Status)
+		switch status {
+		case project.TaskPending, project.TaskRunning, project.TaskDone:
+		default:
+			writeError(w, http.StatusBadRequest, "status must be one of: pending, running, done")
+			return
+		}
+		if err := s.projects.MarkTaskStatus(id, taskID, status); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		wf, err := s.projects.GetWorkflowStruct(id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"id": id, "ok": true, "tasks": wf.Tasks})
 		return
 	}
 

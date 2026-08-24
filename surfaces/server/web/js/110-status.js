@@ -1,39 +1,7 @@
 /* 110-status.js — extracted from app.js (lines 2305-2484) */
-// LEARNING ENGINE
-// ════════════════════════════════════════════════════════════════════════
-async function loadLearning() {
-  const grid = $("#learn-grid");
-  if (!grid) return;
-  grid.innerHTML = "<div class='mem-empty'>Loading...</div>";
-  try {
-    const res = await fetch(API + "/api/learning/stats");
-    const data = await res.json();
-    const stats = $("#learn-stats"); if (stats) stats.textContent = `${data.stats?.total_tasks || 0} Tasks / ${data.stats?.success_rate || 0}% Success`;
-    grid.innerHTML = "";
-    if (!data.strategies || !data.strategies.length) {
-      grid.innerHTML = "<div class='mem-empty'>No strategies learned yet. Run more tasks.</div>";
-      return;
-    }
-    data.strategies.forEach(s => {
-      grid.innerHTML += `
-        <div class="s-tile">
-          <div class="s-tile-label">${esc(s.task_type)} strategy</div>
-          <div style="font-size:14px; font-weight:600; margin-bottom:8px">${esc(s.name)}</div>
-          <div style="font-size:12px; color:var(--text-dim); margin-bottom:12px">${esc(s.description)}</div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:8px">
-             <span style="font-size:11px; color:var(--green)">Success: ${s.success_count}</span>
-             <span style="font-size:11px; color:var(--red)">Fail: ${s.fail_count}</span>
-          </div>
-          <div class="s-layers" style="margin-top:8px">
-            ${(s.preferred_tools || []).map(t => `<span class="s-layer" style="font-size:10px; padding:2px 6px;">${esc(t)}</span>`).join("")}
-          </div>
-        </div>`;
-    });
-  } catch(e) {
-    grid.innerHTML = `<div class="mem-empty">Failed: ${esc(e.message)}</div>`;
-  }
-}
-
+// LEARNING ENGINE — moved into 90-memory.js's Procedural tier (Knowledge's
+// Memory sub-tab); learned strategies are now fetched/cached/filtered there
+// alongside episodic and semantic recall instead of their own card.
 // ════════════════════════════════════════════════════════════════════════
 // AUDIT LOG
 // ════════════════════════════════════════════════════════════════════════
@@ -142,6 +110,22 @@ async function loadStatus() {
     }
   } catch (err) {
     c.innerHTML = `<div class="mem-empty">Failed: ${esc(err.message)}</div>`;
+  }
+}
+
+// loadCapabilities feeds Config's "System Capabilities" card (updateHardwareUI
+// below). loadStatus() used to be the only caller, gated on #status-content
+// existing — the System Telemetry page that lived on has no home in the new
+// 6-tab structure (see the Phase 9 GUI report), so this fetches
+// /api/capability directly rather than depending on that dead path.
+async function loadCapabilities() {
+  if (!$("#hw-cpu")) return;
+  try {
+    const res = await fetch(API + "/api/capability");
+    const cap = await res.json();
+    if (cap.hardware) updateHardwareUI(cap.hardware, cap.tier);
+  } catch (e) {
+    // Best-effort: the rest of Config still works without this card.
   }
 }
 

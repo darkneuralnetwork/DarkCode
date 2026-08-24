@@ -128,15 +128,9 @@
       <div class="content">
         <section class="tab-panel active fade-in" id="tab-studio" data-src="/pages/studio.html"></section>
         <section class="tab-panel fade-in" id="tab-blueprint" data-src="/pages/blueprint.html"></section>
+        <section class="tab-panel fade-in" id="tab-telemetry" data-src="/pages/telemetry.html"></section>
+        <section class="tab-panel fade-in" id="tab-knowledge" data-src="/pages/knowledge.html"></section>
         <section class="tab-panel fade-in" id="tab-projects" data-src="/pages/projects.html"></section>
-        <section class="tab-panel fade-in" id="tab-memory" data-src="/pages/memory.html"></section>
-        <section class="tab-panel fade-in" id="tab-tools" data-src="/pages/tools.html"></section>
-        <section class="tab-panel fade-in" id="tab-events" data-src="/pages/events.html"></section>
-        <section class="tab-panel fade-in" id="tab-monitoring" data-src="/pages/monitoring.html"></section>
-        <section class="tab-panel fade-in" id="tab-status" data-src="/pages/status.html"></section>
-        <section class="tab-panel fade-in" id="tab-cascade" data-src="/pages/cascade.html"></section>
-        <section class="tab-panel fade-in" id="tab-replay" data-src="/pages/replay.html"></section>
-        <section class="tab-panel fade-in" id="tab-changes" data-src="/pages/changes.html"></section>
         <section class="tab-panel fade-in" id="tab-config" data-src="/pages/config.html"></section>
       </div>
     </main>
@@ -332,35 +326,41 @@
        loader doc; the logic lives in /js/*.js. Zero build step — go:embed
        web/* embeds these verbatim. Cache-busting ?v=9 forces a reload after
        a binary rebuild (the server also sends no-store). -->
-  <script src="/js/00-core.js?v=9"></script>
-  <script src="/js/10-sse.js?v=9"></script>
-  <script src="/js/20-approvals.js?v=9"></script>
-  <script src="/js/30-tokens.js?v=9"></script>
-  <script src="/js/40-events.js?v=9"></script>
+  <script src="/js/00-core.js?v=10"></script>
+  <script src="/js/05-eventbus.js?v=1"></script>
+  <script src="/js/06-eventtypes.js?v=1"></script>
+  <script src="/js/07-modal.js?v=1"></script>
+  <script src="/js/10-sse.js?v=11"></script>
+  <script src="/js/20-approvals.js?v=10"></script>
+  <script src="/js/30-tokens.js?v=11"></script>
+  <script src="/js/40-events.js?v=11"></script>
   <script src="/js/50-chat.js?v=9"></script>
-  <script src="/js/60-filetree.js?v=9"></script>
+  <script src="/js/60-filetree.js?v=10"></script>
   <script src="/js/70-attachments.js?v=9"></script>
   <script src="/js/75-verbs.js?v=1"></script>
   <script src="/js/80-tools.js?v=9"></script>
   <script src="/js/90-memory.js?v=9"></script>
-  <script src="/js/100-projects.js?v=10"></script>
-  <script src="/js/110-status.js?v=9"></script>
+  <script src="/js/100-projects.js?v=11"></script>
+  <script src="/js/110-status.js?v=10"></script>
   <script src="/js/120-metrics.js?v=9"></script>
   <script src="/js/130-config.js?v=13"></script>
   <script src="/js/135-cfgsurface.js?v=2"></script>
-  <script src="/js/140-ui.js?v=9"></script>
+  <script src="/js/140-ui.js?v=10"></script>
   <script src="/js/150-events.js?v=11"></script>
   <script src="/js/160-widgets.js?v=9"></script>
-  <script src="/js/170-init.js?v=9"></script>
+  <script src="/js/170-init.js?v=10"></script>
   <script src="/js/180-dirpicker.js?v=9"></script>
   <script src="/js/190-model-fetch.js?v=9"></script>
-  <script src="/js/220-v2.js?v=9"></script>
+  <script src="/js/220-v2.js?v=10"></script>
   <script src="/js/230-tail.js?v=9"></script>
   <script src="/js/240-replay.js?v=9"></script>
   <script src="/js/250-changes.js?v=9"></script>
-  <script src="/js/260-cascade.js?v=9"></script>
+  <script src="/js/260-cascade.js?v=10"></script>
   <script src="/js/270-blueprint.js?v=9"></script>
-  <script src="/js/280-reqlog.js?v=9"></script>
+  <script src="/js/271-blueprint-subtabs.js?v=2"></script>
+  <script src="/js/272-telemetry-subtabs.js?v=1"></script>
+  <script src="/js/273-knowledge-subtabs.js?v=1"></script>
+  <script src="/js/274-projects-subtabs.js?v=1"></script>
   <script src="/js/290-plugins.js?v=9"></script>
   <script src="/app.js?v=9"></script>
 </body>

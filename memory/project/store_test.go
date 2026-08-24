@@ -1,6 +1,7 @@
 package project
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -104,6 +105,75 @@ func TestMarkTaskStatus_UnknownTaskIDIsNoop(t *testing.T) {
 	got, _ := s.GetWorkflow(p.ID)
 	if got != original {
 		t.Errorf("workflow changed on unknown task ID: got %q, want unchanged %q", got, original)
+	}
+}
+
+// TestWorkflowMigration_ParsesLegacyMarkdownIntoStructAndPersistsIt is the
+// migration regression test: a project that only has workflow.md (written
+// before workflow.json existed) must read back as the equivalent structured
+// tasks, and that structure must be persisted so migration runs exactly
+// once, not on every read.
+func TestWorkflowMigration_ParsesLegacyMarkdownIntoStructAndPersistsIt(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.Create("demo", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "# Workflow Architecture\n\n_Status: in progress_\n\n## Tasks\n- [x] T1: set up schema\n- [/] T2: build the endpoint\n- [ ] T3: write tests\n"
+	if err := os.WriteFile(s.workflowPath(p.ID), []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	wf, err := s.GetWorkflowStruct(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []WorkflowTask{
+		{ID: "T1", Title: "set up schema", Status: TaskDone},
+		{ID: "T2", Title: "build the endpoint", Status: TaskRunning},
+		{ID: "T3", Title: "write tests", Status: TaskPending},
+	}
+	if len(wf.Tasks) != len(want) {
+		t.Fatalf("got %d tasks, want %d: %+v", len(wf.Tasks), len(want), wf.Tasks)
+	}
+	for i, task := range wf.Tasks {
+		if task.ID != want[i].ID || task.Title != want[i].Title || task.Status != want[i].Status {
+			t.Errorf("task %d: got %+v, want %+v", i, task, want[i])
+		}
+	}
+	if !strings.Contains(wf.Notes, "# Workflow Architecture") || !strings.Contains(wf.Notes, "_Status: in progress_") {
+		t.Errorf("migration dropped notes prose: %q", wf.Notes)
+	}
+
+	if _, err := os.Stat(s.workflowJSONPath(p.ID)); err != nil {
+		t.Errorf("migration did not persist workflow.json: %v", err)
+	}
+
+	// MarkTaskStatus must now operate on the migrated struct directly, with
+	// no further markdown round-trip.
+	if err := s.MarkTaskStatus(p.ID, "T3", TaskDone); err != nil {
+		t.Fatal(err)
+	}
+	wf2, err := s.GetWorkflowStruct(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range wf2.Tasks {
+		if task.ID == "T3" && task.Status != TaskDone {
+			t.Errorf("T3 not marked done after migration: %+v", task)
+		}
+	}
+}
+
+func TestParseRenderWorkflowMarkdown_RoundTripsTaskFields(t *testing.T) {
+	md := "- [ ] T1: do the first thing\n- [x] T2: do the second thing\n- [/] T3: do the third thing\n"
+	wf := ParseWorkflowMarkdown(md)
+	if len(wf.Tasks) != 3 {
+		t.Fatalf("got %d tasks, want 3: %+v", len(wf.Tasks), wf.Tasks)
+	}
+	rendered := RenderWorkflowMarkdown(wf)
+	if rendered != md {
+		t.Errorf("round trip not exact:\ngot:  %q\nwant: %q", rendered, md)
 	}
 }
 

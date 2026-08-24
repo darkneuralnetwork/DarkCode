@@ -331,16 +331,26 @@ func (s *Store) GetPlanGraph(id string) ([]byte, error) {
 	return os.ReadFile(s.graphPath(id))
 }
 
+// GetWorkflow returns the workflow as markdown, rendered from the structured
+// store (workflow.json), migrating a legacy workflow.md project on first
+// read. Takes the full lock, not RLock, because that migration can write.
 func (s *Store) GetWorkflow(id string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.loadWorkflowLocked(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wf, err := s.loadWorkflowStructLocked(id)
+	if err != nil {
+		return "", err
+	}
+	return RenderWorkflowMarkdown(wf), nil
 }
 
+// SetWorkflow parses markdown into the structured model and persists that —
+// workflow.json is the canonical store from here on, workflow.md is read
+// only as a one-time migration source for projects that predate it.
 func (s *Store) SetWorkflow(id, workflow string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return os.WriteFile(s.workflowPath(id), []byte(workflow), 0644)
+	return s.saveWorkflowStructLocked(id, ParseWorkflowMarkdown(workflow))
 }
 
 // TaskStatus is a workflow checklist task's state — the local-first upgrade
@@ -363,40 +373,153 @@ const (
 // the checkbox character and leave everything else byte-for-byte identical.
 var taskLineRe = regexp.MustCompile(`^(\s*-\s*)\[([ x/])\](\s*)([A-Za-z0-9_-]+):(.*)$`)
 
-// MarkTaskStatus flips the checkbox marker for the workflow line whose task
-// ID matches taskID (exact match, e.g. "T3") and persists the change. A
-// no-op (returns nil, not an error) if the workflow has no line for that ID
-// — callers resolving a task ID from a possibly-stale workflow snapshot
-// shouldn't treat a miss as a failure, just nothing to update.
-func (s *Store) MarkTaskStatus(id, taskID string, status TaskStatus) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	workflow, err := s.loadWorkflowLocked(id)
+// WorkflowTask is one task in a project's standing workflow checklist — the
+// structured counterpart of a "- [ ] T1: ..." line. ID is shared with the
+// implementation plan's Mermaid graph node IDs (see
+// server.injectNodeStatus / planwork.InjectNodeStatus), so status here
+// drives the architecture diagram's coloring too.
+type WorkflowTask struct {
+	ID     string     `json:"id"`
+	Title  string     `json:"title"`
+	Status TaskStatus `json:"status"`
+	Deps   []string   `json:"deps,omitempty"`
+}
+
+// Workflow is a project's task checklist as data rather than markdown text.
+// Notes holds every line of the source markdown that isn't a checklist item
+// (headings, "_Status: ..._" lines, free prose) so migrating an existing
+// workflow.md never drops content — it just stops being interleaved with the
+// tasks. Rendered back out, Notes comes first and the tasks follow, so a
+// workflow that had prose after its checklist will read differently after
+// migration even though nothing was deleted.
+type Workflow struct {
+	Tasks []WorkflowTask `json:"tasks"`
+	Notes string         `json:"notes,omitempty"`
+}
+
+// ParseWorkflowMarkdown is the markdown→struct half of the workflow model.
+// It is also the one-time migration path for a project whose workflow still
+// lives only as workflow.md: reusing taskLineRe (the same pattern
+// MarkTaskStatus always rewrote by hand) means a workflow written before this
+// type existed parses exactly as it always behaved.
+func ParseWorkflowMarkdown(md string) Workflow {
+	var wf Workflow
+	var notes []string
+	for _, line := range strings.Split(md, "\n") {
+		m := taskLineRe.FindStringSubmatch(line)
+		if m == nil {
+			notes = append(notes, line)
+			continue
+		}
+		status := TaskPending
+		switch m[2] {
+		case "x":
+			status = TaskDone
+		case "/":
+			status = TaskRunning
+		}
+		wf.Tasks = append(wf.Tasks, WorkflowTask{ID: m[4], Title: strings.TrimSpace(m[5]), Status: status})
+	}
+	wf.Notes = strings.Join(notes, "\n")
+	return wf
+}
+
+// RenderWorkflowMarkdown is the struct→markdown half, used both to answer
+// every caller that still wants workflow text (GetWorkflow, the CLI's
+// /workflow, planwork.Amend's prompt) and to re-feed Amend's own markdown
+// response back through ParseWorkflowMarkdown before it is persisted.
+func RenderWorkflowMarkdown(wf Workflow) string {
+	var b strings.Builder
+	notes := strings.TrimRight(wf.Notes, "\n")
+	if notes != "" {
+		b.WriteString(notes)
+		b.WriteString("\n")
+		if len(wf.Tasks) > 0 {
+			b.WriteString("\n")
+		}
+	}
+	for _, t := range wf.Tasks {
+		mark := " "
+		switch t.Status {
+		case TaskDone:
+			mark = "x"
+		case TaskRunning:
+			mark = "/"
+		}
+		b.WriteString("- [" + mark + "] " + t.ID + ": " + t.Title + "\n")
+	}
+	return b.String()
+}
+
+// loadWorkflowStructLocked loads the structured workflow, migrating from the
+// legacy workflow.md checklist (parsed, then persisted as workflow.json) the
+// first time a project without one is read. Migration only ever runs once
+// per project: every later read hits workflow.json directly.
+func (s *Store) loadWorkflowStructLocked(id string) (Workflow, error) {
+	data, err := os.ReadFile(s.workflowJSONPath(id))
+	if err == nil {
+		var wf Workflow
+		if json.Unmarshal(data, &wf) == nil {
+			return wf, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return Workflow{}, err
+	}
+
+	md, err := s.loadWorkflowLocked(id)
+	if err != nil {
+		return Workflow{}, err
+	}
+	wf := ParseWorkflowMarkdown(md)
+	if md != "" {
+		if data, merr := json.MarshalIndent(wf, "", "  "); merr == nil {
+			_ = os.WriteFile(s.workflowJSONPath(id), data, 0644)
+		}
+	}
+	return wf, nil
+}
+
+func (s *Store) saveWorkflowStructLocked(id string, wf Workflow) error {
+	data, err := json.MarshalIndent(wf, "", "  ")
 	if err != nil {
 		return err
 	}
-	mark := " "
-	switch status {
-	case TaskDone:
-		mark = "x"
-	case TaskRunning:
-		mark = "/"
+	return os.WriteFile(s.workflowJSONPath(id), data, 0644)
+}
+
+// GetWorkflowStruct is the structured counterpart of GetWorkflow — for
+// callers (the GUI's workflow endpoint) that want the task list as data
+// rather than a markdown document to re-parse.
+func (s *Store) GetWorkflowStruct(id string) (Workflow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadWorkflowStructLocked(id)
+}
+
+// MarkTaskStatus sets the status of the workflow task whose ID matches
+// taskID (exact match, e.g. "T3") and persists the change. A no-op (returns
+// nil, not an error) if the workflow has no task with that ID — callers
+// resolving a task ID from a possibly-stale workflow snapshot shouldn't
+// treat a miss as a failure, just nothing to update.
+func (s *Store) MarkTaskStatus(id, taskID string, status TaskStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wf, err := s.loadWorkflowStructLocked(id)
+	if err != nil {
+		return err
 	}
-	lines := strings.Split(workflow, "\n")
 	changed := false
-	for i, line := range lines {
-		m := taskLineRe.FindStringSubmatch(line)
-		if m == nil || m[4] != taskID {
-			continue
+	for i := range wf.Tasks {
+		if wf.Tasks[i].ID == taskID {
+			wf.Tasks[i].Status = status
+			changed = true
+			break
 		}
-		lines[i] = m[1] + "[" + mark + "]" + m[3] + m[4] + ":" + m[5]
-		changed = true
-		break
 	}
 	if !changed {
 		return nil
 	}
-	return os.WriteFile(s.workflowPath(id), []byte(strings.Join(lines, "\n")), 0644)
+	return s.saveWorkflowStructLocked(id, wf)
 }
 
 // EnsurePlanSeeded writes a skeleton plan for the project only if no plan
@@ -425,14 +548,14 @@ func (s *Store) EnsurePlanSeeded(id, skeleton string) (string, error) {
 func (s *Store) EnsureWorkflowSeeded(id, skeleton string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	existing, err := s.loadWorkflowLocked(id)
-	if err == nil && strings.TrimSpace(existing) != "" {
-		return existing, nil
+	existing, err := s.loadWorkflowStructLocked(id)
+	if err == nil && strings.TrimSpace(RenderWorkflowMarkdown(existing)) != "" {
+		return RenderWorkflowMarkdown(existing), nil
 	}
 	if strings.TrimSpace(skeleton) == "" {
 		skeleton = defaultWorkflowSkeleton
 	}
-	if err := os.WriteFile(s.workflowPath(id), []byte(skeleton), 0644); err != nil {
+	if err := s.saveWorkflowStructLocked(id, ParseWorkflowMarkdown(skeleton)); err != nil {
 		return "", err
 	}
 	return skeleton, nil
@@ -530,8 +653,11 @@ func (s *Store) contextPath(id string) string    { return filepath.Join(s.dir(id
 func (s *Store) rawContextPath(id string) string { return filepath.Join(s.dir(id), "context_raw.md") }
 func (s *Store) planPath(id string) string       { return filepath.Join(s.dir(id), "plan.md") }
 func (s *Store) workflowPath(id string) string   { return filepath.Join(s.dir(id), "workflow.md") }
-func (s *Store) graphPath(id string) string      { return filepath.Join(s.dir(id), "graph.json") }
-func (s *Store) summaryPath(id string) string    { return filepath.Join(s.dir(id), "summary.md") }
+func (s *Store) workflowJSONPath(id string) string {
+	return filepath.Join(s.dir(id), "workflow.json")
+}
+func (s *Store) graphPath(id string) string   { return filepath.Join(s.dir(id), "graph.json") }
+func (s *Store) summaryPath(id string) string { return filepath.Join(s.dir(id), "summary.md") }
 
 func (s *Store) saveMetaLocked(p *Project) error {
 	// Never persist the large bodies inside project.json — they live in their

@@ -6,9 +6,10 @@ async function cancelChatExecution() {
         if (typeof closeApprovalPopup === "function") {
             closeApprovalPopup("cancelled");
         }
-        if (window.currentStreamingMsgEl) {
-            window.currentStreamingMsgEl.classList.remove("loading");
-            const stopBtn = window.currentStreamingMsgEl.querySelector(".stop-btn");
+        const loadingMsg = document.querySelector(".msg.loading");
+        if (loadingMsg) {
+            loadingMsg.classList.remove("loading");
+            const stopBtn = loadingMsg.querySelector(".stop-btn");
             if (stopBtn) stopBtn.remove();
         }
     } catch (err) {

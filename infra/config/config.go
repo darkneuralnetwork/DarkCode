@@ -156,6 +156,22 @@ type Config struct {
 	// for advice nobody asked for.
 	Reviewer bool `json:"reviewer,omitempty"`
 
+	// EnableSelfCritique runs one extra, cheap (auxiliary-tier) check on the
+	// ReAct loop's own answer, but only for the case Reviewer does not cover:
+	// work with nothing machine-checkable to prove it, where the loop's only
+	// completion signal is a single DONE/CONTINUE marker. A failing critique
+	// gates completion and feeds back through the normal correction path,
+	// unlike Reviewer's advisory-only pass — see kernel/loop's
+	// evaluateCritique for the full reasoning.
+	//
+	// Off by default and deliberately so, not just for cost: the mechanism
+	// is built and tested with a scripted client, but whether it actually
+	// raises pass rate (as opposed to just adding a call) has not been
+	// measured against a live model — that measurement is what
+	// `make eval-agent` (kernel/eval/agent) exists for. Flip this on once
+	// that comparison shows a real gain, not before.
+	EnableSelfCritique bool `json:"enable_self_critique,omitempty"`
+
 	// BackgroundWork is the one preference the three fields above were asking
 	// separately: "off", "light" (keep indexes current) or "full" (also run the
 	// health daemon). Empty means infer it from health_daemon/auto_ingest, so

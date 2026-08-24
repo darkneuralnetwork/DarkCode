@@ -31,6 +31,10 @@ test-race: ## Run tests with the race detector
 eval: ## Print the retrieval scorecard (offline; no model calls, no keys)
 	$(GO) test ./kernel/eval/ -run TestRetrievalScorecard -v 2>&1 | sed -n '/corpus:/,/^--- /p'
 
+.PHONY: eval-agent
+eval-agent: ## Print the agent-trajectory scorecard (LIVE — real model calls, real cost). Needs DARKCODE_BASE_URL/DARKCODE_MODEL/DARKCODE_API_KEY.
+	DARKCODE_EVAL_AGENT_LIVE=1 $(GO) test ./kernel/eval/agent/ -run TestEvalAgentLive -v -timeout 10m 2>&1 | sed -n '/corpus:/,/^--- /p'
+
 .PHONY: cover
 cover: ## Run tests and write a coverage profile
 	$(GO) test -coverprofile=coverage.out $(PKGS)

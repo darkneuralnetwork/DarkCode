@@ -24,6 +24,13 @@ func (k *Kernel) executePlannedGraph(ctx context.Context, g *plan.Graph, recallB
 		k.emitter.EmitDAGUpdate(d.Summary())
 	}
 
+	// Captured before any node runs, so repairFailedAcceptance has a
+	// known-good point to auto-revert to if repair doesn't fix a failing
+	// acceptance check. One snapshot per graph, not per node: acceptance is
+	// verified across the whole graph (verifyContract), so "before" means
+	// before the graph started, not before whichever node happened to fail.
+	preCheckpointID, hasPreCheckpoint := k.snapshotBeforeGraph("before executing: " + goal)
+
 	results, err := k.executeDAG(ctx, d, goal)
 
 	// Sync execution state back into the graph and retain it for the server
@@ -90,7 +97,7 @@ func (k *Kernel) executePlannedGraph(ctx context.Context, g *plan.Graph, recallB
 	// on that — it reported a failing test suite and returned anyway. The loop
 	// could iterate but had no target; the DAG had a target but could not
 	// iterate. Handing a failed check to the loop closes both halves.
-	merged = k.repairFailedAcceptance(ctx, g, merged)
+	merged = k.repairFailedAcceptance(ctx, g, merged, preCheckpointID, hasPreCheckpoint)
 
 	// Store episodic memory, record learning feedback + audit + knowledge
 	// graph; skill extraction folds in via minSkillSuccess=2.

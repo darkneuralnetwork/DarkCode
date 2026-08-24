@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/darkcode/internal/strutil"
@@ -80,9 +81,15 @@ const maxCorrections = 8
 // that is simply unreachable would otherwise spin here forever.
 const maxEvalFailures = 2
 
-// loopHistoryBudgetTokens bounds how much prior conversation (from the
-// caller's STM) is folded into a Run() call, ranking by relevance to the
-// goal and trimming to this budget (memory/ctxengine's Engine.Assemble) when
+// fallbackHistoryBudgetTokens is what historyBudgetTokens falls back to when
+// the sizing route below fails (no model registered yet, etc.) — the same
+// package-default-window value this budget used unconditionally before it
+// became per-call. Kept only as a last resort, not the primary source.
+var fallbackHistoryBudgetTokens = ctxfit.UsableBudget(ctxfit.DefaultContextWindow, 0)
+
+// historyBudgetTokens bounds how much prior conversation (from the caller's
+// STM) is folded into a Run() call, ranking by relevance to the goal and
+// trimming to this budget (memory/ctxengine's Engine.Assemble) when
 // exceeded. This is what gives the loop real conversation continuity
 // (local-first upgrade §7 Fix C): previously every Run() started a brand-new
 // 2-message conversation with zero memory of what it was doing, so a
@@ -91,24 +98,32 @@ const maxEvalFailures = 2
 // This is an outer safety net against handing an unbounded slice around
 // before the real fit runs, not the primary truncation — that happens per
 // iteration, per the actual selected model's real window, inside
-// l.models.Complete via ctxfit.FitClient (modelport/modelport.go). No client
-// is routed yet at Run() start (routing happens per-call, inside the model
-// manager), so this can't ask a real model for its window either.
+// l.models.Complete via ctxfit.FitClient (modelport/modelport.go).
 //
-// Uses ctxfit.UsableBudget against the package default window rather than a
-// bare token guess: budgeting against a RAW window (this used to be a flat
-// 100000, about the byte budget it replaced — 400000 bytes ≈ 100000 tokens —
-// with no reserve subtracted) routinely computes room Assemble's own trim
-// never needs to use, so FitClient ends up doing ALL the real trimming
-// itself by recency once the real model is known, silently discarding
-// whatever relevance-based selection Assemble made (see
-// infra/ctxfit.UsableBudget's comment — this was a real, found bug, not
-// hypothetical). This is still an approximation for a genuinely small-window
-// model (a local model well under DefaultContextWindow): FitClient's
-// per-iteration backstop is what actually protects that case, same as
-// always — this just stops the common case from defeating Assemble for no
-// reason.
-var loopHistoryBudgetTokens = ctxfit.UsableBudget(ctxfit.DefaultContextWindow, 0)
+// Uses ctxfit.UsableBudget against the model this run will actually route to
+// for its acting turns (PurposeExecute → ModelTierCoding, same tier
+// kernel_helpers.go's general mode routes to before its own Assemble call —
+// see that file's comment for why UsableBudget, not the raw window, is the
+// right input: budgeting against a RAW window routinely computes room
+// Assemble's own trim never needs to use, so FitClient ends up doing ALL the
+// real trimming itself by recency once the real model is known, silently
+// discarding whatever relevance-based selection Assemble made).
+//
+// This used to be a package-level var sized against a fixed 128K default,
+// computed once at init and never revisited — a 32K-context model and a
+// 200K-context model got the identical history budget, and FitClient's
+// per-iteration backstop silently absorbed the gap by shedding whatever
+// Assemble's ranking had kept. Route() is a pure, side-effect-free tier
+// lookup (kernel/router.Router.Route — no network call, no rotation state
+// mutated), so calling it here purely to learn the window, then again for
+// real per-iteration inside l.models.Complete, costs nothing.
+func historyBudgetTokens(rtr core.ModelRouter, complexity int, goal string) int {
+	client, _, err := rtr.Route(core.ModelTierCoding, complexity, goal)
+	if err != nil || client == nil {
+		return fallbackHistoryBudgetTokens
+	}
+	return ctxfit.UsableBudget(client.ModelInfo().Context, 0)
+}
 
 // ReActLoop is the agentic execution loop. It is constructed once by the
 // orchestrator kernel and re-used per Execute call when AgenticLoop is on.
@@ -142,7 +157,7 @@ type ReActLoop struct {
 	// task could fail outright on iteration 2 with no recovery attempted.
 	errMgr agents.ErrorHandler
 	// engine assembles the prior-STM history folded into a fresh Run() call:
-	// dedup, rank by relevance to the goal, trim to loopHistoryBudgetTokens,
+	// dedup, rank by relevance to the goal, trim to historyBudgetTokens(...),
 	// restored to chronological order. Never used on the loop's own growing
 	// per-iteration message list — see Assemble's doc comment for why. Only
 	// consulted when useContextEngine is set.
@@ -154,6 +169,13 @@ type ReActLoop struct {
 	// Run() falls back to a plain, unranked, untrimmed system+history append
 	// (still bounded at the wire by ctxfit.FitClient inside CompleteWith).
 	useContextEngine bool
+	// selfCritiqueEnabled gates evaluateCritique — see its doc comment and
+	// SetSelfCritique for why this defaults off. atomic.Bool (not a plain
+	// bool like useContextEngine) because, unlike UseCtxEngine, this one is
+	// hot-toggleable from a running server (mirrors Kernel.reviewerOn's
+	// runtime-toggle contract) while Run() may already be reading it in
+	// another goroutine.
+	selfCritiqueEnabled atomic.Bool
 }
 
 // New creates a ReAct loop wired to the model router, tool registry, and event
@@ -190,6 +212,17 @@ func (l *ReActLoop) SetContextEngine(e *ctxengine.Engine) {
 // useContextEngine field comment.
 func (l *ReActLoop) SetUseContextEngine(on bool) { l.useContextEngine = on }
 
+// SetSelfCritique turns evaluateCritique's extra completion check on or off.
+// Off by default (matches Config.EnableSelfCritique's default, read once in
+// orchestrator.New — same one-source-of-truth pattern as UseCtxEngine and
+// Reviewer): it is an extra model call on the one class of task that already
+// has no machine-checkable proof of completion, and the research reviewer.go
+// already cites — intrinsic self-critique does not reliably improve
+// reasoning — applies here too. It stays off until kernel/eval/agent shows a
+// measured pass-rate gain on non-machine-checkable tasks that justifies the
+// per-task cost; see Config.EnableSelfCritique's comment.
+func (l *ReActLoop) SetSelfCritique(on bool) { l.selfCritiqueEnabled.Store(on) }
+
 // SetErrorHandler overrides the default error handler (agents.ErrorManager).
 // Exposed mainly for tests; production callers get the default via New.
 func (l *ReActLoop) SetErrorHandler(h agents.ErrorHandler) {
@@ -222,6 +255,11 @@ func (l *ReActLoop) SetRepoRules(rules string) { l.repoRules = rules }
 // the loop the kernel already holds, so a reordering that built the loop later
 // would silently leave the cap as a once-per-request gate.
 func (l *ReActLoop) BudgetCheckInstalled() bool { return l.budget != nil }
+
+// SelfCritiqueEnabled reports whether evaluateCritique will run. Exported
+// for the orchestrator's wiring test (Kernel.SetSelfCritique reaches this
+// loop) — see SetSelfCritique.
+func (l *ReActLoop) SelfCritiqueEnabled() bool { return l.selfCritiqueEnabled.Load() }
 
 // SetMaxLoops updates the iteration ceiling at runtime (hot config from UI).
 func (l *ReActLoop) SetMaxLoops(n int) {
@@ -279,7 +317,7 @@ type Result struct {
 // contract is enforceable the loop stops on evidence rather than on the model's
 // opinion of its own work; see contract.go.
 func (l *ReActLoop) RunWithContract(ctx context.Context, goal string, history []core.Message, contract *Contract) (*Result, error) {
-	return l.run(ctx, goal, history, contract)
+	return l.run(ctx, goal, history, contract, nil)
 }
 
 // Run executes the Sense-Think-Act loop for the given goal and returns the
@@ -288,14 +326,30 @@ func (l *ReActLoop) RunWithContract(ctx context.Context, goal string, history []
 // task, non-empty when this is a follow-up (e.g. "continue") so the loop
 // knows what it was doing rather than starting from zero every time (local-
 // first upgrade §7 Fix C). Assembled via l.engine (dedup, rank by relevance
-// to goal, trim to loopHistoryBudgetTokens, restored to chronological
+// to goal, trim to historyBudgetTokens(...), restored to chronological
 // order), so a long conversation can't blow out the context window on every
 // single loop turn.
 func (l *ReActLoop) Run(ctx context.Context, goal string, history []core.Message) (*Result, error) {
-	return l.run(ctx, goal, history, nil)
+	return l.run(ctx, goal, history, nil, nil)
 }
 
-func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message, contract *Contract) (*Result, error) {
+// RunWithInjections is RunWithContract plus caller-supplied context (a
+// recall block, a project's plan/workflow directive) that should compete for
+// Assemble's real budget alongside history instead of being unconditionally
+// baked into goal. goal should be the bare user ask — see
+// ctxengine.AssembleRequest.Injections's doc comment for why this matters:
+// a goal pre-concatenated with several KB of directive text both shrinks the
+// budget available to history (its size is reserved via Assemble's own
+// queryTokens accounting) and is itself immune to trimming once appended as
+// the final message (ctxfit.FitToWindow treats the trailing exchange as
+// protected). Passing that content as Injections instead lets it lose to
+// higher-relevance history when it doesn't fit, the same as any other
+// context source.
+func (l *ReActLoop) RunWithInjections(ctx context.Context, goal string, history []core.Message, contract *Contract, injections []core.Message) (*Result, error) {
+	return l.run(ctx, goal, history, contract, injections)
+}
+
+func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message, contract *Contract, injections []core.Message) (*Result, error) {
 	ctx, span := observability.StartSpan(ctx, "agentic-loop")
 	defer span.End()
 
@@ -308,7 +362,9 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	complexity := router.AssessComplexity(goal)
 
 	// Assemble the initial conversation: a ReAct system prompt + prior
-	// history (if any, continuity) + the goal.
+	// history (if any, continuity) + caller-supplied injections (recall,
+	// project plan/workflow — ranked/budgeted alongside history rather than
+	// baked into goal, see RunWithInjections) + the goal.
 	systemPrompt := l.systemPrompt() + contract.brief()
 	var messages []core.Message
 	if l.useContextEngine {
@@ -316,7 +372,8 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 			Query:           goal,
 			Conversation:    history,
 			SystemPrompt:    systemPrompt,
-			AvailableTokens: loopHistoryBudgetTokens,
+			Injections:      injections,
+			AvailableTokens: historyBudgetTokens(l.router, complexity, goal),
 		})
 		if err == nil && window != nil {
 			messages = window.Messages
@@ -325,11 +382,12 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 	if messages == nil {
 		// useContextEngine is off, or Assemble had no production error path
 		// today but errored anyway — either way, never block a loop run on
-		// it: fall back to the prior conversation unranked, untrimmed rather
-		// than empty (ctxfit.FitClient inside CompleteWith still bounds this
-		// at the wire).
+		// it: fall back to the prior conversation + injections unranked,
+		// untrimmed rather than empty (ctxfit.FitClient inside CompleteWith
+		// still bounds this at the wire).
 		messages = append(messages, core.Message{Role: core.RoleSystem, Content: systemPrompt})
 		messages = append(messages, history...)
+		messages = append(messages, injections...)
 	}
 	messages = append(messages, core.Message{Role: core.RoleUser, Content: goal})
 
@@ -530,6 +588,10 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 			// because the budget ran out, or the checker was unreachable — is
 			// returned to the user but NOT written to memory as a success.
 			completionVerified := false
+			// weaklyVerified marks completion decided by evaluateGoalCompletion's
+			// binary marker rather than a machine-checkable contract — the exact
+			// case evaluateCritique exists to double-check. See its use below.
+			weaklyVerified := false
 
 			// ── ACCEPTANCE GATE ──────────────────────────────────────────
 			// When the caller supplied an enforceable contract, completion is
@@ -625,11 +687,39 @@ func (l *ReActLoop) run(ctx context.Context, goal string, history []core.Message
 					continue // loop back and keep working
 				case ran && done:
 					completionVerified = true
+					weaklyVerified = true
 				}
 				// The remaining case — the check could not run and its budget
 				// is spent — deliberately leaves completionVerified false.
 				// The user still gets the answer; memory does not get to
 				// treat it as a confirmed success.
+			}
+
+			// ── SELF-CRITIQUE (opt-in) ────────────────────────────────────
+			// Only on the case evaluateGoalCompletion's marker just decided —
+			// never on acceptance-proven work (reviewer.go already covers
+			// that, advisory-only) and never on the read-only shortcut above
+			// (nothing changed, so nothing for a rubric to check). See
+			// evaluateCritique's doc comment for why a FAIL gates here while
+			// reviewer.go's never does.
+			if l.selfCritiqueEnabled.Load() && weaklyVerified && corrections < maxCorrections {
+				pass, feedback, ran := l.evaluateCritique(ctx, goal, final)
+				if ran && !pass {
+					corrections++
+					messages = append(messages, core.Message{
+						Role: nudgeRole,
+						Content: "Self-critique found a gap: " + feedback +
+							"\nAddress this before giving a final answer.",
+					})
+					if l.emitter != nil {
+						l.emitter.EmitTaskUpdate("agentic-loop", "critique",
+							"Self-critique found a gap: "+feedback)
+					}
+					continue // loop back and address it
+				}
+				if ran && l.emitter != nil {
+					l.emitter.EmitTaskUpdate("agentic-loop", "critique", "Self-critique passed")
+				}
 			}
 
 			if l.emitter != nil {
@@ -829,6 +919,68 @@ func (l *ReActLoop) evaluateGoalCompletion(ctx context.Context, goal, final stri
 	// prefix (e.g. the model ignored the format). The check RAN, so this is
 	// evidence, not a failure — and guessing at free-form prose is worse than
 	// taking the answer at face value.
+	return true, "", true
+}
+
+// critiquePassMarker / critiquePrefix — same fixed-prefix design as
+// selfEvalDoneMarker/selfEvalContinuePrefix, for the same reason: a short,
+// parseable line beats free-form prose.
+const (
+	critiquePassMarker = "CRITIQUE: PASS"
+	critiquePrefix     = "CRITIQUE: FAIL"
+)
+
+// evaluateCritique is a second, more skeptical check on top of
+// evaluateGoalCompletion's DONE/CONTINUE marker — run only when
+// SetSelfCritique(true) and only on the case that check exists for: an
+// answer with nothing machine-checkable to prove it (no enforceable
+// contract, or evaluateGoalCompletion already said DONE). It asks the model
+// to derive 2-3 concrete pass/fail criteria from the goal itself and check
+// the answer against them in the same call, rather than a separate
+// rubric-generation call — this is meant to be cheap (PurposeCritique routes
+// to the auxiliary ladder), not a second full review.
+//
+// It is deliberately narrower than reviewer.go's post-acceptance review:
+// that one runs on PROVEN work and can never fail a run (advisory only).
+// This one runs on UNPROVEN work and a FAIL does gate — it feeds back
+// through the same correction path evaluateGoalCompletion's CONTINUE does,
+// consuming the same correction budget — because the whole point is that
+// evaluateGoalCompletion's binary marker is a weak signal for this class of
+// task, and a rubric-checked answer is the stronger one Phase 6 exists for.
+//
+// Fails OPEN like evaluateGoalCompletion: ran=false (transport error, empty
+// response) is not evidence the work is wrong, so the caller treats it as
+// "nothing to add" rather than blocking completion on an unreachable model.
+func (l *ReActLoop) evaluateCritique(ctx context.Context, goal, final string) (pass bool, feedback string, ran bool) {
+	temp := 0.2
+	ans, err := l.models.Complete(ctx, modelport.Ask{
+		Purpose: modelport.PurposeCritique,
+		Goal:    goal,
+		Messages: []core.Message{
+			{Role: core.RoleSystem, Content: "You are a skeptical reviewer checking one answer before it ships. " +
+				"First, silently derive 2-3 concrete criteria the goal implies (what a correct answer must actually " +
+				"contain or do — not vague quality talk). Then check the answer against each. Respond with EXACTLY " +
+				"one line: \"" + critiquePassMarker + "\" if every criterion is met, or \"" + critiquePrefix +
+				": <the single most important thing missing or wrong>\" if not. No other text."},
+			{Role: core.RoleUser, Content: fmt.Sprintf("GOAL: %s\n\nANSWER:\n%s", goal, final)},
+		},
+		MaxTokens:   200,
+		Temperature: &temp,
+	})
+	if err != nil {
+		return true, "", false
+	}
+	line := strings.TrimSpace(ans.Text)
+	if strings.HasPrefix(line, critiquePrefix) {
+		feedback = strings.TrimSpace(strings.TrimPrefix(line, critiquePrefix))
+		feedback = strings.TrimSpace(strings.TrimPrefix(feedback, ":"))
+		if feedback == "" {
+			feedback = "the critique did not give a specific reason"
+		}
+		return false, feedback, true
+	}
+	// The PASS marker, or unparseable content — same "the check ran, this is
+	// evidence" reasoning as evaluateGoalCompletion's fallthrough.
 	return true, "", true
 }
 

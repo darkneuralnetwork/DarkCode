@@ -76,15 +76,9 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 const NAV_META = {
   studio:     { ico: "💬",  label: "Studio (Chat & Workspace)" },
   blueprint:  { ico: "📐",  label: "Blueprint (Plan & Workflow)" },
+  telemetry:  { ico: "📡",  label: "Telemetry" },
+  knowledge:  { ico: "🧠",  label: "Knowledge" },
   projects:   { ico: "📁",  label: "Projects" },
-  memory:     { ico: "🧠",  label: "6-Tier Memory" },
-  tools:      { ico: "🔧",  label: "Tool Registry" },
-  events:     { ico: "📡",  label: "Live Events" },
-  monitoring: { ico: "📊",  label: "Monitoring Dashboard" },
-  status:     { ico: "🔵",  label: "System Telemetry" },
-  cascade:    { ico: "💸",  label: "Cognition Cascade" },
-  replay:     { ico: "⏱",  label: "Execution Replay" },
-  changes:    { ico: "↩",  label: "Changes & Rollback" },
   config:     { ico: "⚙️",  label: "Configuration & Models" },
 };
 
@@ -106,29 +100,35 @@ function switchTab(tab) {
   $("#page-title").textContent = meta.label;
 
   // ── Per-tab data hydration ─────────────────────────────────────────
-  // One page per palette heading. Each loader is idempotent and only fetches
-  // when its container is still empty.
+  // One page per palette heading; a page with sub-tabs hydrates every
+  // sub-panel's data on entry (same as before Phase 9 — the status page's
+  // three panels already worked this way), because sub-tab switching
+  // (271/272/273/274-*-subtabs.js) is visibility-only and never fetches.
   if (tab === "projects" && $("#proj-grid") && !$("#proj-grid").children.length) loadProjects();
-  if (tab === "tools" && $("#tools-grid") && !$("#tools-grid").children.length) loadTools();
 
-  // Memory fetches counts only; the results list stays empty until you ask it
-  // something.
-  if (tab === "memory" && $("#mem-counts") && !$("#mem-counts").children.length) loadMemory();
+  if (tab === "knowledge") {
+    if ($("#tools-grid") && !$("#tools-grid").children.length) loadTools();
+    // Memory fetches counts (+ learned strategies, cached) only; the results
+    // list stays empty until you ask it something or pick a tier.
+    if ($("#mem-counts") && !$("#mem-counts").children.length) loadMemory();
+  }
 
-  if (tab === "events") hideEvtBadge();
-  if (tab === "monitoring") loadMetrics();
+  if (tab === "telemetry") {
+    hideEvtBadge();
+    loadMetrics();
+    loadAudit();
+  }
 
-  // The three status panels each start with a placeholder, so "empty" is not a
-  // usable guard. They are three cheap reads and each panel has its own
-  // Refresh button; re-reading on entry is what makes them current.
-  if (tab === "status") { loadStatus(); loadAudit(); loadLearning(); }
-
-  if (tab === "cascade" && typeof renderConsensusHistory === "function") renderConsensusHistory();
-  if (tab === "config" && $("#config-content") && !$("#config-content").dataset.loaded) loadConfig();
+  if (tab === "config") {
+    if ($("#config-content") && !$("#config-content").dataset.loaded) loadConfig();
+    loadCapabilities();
+  }
 
   // Blueprint: fetch the active project's plan + workflow so the task board is
   // never stuck on the placeholder, even if the project was activated before
-  // this tab was shown.
+  // this tab was shown. Decisions (formerly the separate Cognition Cascade
+  // tab) loads once at boot via 260-cascade.js's own MutationObserver init,
+  // same as before — no per-tab fetch needed for it here.
   if (tab === "blueprint" && activeProjectId) fetchProjectPlanAndWorkflow(activeProjectId);
 
   // Studio: keep the workspace file tree live.
@@ -136,7 +136,7 @@ function switchTab(tab) {
   else stopFileTreePoll();
 
   // Charts only tick while you are looking at them.
-  if (tab === "monitoring") startMetricsPolling(); else stopMetricsPolling();
+  if (tab === "telemetry") startMetricsPolling(); else stopMetricsPolling();
 }
 
 // ════════════════════════════════════════════════════════════════════════

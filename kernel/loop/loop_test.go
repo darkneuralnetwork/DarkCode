@@ -37,6 +37,10 @@ type fakeLLMClient struct {
 	// exactly what an exhausted per-minute or per-day quota looks like from
 	// inside a single run.
 	failFn func(req *core.CompletionRequest) error
+	// contextWindow, when set, is reported by ModelInfo() — lets a test
+	// construct clients with distinct windows to exercise per-model budget
+	// sizing (historyBudgetTokens).
+	contextWindow int
 }
 
 // isSelfEvalRequest identifies the one-line completion check by its distinctive
@@ -95,7 +99,9 @@ func (f *fakeLLMClient) ChatCompletionStream(ctx context.Context, req *core.Comp
 func (f *fakeLLMClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return nil, nil
 }
-func (f *fakeLLMClient) ModelInfo() core.ModelMetadata  { return core.ModelMetadata{ID: f.name} }
+func (f *fakeLLMClient) ModelInfo() core.ModelMetadata {
+	return core.ModelMetadata{ID: f.name, Context: f.contextWindow}
+}
 func (f *fakeLLMClient) Ping(ctx context.Context) error { return nil }
 func (f *fakeLLMClient) Close() error                   { return nil }
 
@@ -241,6 +247,94 @@ func TestReActLoopSelfEvalRunsEvenAtTheIterationCeiling(t *testing.T) {
 	}
 	if got := client.calls; got != 2 {
 		t.Errorf("callCount = %d, want 2 (think, self-eval)", got)
+	}
+}
+
+// TestSelfCritiqueOffByDefaultSkipsExtraCall is the regression test for
+// SetSelfCritique's default: a *ReActLoop built by New (which never calls
+// SetSelfCritique) must not spend an extra call on evaluateCritique, even
+// when evaluateGoalCompletion's marker just decided the goal is met — the
+// exact case that would trigger it if the flag were mis-defaulted to on.
+func TestSelfCritiqueOffByDefaultSkipsExtraCall(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"final answer", "GOAL_STATUS: DONE"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+
+	result, err := l.Run(context.Background(), "answer a simple question", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output != "final answer" {
+		t.Errorf("Output = %q, want %q", result.Output, "final answer")
+	}
+	if got := client.calls; got != 2 {
+		t.Errorf("callCount = %d, want 2 (think, self-eval) — critique must not have run", got)
+	}
+}
+
+// TestSelfCritiqueGatesOnFailAndClearsOnFix is the regression test for
+// SetSelfCritique(true): a critique that reports FAIL must send the loop
+// back to fix the answer (consuming a correction, not ending the run), and a
+// subsequent PASS must let the corrected answer through. Sequence: [1] THINK
+// -> "partial answer" (stop condition); [2] self-eval -> DONE (weak signal);
+// [3] critique -> FAIL; [4] THINK again -> "complete answer"; [5] self-eval
+// -> DONE; [6] critique -> PASS.
+func TestSelfCritiqueGatesOnFailAndClearsOnFix(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{
+		"partial answer",
+		"GOAL_STATUS: DONE",
+		"CRITIQUE: FAIL: missing the error case",
+		"complete answer",
+		"GOAL_STATUS: DONE",
+		"CRITIQUE: PASS",
+	}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetSelfCritique(true)
+
+	result, err := l.Run(context.Background(), "handle all edge cases", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output != "complete answer" {
+		t.Errorf("Output = %q, want %q (the critique's FAIL should have sent the loop back)", result.Output, "complete answer")
+	}
+	if !result.Completed {
+		t.Error("Completed = false, want true — the second critique passed")
+	}
+	if got := client.calls; got != 6 {
+		t.Errorf("callCount = %d, want 6 (think, self-eval, critique, think, self-eval, critique)", got)
+	}
+}
+
+// TestSelfCritiqueDoesNotRunOnAcceptanceProvenWork proves evaluateCritique is
+// scoped to the weak (self-eval) signal only, matching reviewer.go's split:
+// work an enforceable contract already proved has evidence, and asking a
+// model to second-guess a passing check is what the acceptance-gate comment
+// already warns against. contract == nil keeps this test independent of the
+// Contract type's construction details; the acceptance branch requires a
+// non-nil, enforceable contract, so with none, self-eval is the only path
+// that can set completionVerified — meaning this test is really checking
+// that critique DOES run when self-eval is the deciding signal (already
+// covered above) and stays off otherwise. Named/kept separate from the FAIL
+// test so a future reader sees the acceptance-vs-self-eval boundary
+// documented as its own case.
+func TestSelfCritiqueDoesNotRunOnAcceptanceProvenWork(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"final answer"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetSelfCritique(true)
+
+	// A read-only turn: no tools were called, so the loop's read-only
+	// shortcut (kernel/loop's completionVerified skip) applies, and there is
+	// nothing for a rubric to check — critique must not run here either.
+	ctx := context.WithValue(context.Background(), core.ReadOnlyToolsKey, true)
+	result, err := l.Run(ctx, "what does this function do?", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := client.calls; got != 1 {
+		t.Errorf("callCount = %d, want 1 (think only) — critique ran on a read-only turn with nothing to check", got)
+	}
+	if !result.Completed {
+		t.Error("Completed = false, want true — the read-only shortcut should have verified it")
 	}
 }
 
@@ -390,5 +484,79 @@ func TestReActLoopRunAssemblesHistoryChronologically(t *testing.T) {
 	}
 	if !(i1 < i2 && i2 < i3) {
 		t.Errorf("history reached the model out of chronological order: %v", seen)
+	}
+}
+
+// TestRunWithInjectionsReachesTheModelViaContextEngine proves an injection
+// (a recall block, a project plan/workflow directive) genuinely reaches the
+// model when the context engine assembles the window — not just when the
+// no-context-engine fallback appends it directly (that path is covered by
+// TestRunWithInjectionsReachesTheModelWithoutContextEngine below).
+func TestRunWithInjectionsReachesTheModelViaContextEngine(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetContextEngine(ctxengine.NewEngine(nil))
+	l.SetUseContextEngine(true)
+
+	injections := []core.Message{{Role: core.RoleSystem, Content: "## Relevant Past Context\nthe injected fact"}}
+	if _, err := l.RunWithInjections(context.Background(), "a query", nil, nil, injections); err != nil {
+		t.Fatalf("RunWithInjections: %v", err)
+	}
+
+	found := false
+	for _, s := range seen {
+		if s == "## Relevant Past Context\nthe injected fact" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("injection did not reach the model: %v", seen)
+	}
+}
+
+// TestRunWithInjectionsReachesTheModelWithoutContextEngine proves the
+// useContextEngine-off fallback path (raw append, no Assemble) also carries
+// injections through — this used to be the one path that silently dropped
+// them, since it only appended systemPrompt + history before this fix.
+func TestRunWithInjectionsReachesTheModelWithoutContextEngine(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	// useContextEngine left false (default) — exercises the fallback branch.
+
+	injections := []core.Message{{Role: core.RoleSystem, Content: "the injected fact, no ctx engine"}}
+	if _, err := l.RunWithInjections(context.Background(), "a query", nil, nil, injections); err != nil {
+		t.Fatalf("RunWithInjections: %v", err)
+	}
+
+	found := false
+	for _, s := range seen {
+		if s == "the injected fact, no ctx engine" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("injection did not reach the model via the fallback path: %v", seen)
 	}
 }

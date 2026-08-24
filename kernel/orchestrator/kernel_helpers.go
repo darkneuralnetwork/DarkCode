@@ -366,7 +366,11 @@ func boundedChatContext(stm []core.Message) []core.Message {
 // registry refuses mutating tools and the loop offers only read-only schemas,
 // so Chat can never write. Reuses the ReAct loop, so a question needing no
 // reads stays a single call. Falls back to plain text if the loop errors.
-func (k *Kernel) executeChatReadOnly(ctx context.Context, goal string, recallBlock string) (string, error) {
+//
+// rawGoal is the bare user ask (pre-injectProjectContext); goal is the
+// plan/workflow-baked version, kept for the executeDirectNoTools fallback
+// below (a one-shot call outside Assemble, same reasoning as deepPlan).
+func (k *Kernel) executeChatReadOnly(ctx context.Context, rawGoal, goal string, recallBlock string) (string, error) {
 	if k.agenticLoop == nil {
 		return k.executeDirectNoTools(ctx, goal, recallBlock)
 	}
@@ -396,15 +400,15 @@ func (k *Kernel) executeChatReadOnly(ctx context.Context, goal string, recallBlo
 		}
 	}
 
-	// k.injectRecall(goal, recallBlock) is both the actual goal message AND
-	// (when useContextEngine is on) the Query Assemble ranks history against —
-	// so relevance ranking currently scores against goal+recall-block text,
-	// not the bare user ask, which dilutes which history survives trimming.
-	// Harmless today (recallBlock is capped, budget is generous) but real;
-	// stops being implicit once injections carry their own AssembleRequest
-	// field instead of being pre-concatenated into the goal — Phase 4 of the
-	// context-management unification.
-	loopRes, err := k.agenticLoop.Run(roCtx, k.injectRecall(goal, recallBlock), history)
+	// rawGoal (not goal, which may carry the plan/workflow directive) is both
+	// the actual goal message AND the Query Assemble ranks history against,
+	// with recallBlock passed as an Injection instead of pre-concatenated —
+	// so relevance ranking scores against the bare user ask, and recall/plan/
+	// workflow content competes for the same real budget as history rather
+	// than winning space unconditionally. Closes the dilution this comment
+	// used to describe as deferred ("Phase 4 of the context-management
+	// unification").
+	loopRes, err := k.agenticLoop.RunWithInjections(roCtx, rawGoal, history, nil, k.loopInjections(recallBlock))
 	if err != nil {
 		// Say so, loudly. This degrades to an answer with no tools, and a
 		// degraded answer the user cannot tell apart from a normal one is
