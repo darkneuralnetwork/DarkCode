@@ -10,7 +10,7 @@ Engineered by [**Team Dark Neural Network (DNN)**](https://darkneuralnetwork.com
 
 [![CI](https://github.com/darkneuralnetwork/DarkCode/actions/workflows/ci.yml/badge.svg)](https://github.com/darkneuralnetwork/DarkCode/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/darkneuralnetwork/DarkCode?style=flat-square&color=8957e5)](https://github.com/darkneuralnetwork/DarkCode/releases)
-![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat-square&logo=go)
+![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go)
 ![Local First](https://img.shields.io/badge/Local--First-green?style=flat-square)
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square)
 
@@ -196,6 +196,10 @@ Every run is also recorded as an ordered event log, so a finished task can be
 **scrubbed through** afterwards — which step ran, what it produced, where it
 went wrong — rather than reconstructed from a wall of output.
 
+Rollback isn't only manual: if a change fails its own acceptance check and the
+repair budget runs out, DarkCode reverts to the pre-run checkpoint on its own
+— announced as an event, not left as a dirty tree for you to notice later.
+
 ---
 
 ## ✅ Changes that have been run, not just written
@@ -310,12 +314,12 @@ Verify your download against the published `SHA256SUMS`.
 
 ### Option 2 — Build from source
 
-Requires **Go 1.24+** and Git.
+Requires **Go 1.25+** and Git.
 
 ```bash
 git clone https://github.com/darkneuralnetwork/DarkCode.git
 cd DarkCode
-make build      # or: go build -o darkcode .
+make build      # or: go build -o darkcode ./cmd/darkcode
 ./darkcode --gui
 ```
 
@@ -344,7 +348,7 @@ darkcode --acp
 darkcode --gui --port 12345 &
 curl -s http://127.0.0.1:12345/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"darkcode","messages":[{"role":"user","content":"explain cmd/root.go"}]}'
+  -d '{"model":"darkcode","messages":[{"role":"user","content":"explain cmd/darkcode/main.go"}]}'
 
 # Register a cloud model and go
 darkcode --add-model gpt-4o --provider openai --api-key sk-...
@@ -389,7 +393,7 @@ The full reference is in the [**Wiki → Configuration**](https://github.com/dar
   <img src="docs/images/gui.png" alt="DarkCode Web UI" width="100%">
 </div>
 
-- **Web UI** — conversations, live agent monitoring, blueprint/plan tracking, memory inspection, and knowledge-graph visibility.
+- **Web UI** — six surfaces, each owning one concern: **Studio** (chat, with live token streaming as the model generates), **Blueprint** (run graph + project plan), **Telemetry** (live activity, metrics, history, audit), **Knowledge** (memory + tools), **Projects**, and **Config**.
 - **CLI** — a full slash-command palette (`/help`). Highlights: `/rollback`, `/health`, `/evolution`, `/session`, `/model`, `/mode`, `/brain`, `/safety`, `/sandbox`, `/local`, `/ingest`, `/know`, `/project`, `/usage`. Full list in the [**Wiki → CLI Reference**](https://github.com/darkneuralnetwork/DarkCode/wiki/Home#-cli-command-reference).
 - **OpenAI-compatible API** — point any OpenAI client at `http://localhost:12345/v1` and use DarkCode as the model (Open WebUI, LibreChat, the `openai` SDK with a custom `base_url`).
 - **Editors** — `darkcode --acp` serves the [Agent Client Protocol](https://agentclientprotocol.com), so Zed and the VS Code / JetBrains bridges drive it with no editor-specific code. Verified against Zed's official client SDK.
@@ -400,25 +404,27 @@ The full reference is in the [**Wiki → Configuration**](https://github.com/dar
 ## 🛠️ Build, Test & Release
 
 ```bash
-make ci          # fmt-check + vet + build + race tests (what CI runs)
+make ci          # fmt-check + vet + arch-check + leak-check + build + race tests (what CI runs)
 make test        # unit tests
 make bench       # run the benchmark suite against the built binary
 make sbom        # bill of materials, read back out of the built binary
-./build.sh 1.5.0 # cross-compile release artifacts into dist/
+./build.sh 2.0.0 # cross-compile release artifacts into dist/
 ```
 
-CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + benchmark-fixture validation + a cross-compile matrix).
+CI runs on every push via GitHub Actions (build + vet + gofmt + race tests + benchmark-fixture validation + a cross-compile matrix); `security.yml` separately runs a full-history secret scan, `govulncheck`, and CodeQL on every push and nightly.
 
 **Release integrity.** Builds are reproducible — `CGO_ENABLED=0`, `-trimpath`,
-`-buildvcs=false` — and the nightly job rebuilds the same tree twice and compares
-the bytes, so the claim is tested rather than asserted. Each release carries
-`SHA256SUMS`, an SBOM read back out of the linked binary, an optional detached
-GPG signature, and a provenance attestation recording *where* an artefact was
-built and from which commit, not only what it hashes to.
+`-buildvcs=false` — and every release build (not just a nightly sample) builds
+the same tree twice and diffs the checksums, so the claim is tested on the
+artifact being shipped. Each release carries `SHA256SUMS`, an SBOM read back
+out of the linked binary, an optional detached GPG signature, and a
+build-provenance attestation recording *where* an artifact was built and from
+which commit, not only what it hashes to — verify with
+`gh attestation verify <asset> --repo darkneuralnetwork/DarkCode`.
 
 **Benchmarks.** `bench/` is a reproducible harness: each task is a directory with a prompt, an optional `setup.sh`, and a `verify.sh` whose exit status alone decides pass or fail — no LLM grades the outcome. Add tasks under `bench/tasks/`. CI can't score the suite (it needs a live model) but it does verify every fixture is still solvable, so a broken task is caught before a run scores zero for the wrong reason.
 
-**Releases** are cut with `build.sh`: linux `.deb`, windows `.exe`, an `SBOM.txt`, `SHA256SUMS`, and an optional detached GPG signature (`DARKCODE_SIGNING_KEY=<keyid> ./build.sh`). Builds are reproducible — `CGO_ENABLED=0 -trimpath -buildvcs=false` — so the same tag and toolchain produce identical bytes.
+**Cutting a release** is a tag push, not a manual upload: `git tag -a v2.0.0 -m "…" && git push origin v2.0.0` triggers `release.yml`, which builds, verifies reproducibility, attests provenance, and publishes the GitHub Release itself.
 
 ---
 

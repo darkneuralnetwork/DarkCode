@@ -1,5 +1,10 @@
 # DarkCode — Codebase Size Analysis & Reduction Options
 
+> **Note:** this document predates the `kernel/infra/surfaces/model` directory
+> restructure (August 2026). File paths it cites reflect the flat layout at
+> the time of writing; the content and findings are otherwise unchanged.
+
+
 **Scope:** read-only research, no code modified. Commissioned to answer: "competitors are
 5k-10k LOC, why is this ~96k LOC, and how do we cut it significantly." Method: direct
 measurement of this repo (same methodology as the architecture recon: `wc -l`, `go list`,

@@ -2,13 +2,13 @@
 # binary, then ship it on a small image that still has the tools the agent
 # shells out to (bash, git, ripgrep, curl).
 
-FROM golang:1.24-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 # Cache modules first.
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/darkcode .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/darkcode ./cmd/darkcode
 
 FROM alpine:3.20
 RUN apk add --no-cache bash git ripgrep curl ca-certificates
