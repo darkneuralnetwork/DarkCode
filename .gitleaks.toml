@@ -10,8 +10,8 @@
 # Both exempt files are the FIXTURES OF SECRET-DETECTION CODE. They must
 # contain secret-shaped strings or they cannot test anything:
 #
-#   security/secrets_test.go  the table driving SecretScanner.HasSecret. Its
-#                             cases are the vendors' own published example
+#   infra/security/secrets_test.go  the table driving SecretScanner.HasSecret.
+#                             Its cases are the vendors' own published example
 #                             keys and plain alphabet sequences — read the
 #                             file, they are not quoted here because
 #                             scripts/leak-check.sh scans this one and is
@@ -36,6 +36,6 @@ useDefault = true
 [allowlist]
 description = "Fixtures of the project's own secret-detection code"
 paths = [
-  '''^security/secrets_test\.go$''',
+  '''^infra/security/secrets_test\.go$''',
   '''^scripts/leak-check\.sh$''',
 ]

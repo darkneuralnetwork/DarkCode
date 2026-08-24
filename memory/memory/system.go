@@ -653,15 +653,33 @@ func (s *System) embedSemanticLater(key, text string) {
 	})
 }
 
-// SemanticGet retrieves a knowledge entry by key.
-func (s *System) SemanticGet(key string) (*core.SemanticEntry, bool) {
+// SemanticGet retrieves a knowledge entry by key. Returns a copy, not the
+// map's own *core.SemanticEntry — embedSemanticLater's background goroutine
+// writes entry.Vector under s.mu once the embed resolves, so handing out the
+// live pointer let a caller's later, lock-free field read race that write
+// (found by go test -race, not by inspection: TestSemanticAddDoesNotBlockOnEmbedding
+// flagged a real WARNING: DATA RACE on this exact field). A shallow copy,
+// taken while still holding the RLock, is enough: Vector is reassigned
+// wholesale on backfill, never mutated in place.
+func (s *System) SemanticGet(key string) (core.SemanticEntry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	entry, ok := s.semantic[key]
-	return entry, ok
+	if !ok {
+		return core.SemanticEntry{}, false
+	}
+	return *entry, true
 }
 
 // SemanticSearch returns entries matching the query (in content, key, or tags).
+//
+// FOLLOW-UP: returns the map's own *core.SemanticEntry pointers, same as
+// SemanticAll below — the exact aliasing shape SemanticGet's doc comment
+// describes and go test -race actually caught there. No test has caught it
+// here yet, but the risk is the same: a caller holding one of these past an
+// embedSemanticLater backfill races that goroutine's write to entry.Vector.
+// Not changed alongside SemanticGet because unlike SemanticGet (zero non-test
+// callers), these two have real callers this fix didn't audit.
 func (s *System) SemanticSearch(query string) []*core.SemanticEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -692,7 +710,8 @@ func (s *System) SemanticRemove(key string) error {
 	return nil
 }
 
-// SemanticAll returns all semantic entries.
+// SemanticAll returns all semantic entries. Same pointer-aliasing FOLLOW-UP
+// as SemanticSearch above — see its comment.
 func (s *System) SemanticAll() []*core.SemanticEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
