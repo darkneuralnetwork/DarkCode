@@ -98,4 +98,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
-        run: go build -o /dev/null .
+        # ./cmd/darkcode, not . — main.go moved there in the
+        # kernel/infra/surfaces/model restructure (see Makefile's own
+        # build: target).
+        run: go build -o /dev/null ./cmd/darkcode
