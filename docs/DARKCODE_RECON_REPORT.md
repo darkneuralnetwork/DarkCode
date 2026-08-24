@@ -1,5 +1,10 @@
 # DarkCode — Architectural Reconnaissance Report
 
+> **Note:** this document predates the `kernel/infra/surfaces/model` directory
+> restructure (August 2026). File paths it cites reflect the flat layout at
+> the time of writing; the content and findings are otherwise unchanged.
+
+
 **Method:** read-only investigation of the working tree as checked out (no `.git` present, so
 history is unavailable). Every claim below is marked **FACT** (cites a file, often a line),
 **INFERENCE** (a reasonable interpretation not directly stated in code), or **UNKNOWN**
