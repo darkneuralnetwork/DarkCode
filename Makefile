@@ -9,15 +9,15 @@ PKGS    := ./...
 
 .PHONY: build
 build: ## Compile the binary
-	$(GO) build -o $(BINARY) .
+	$(GO) build -o $(BINARY) ./cmd/darkcode
 
 .PHONY: install
 install: ## Install into GOBIN
-	$(GO) install .
+	$(GO) install ./cmd/darkcode
 
 .PHONY: run
 run: ## Build and run
-	$(GO) run .
+	$(GO) run ./cmd/darkcode
 
 .PHONY: test
 test: ## Run the test suite
@@ -29,7 +29,11 @@ test-race: ## Run tests with the race detector
 
 .PHONY: eval
 eval: ## Print the retrieval scorecard (offline; no model calls, no keys)
-	$(GO) test ./eval/ -run TestRetrievalScorecard -v 2>&1 | sed -n '/corpus:/,/^--- /p'
+	$(GO) test ./kernel/eval/ -run TestRetrievalScorecard -v 2>&1 | sed -n '/corpus:/,/^--- /p'
+
+.PHONY: eval-agent
+eval-agent: ## Print the agent-trajectory scorecard (LIVE — real model calls, real cost). Needs DARKCODE_BASE_URL/DARKCODE_MODEL/DARKCODE_API_KEY.
+	DARKCODE_EVAL_AGENT_LIVE=1 $(GO) test ./kernel/eval/agent/ -run TestEvalAgentLive -v -timeout 10m 2>&1 | sed -n '/corpus:/,/^--- /p'
 
 .PHONY: cover
 cover: ## Run tests and write a coverage profile

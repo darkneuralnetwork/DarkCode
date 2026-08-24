@@ -1,0 +1,562 @@
+package loop
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/darkcode/infra/core"
+	"github.com/darkcode/kernel/router"
+	"github.com/darkcode/memory/ctxengine"
+	"github.com/darkcode/tools/tools"
+)
+
+// fakeLLMClient is a scripted core.LLMClient — see orchestrator's identical
+// helper for the rationale; duplicated here rather than shared across
+// packages since Go doesn't allow importing another package's _test.go
+// files, and this is small enough not to be worth a separate testutil
+// package for two consumers.
+type fakeLLMClient struct {
+	name      string
+	responses []string
+	delay     time.Duration
+	calls     int32
+	// onCall, if set, is invoked at the start of every completion call. Used
+	// by the cancellation test to cancel the context deterministically while
+	// a call is in flight, instead of racing a wall-clock deadline.
+	onCall func()
+	// onRequest, if set, is invoked with each request before responding —
+	// lets a test inspect exactly what messages were sent (e.g. to verify
+	// prior conversation history was actually included).
+	onRequest func(req *core.CompletionRequest)
+	// failFn, if set, decides per-request whether the call fails. A single
+	// error field wouldn't do: the interesting case is a client where the
+	// THINK call works and only the auxiliary self-eval call fails, which is
+	// exactly what an exhausted per-minute or per-day quota looks like from
+	// inside a single run.
+	failFn func(req *core.CompletionRequest) error
+	// contextWindow, when set, is reported by ModelInfo() — lets a test
+	// construct clients with distinct windows to exercise per-model budget
+	// sizing (historyBudgetTokens).
+	contextWindow int
+}
+
+// isSelfEvalRequest identifies the one-line completion check by its distinctive
+// shape, so failFn can target it without depending on call ordering.
+func isSelfEvalRequest(req *core.CompletionRequest) bool {
+	return req != nil && req.MaxTokens != nil && *req.MaxTokens == 60
+}
+
+func (f *fakeLLMClient) nextContent() string {
+	idx := int(atomic.AddInt32(&f.calls, 1)) - 1
+	if len(f.responses) == 0 {
+		return "final answer"
+	}
+	if idx < len(f.responses) {
+		return f.responses[idx]
+	}
+	return f.responses[len(f.responses)-1]
+}
+
+func (f *fakeLLMClient) ChatCompletion(ctx context.Context, req *core.CompletionRequest) (*core.CompletionResponse, error) {
+	return f.ChatCompletionStream(ctx, req, nil)
+}
+
+func (f *fakeLLMClient) ChatCompletionStream(ctx context.Context, req *core.CompletionRequest, cb *core.StreamCallbacks) (*core.CompletionResponse, error) {
+	if f.onCall != nil {
+		f.onCall()
+	}
+	if f.onRequest != nil {
+		f.onRequest(req)
+	}
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if f.failFn != nil {
+		if err := f.failFn(req); err != nil {
+			atomic.AddInt32(&f.calls, 1)
+			return nil, err
+		}
+	}
+	content := f.nextContent()
+	if cb != nil && cb.OnContent != nil {
+		cb.OnContent(content)
+	}
+	return &core.CompletionResponse{
+		Choices: []core.ChatChoice{{Message: core.ResponseMessage{Role: "assistant", Content: content}}},
+	}, nil
+}
+
+func (f *fakeLLMClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	return nil, nil
+}
+func (f *fakeLLMClient) ModelInfo() core.ModelMetadata {
+	return core.ModelMetadata{ID: f.name, Context: f.contextWindow}
+}
+func (f *fakeLLMClient) Ping(ctx context.Context) error { return nil }
+func (f *fakeLLMClient) Close() error                   { return nil }
+
+func newTestRouter(client core.LLMClient) *router.Router {
+	r := router.NewRouter(core.RouteSingle, nil)
+	for _, tier := range []core.ModelTier{core.ModelTierCoding, core.ModelTierReasoning, core.ModelTierFast} {
+		r.RegisterModel(tier, client, "fake-model")
+	}
+	r.MarkPrimary("fake-model")
+	return r
+}
+
+func TestReActLoopSingleTurnNoTools(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"the final answer, no corrections needed."}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+
+	result, err := l.Run(context.Background(), "answer a simple question", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output == "" {
+		t.Error("expected a non-empty final answer")
+	}
+}
+
+func TestReActLoopRespectsCancellationBeforeStarting(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"should never be reached"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	_, err := l.Run(ctx, "do something", nil)
+	if err == nil {
+		t.Fatal("expected Run to return an error for an already-cancelled context")
+	}
+}
+
+// TestReActLoopCancellationMidRun verifies the loop propagates a context
+// cancellation that happens while an LLM call is in flight, rather than
+// running to completion or hanging. The cancellation is triggered
+// deterministically from inside the fake's first call (not via a racy
+// wall-clock deadline), so this test can't flake under different scheduling.
+func TestReActLoopCancellationMidRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &fakeLLMClient{
+		responses: []string{"first response", "second response", "third response"},
+		delay:     time.Second, // long enough that ctx.Done() always wins after onCall cancels
+		onCall:    cancel,      // cancel the context as soon as the first call begins
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 20)
+
+	start := time.Now()
+	_, err := l.Run(ctx, "do something slow", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a context-cancellation error")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Run took %s after cancellation, want it to return promptly", elapsed)
+	}
+}
+
+func TestReActLoopMaxLoopsCeiling(t *testing.T) {
+	// A tool schema-less registry means the model can only ever respond with
+	// content, no tool calls — so with maxLoops=1 the very first no-tool-call
+	// response should end the loop rather than needing more iterations.
+	client := &fakeLLMClient{responses: []string{"done in one shot"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 1)
+
+	result, err := l.Run(context.Background(), "quick task", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output == "" {
+		t.Error("expected a non-empty answer within the loop ceiling")
+	}
+}
+
+func TestNewClampsInvalidMaxLoops(t *testing.T) {
+	client := &fakeLLMClient{}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 0)
+	if l.maxLoops != DefaultMaxLoops {
+		t.Errorf("maxLoops = %d, want DefaultMaxLoops (%d) when constructed with 0", l.maxLoops, DefaultMaxLoops)
+	}
+}
+
+// TestReActLoopSelfEvalForcesAnotherIteration is the Fix A acceptance test:
+// a self-evaluation that reports the goal isn't met must make the loop keep
+// working (call the model again) instead of accepting the first no-tool-call
+// response as final just because it was syntactically a stop condition.
+// Sequence: [1] THINK -> "partial answer" (no tools, stop condition hit);
+// [2] self-eval -> "GOAL_STATUS: CONTINUE: missing the edge case"; [3] THINK
+// again -> "complete answer"; [4] self-eval -> "GOAL_STATUS: DONE".
+func TestReActLoopSelfEvalForcesAnotherIteration(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{
+		"partial answer",
+		"GOAL_STATUS: CONTINUE: missing the edge case",
+		"complete answer",
+		"GOAL_STATUS: DONE",
+	}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+
+	result, err := l.Run(context.Background(), "handle all edge cases", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output != "complete answer" {
+		t.Errorf("Output = %q, want %q (the loop should have kept working past the self-eval rejection)", result.Output, "complete answer")
+	}
+	if got := client.calls; got != 4 {
+		t.Errorf("callCount = %d, want 4 (think, self-eval, think, self-eval)", got)
+	}
+}
+
+// TestReActLoopSelfEvalRunsEvenAtTheIterationCeiling replaces a case that
+// asserted the opposite. Self-eval used to be gated by
+// `iteration < l.maxLoops` to save one call at the ceiling, which meant the
+// final turn was the one turn that never had to justify stopping — with the
+// shipped maxLoops of 3, that guard fired constantly and the loop's only
+// semantic stop condition was skipped exactly when it mattered most.
+//
+// The check is cheap (one line, 60 tokens) and it is the difference between
+// "the model stopped calling tools" and "the goal is met", so it now runs on
+// every stop attempt. Corrections have their own budget, so it still cannot
+// extend the work ceiling.
+func TestReActLoopSelfEvalRunsEvenAtTheIterationCeiling(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"done in one shot", "GOAL_STATUS: DONE"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 1)
+
+	result, err := l.Run(context.Background(), "quick task", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output != "done in one shot" {
+		t.Errorf("Output = %q, want the single response unchanged", result.Output)
+	}
+	if !result.Completed {
+		t.Error("Completed = false, want true — the self-eval confirmed the goal was met")
+	}
+	if got := client.calls; got != 2 {
+		t.Errorf("callCount = %d, want 2 (think, self-eval)", got)
+	}
+}
+
+// TestSelfCritiqueOffByDefaultSkipsExtraCall is the regression test for
+// SetSelfCritique's default: a *ReActLoop built by New (which never calls
+// SetSelfCritique) must not spend an extra call on evaluateCritique, even
+// when evaluateGoalCompletion's marker just decided the goal is met — the
+// exact case that would trigger it if the flag were mis-defaulted to on.
+func TestSelfCritiqueOffByDefaultSkipsExtraCall(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"final answer", "GOAL_STATUS: DONE"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+
+	result, err := l.Run(context.Background(), "answer a simple question", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output != "final answer" {
+		t.Errorf("Output = %q, want %q", result.Output, "final answer")
+	}
+	if got := client.calls; got != 2 {
+		t.Errorf("callCount = %d, want 2 (think, self-eval) — critique must not have run", got)
+	}
+}
+
+// TestSelfCritiqueGatesOnFailAndClearsOnFix is the regression test for
+// SetSelfCritique(true): a critique that reports FAIL must send the loop
+// back to fix the answer (consuming a correction, not ending the run), and a
+// subsequent PASS must let the corrected answer through. Sequence: [1] THINK
+// -> "partial answer" (stop condition); [2] self-eval -> DONE (weak signal);
+// [3] critique -> FAIL; [4] THINK again -> "complete answer"; [5] self-eval
+// -> DONE; [6] critique -> PASS.
+func TestSelfCritiqueGatesOnFailAndClearsOnFix(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{
+		"partial answer",
+		"GOAL_STATUS: DONE",
+		"CRITIQUE: FAIL: missing the error case",
+		"complete answer",
+		"GOAL_STATUS: DONE",
+		"CRITIQUE: PASS",
+	}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetSelfCritique(true)
+
+	result, err := l.Run(context.Background(), "handle all edge cases", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Output != "complete answer" {
+		t.Errorf("Output = %q, want %q (the critique's FAIL should have sent the loop back)", result.Output, "complete answer")
+	}
+	if !result.Completed {
+		t.Error("Completed = false, want true — the second critique passed")
+	}
+	if got := client.calls; got != 6 {
+		t.Errorf("callCount = %d, want 6 (think, self-eval, critique, think, self-eval, critique)", got)
+	}
+}
+
+// TestSelfCritiqueDoesNotRunOnAcceptanceProvenWork proves evaluateCritique is
+// scoped to the weak (self-eval) signal only, matching reviewer.go's split:
+// work an enforceable contract already proved has evidence, and asking a
+// model to second-guess a passing check is what the acceptance-gate comment
+// already warns against. contract == nil keeps this test independent of the
+// Contract type's construction details; the acceptance branch requires a
+// non-nil, enforceable contract, so with none, self-eval is the only path
+// that can set completionVerified — meaning this test is really checking
+// that critique DOES run when self-eval is the deciding signal (already
+// covered above) and stays off otherwise. Named/kept separate from the FAIL
+// test so a future reader sees the acceptance-vs-self-eval boundary
+// documented as its own case.
+func TestSelfCritiqueDoesNotRunOnAcceptanceProvenWork(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"final answer"}}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetSelfCritique(true)
+
+	// A read-only turn: no tools were called, so the loop's read-only
+	// shortcut (kernel/loop's completionVerified skip) applies, and there is
+	// nothing for a rubric to check — critique must not run here either.
+	ctx := context.WithValue(context.Background(), core.ReadOnlyToolsKey, true)
+	result, err := l.Run(ctx, "what does this function do?", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := client.calls; got != 1 {
+		t.Errorf("callCount = %d, want 1 (think only) — critique ran on a read-only turn with nothing to check", got)
+	}
+	if !result.Completed {
+		t.Error("Completed = false, want true — the read-only shortcut should have verified it")
+	}
+}
+
+// TestReActLoopUnrunnableSelfEvalDoesNotReportSuccess is the regression test
+// for the earliest stop of all. evaluateGoalCompletion used to report "done"
+// on any transport error, so on a metered free tier whose daily quota is
+// measured in tens, an exhausted quota made every self-eval 429 — and every
+// 429 read as "the goal is met". A multi-step task ended after its first
+// answer and reported success.
+func TestReActLoopUnrunnableSelfEvalDoesNotReportSuccess(t *testing.T) {
+	// THINK succeeds; only the auxiliary self-eval call is rate-limited —
+	// what an exhausted daily quota looks like mid-run.
+	client := &fakeLLMClient{
+		responses: []string{"a partial answer"},
+		failFn: func(req *core.CompletionRequest) error {
+			if isSelfEvalRequest(req) {
+				return errors.New("429 rate limit exceeded")
+			}
+			return nil
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 1)
+
+	result, err := l.Run(context.Background(), "a long multi-step task", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Completed {
+		t.Error("Completed = true, but the completion check never ran — an unverifiable answer must not be recorded as a success")
+	}
+}
+
+// TestReActLoopHistoryIsIncluded is the Fix C acceptance test: prior
+// conversation passed into Run must actually reach the model, giving the
+// loop real continuity for a follow-up like "continue" instead of starting
+// a fresh, memoryless conversation every time.
+func TestReActLoopHistoryIsIncluded(t *testing.T) {
+	var sawHistory bool
+	client := &fakeLLMClient{
+		responses: []string{"continuing the prior work", "GOAL_STATUS: DONE"},
+		onRequest: func(req *core.CompletionRequest) {
+			for _, m := range req.Messages {
+				if m.ContentString() == "earlier turn: built the login form" {
+					sawHistory = true
+				}
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+
+	history := []core.Message{
+		{Role: core.RoleUser, Content: "build the login form"},
+		{Role: core.RoleAssistant, Content: "earlier turn: built the login form"},
+	}
+	if _, err := l.Run(context.Background(), "continue", history); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !sawHistory {
+		t.Error("expected prior conversation history to be included in the model's messages")
+	}
+}
+
+// TestReActLoopRunAssemblesHistoryViaContextEngine proves Run's history
+// folding actually goes through l.engine.Assemble (Phase 3 of the context-
+// management unification — replaces the old flat byte-budget
+// truncateHistory) rather than some other path: an exact-duplicate message in
+// history must be deduplicated before it reaches the model, which is
+// Assemble's deduplicator, not anything Run does itself.
+func TestReActLoopRunAssemblesHistoryViaContextEngine(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return // only capture the first (THINK) call
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetContextEngine(ctxengine.NewEngine(nil))
+	l.SetUseContextEngine(true)
+
+	dup := core.Message{Role: core.RoleUser, Content: "the exact same message"}
+	history := []core.Message{dup, dup}
+	if _, err := l.Run(context.Background(), "continue", history); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	count := 0
+	for _, s := range seen {
+		if s == "the exact same message" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("saw %q %d times in the request, want exactly 1 (Assemble's deduplicator should have dropped the exact duplicate)", dup.Content, count)
+	}
+}
+
+// TestReActLoopRunAssemblesHistoryChronologically proves the survivors of
+// Assemble's relevance ranking reach the model in their original
+// chronological order, not ranked (most-relevant-to-goal-first) order — a
+// shuffled transcript is actively worse than an untrimmed one for a
+// "continue" follow-up.
+func TestReActLoopRunAssemblesHistoryChronologically(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetContextEngine(ctxengine.NewEngine(nil))
+	l.SetUseContextEngine(true)
+
+	// "banana" is what the goal below is most relevant to — a pure relevance
+	// ranking would put history[2] first. Chronological order must survive.
+	history := []core.Message{
+		{Role: core.RoleUser, Content: "first: talk about apples"},
+		{Role: core.RoleAssistant, Content: "second: apples are red"},
+		{Role: core.RoleUser, Content: "third: banana banana banana"},
+	}
+	if _, err := l.Run(context.Background(), "banana banana banana", history); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	idx := func(want string) int {
+		for i, s := range seen {
+			if s == want {
+				return i
+			}
+		}
+		return -1
+	}
+	i1, i2, i3 := idx("first: talk about apples"), idx("second: apples are red"), idx("third: banana banana banana")
+	if i1 < 0 || i2 < 0 || i3 < 0 {
+		t.Fatalf("not all history messages reached the model: %v", seen)
+	}
+	if !(i1 < i2 && i2 < i3) {
+		t.Errorf("history reached the model out of chronological order: %v", seen)
+	}
+}
+
+// TestRunWithInjectionsReachesTheModelViaContextEngine proves an injection
+// (a recall block, a project plan/workflow directive) genuinely reaches the
+// model when the context engine assembles the window — not just when the
+// no-context-engine fallback appends it directly (that path is covered by
+// TestRunWithInjectionsReachesTheModelWithoutContextEngine below).
+func TestRunWithInjectionsReachesTheModelViaContextEngine(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	l.SetContextEngine(ctxengine.NewEngine(nil))
+	l.SetUseContextEngine(true)
+
+	injections := []core.Message{{Role: core.RoleSystem, Content: "## Relevant Past Context\nthe injected fact"}}
+	if _, err := l.RunWithInjections(context.Background(), "a query", nil, nil, injections); err != nil {
+		t.Fatalf("RunWithInjections: %v", err)
+	}
+
+	found := false
+	for _, s := range seen {
+		if s == "## Relevant Past Context\nthe injected fact" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("injection did not reach the model: %v", seen)
+	}
+}
+
+// TestRunWithInjectionsReachesTheModelWithoutContextEngine proves the
+// useContextEngine-off fallback path (raw append, no Assemble) also carries
+// injections through — this used to be the one path that silently dropped
+// them, since it only appended systemPrompt + history before this fix.
+func TestRunWithInjectionsReachesTheModelWithoutContextEngine(t *testing.T) {
+	var seen []string
+	client := &fakeLLMClient{
+		responses: []string{"done"},
+		onRequest: func(req *core.CompletionRequest) {
+			if seen != nil {
+				return
+			}
+			for _, m := range req.Messages {
+				seen = append(seen, m.ContentString())
+			}
+		},
+	}
+	l := New(newTestRouter(client), tools.NewRegistry(), nil, 5)
+	// useContextEngine left false (default) — exercises the fallback branch.
+
+	injections := []core.Message{{Role: core.RoleSystem, Content: "the injected fact, no ctx engine"}}
+	if _, err := l.RunWithInjections(context.Background(), "a query", nil, nil, injections); err != nil {
+		t.Fatalf("RunWithInjections: %v", err)
+	}
+
+	found := false
+	for _, s := range seen {
+		if s == "the injected fact, no ctx engine" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("injection did not reach the model via the fallback path: %v", seen)
+	}
+}

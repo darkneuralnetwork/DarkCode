@@ -37,12 +37,15 @@ BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
   || date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
   || echo unknown)"
 OUT="dist"
-# The stamp targets core.Version, the variable the whole binary reads. It used
-# to name main.Version, which was never declared — and the linker accepts -X
-# against a missing symbol without complaint, writes nothing, and exits zero.
-# Every release therefore shipped reporting a hardcoded 1.0.0. The assertion
-# after the build is what makes that failure loud instead of silent.
-LDFLAGS="-s -w -X github.com/darkcode/core.Version=${VERSION}"
+# The stamp targets infra/core.Version, the variable the whole binary reads.
+# It used to name main.Version, which was never declared — and the linker
+# accepts -X against a missing symbol without complaint, writes nothing, and
+# exits zero. Every release therefore shipped reporting a hardcoded 1.0.0.
+# The assertion after the build is what makes that failure loud instead of
+# silent — which is exactly what caught this path going stale a second time,
+# at github.com/darkcode/core, when core.go moved under infra/ in the
+# kernel/infra/surfaces/model restructure.
+LDFLAGS="-s -w -X github.com/darkcode/infra/core.Version=${VERSION}"
 MAINTAINER="Team Dark Neural Network <contact@darkneuralnetwork.com>"
 
 echo "==> Building ${APP} v${VERSION}"
@@ -60,7 +63,7 @@ build_deb() {
   mkdir -p "${stage}/usr/local/bin" "${stage}/DEBIAN"
   GOOS=linux GOARCH="${goarch}" CGO_ENABLED=0 go build \
     -trimpath -buildvcs=false -ldflags="${LDFLAGS}" \
-    -o "${stage}/usr/local/bin/${APP}" .
+    -o "${stage}/usr/local/bin/${APP}" ./cmd/darkcode
   cat > "${stage}/DEBIAN/control" <<EOF
 Package: ${APP}
 Version: ${VERSION}
@@ -85,7 +88,7 @@ build_exe() {
   echo "==> windows/${goarch} -> ${APP}-v${VERSION}-windows-${goarch}.exe"
   GOOS=windows GOARCH="${goarch}" CGO_ENABLED=0 go build \
     -trimpath -buildvcs=false -ldflags="${LDFLAGS}" \
-    -o "${OUT}/${APP}-v${VERSION}-windows-${goarch}.exe" .
+    -o "${OUT}/${APP}-v${VERSION}-windows-${goarch}.exe" ./cmd/darkcode
 }
 
 build_deb amd64
@@ -101,7 +104,7 @@ build_exe 386
 # binary what it thinks it is turns that silence into a failed build.
 echo "==> Verifying the version stamp"
 STAMP_PROBE="${OUT}/.version-probe"
-CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="${LDFLAGS}" -o "${STAMP_PROBE}" .
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="${LDFLAGS}" -o "${STAMP_PROBE}" ./cmd/darkcode
 REPORTED="$("${STAMP_PROBE}" --version 2>/dev/null || true)"
 rm -f "${STAMP_PROBE}"
 if [ "${REPORTED}" != "${VERSION}" ]; then
@@ -116,7 +119,7 @@ echo "    binary reports ${REPORTED}"
 # the artifact, so the SBOM cannot drift from what shipped.
 echo "==> Generating SBOM"
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
-  -trimpath -buildvcs=false -ldflags="${LDFLAGS}" -o "${OUT}/.sbom-probe" .
+  -trimpath -buildvcs=false -ldflags="${LDFLAGS}" -o "${OUT}/.sbom-probe" ./cmd/darkcode
 {
   echo "# SBOM for ${APP} v${VERSION}"
   echo "# Generated ${BUILD_DATE} from the linked binary (source date, not build time)."

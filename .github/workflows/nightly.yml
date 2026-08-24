@@ -32,8 +32,12 @@ jobs:
 
       # Repeated runs surface order-dependence and genuine flakiness, which a
       # single pass hides.
+      #
+      # Paths updated for the "redesign the root directory by architectural
+      # layer" restructure: memory/, orchestrator/, tools/, permission/ moved
+      # to memory/..., kernel/orchestrator/..., tools/..., infra/permission/.
       - name: Flake hunt
-        run: go test -count=5 -run 'Test' ./memory/ ./orchestrator/ ./tools/ ./permission/
+        run: go test -count=5 -run 'Test' ./memory/... ./kernel/orchestrator/... ./tools/... ./infra/permission/...
 
       - name: Coverage
         run: |

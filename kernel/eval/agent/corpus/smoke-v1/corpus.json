@@ -1,0 +1,18 @@
+{
+  "name": "smoke-v1",
+  "about": "A handful of deliberately trivial, deterministic tasks — enough to prove the harness itself works end to end (corpus load, per-task workspace isolation, artifact scoring) against a real Kernel. Not a quality benchmark; extend this corpus with real tasks before treating its pass rate as meaningful.",
+  "tasks": [
+    {
+      "id": "write-hello-file",
+      "goal": "Create a file named hello.txt in the current directory containing the single line: hello world",
+      "artifacts": ["hello.txt"],
+      "note": "the simplest possible file-write task — if this fails, nothing more complex is worth running"
+    },
+    {
+      "id": "write-two-files",
+      "goal": "Create two files: a.txt containing 'first' and b.txt containing 'second'.",
+      "artifacts": ["a.txt", "b.txt"],
+      "note": "checks that a task with multiple artifacts is scored correctly — both must exist and be non-empty"
+    }
+  ]
+}

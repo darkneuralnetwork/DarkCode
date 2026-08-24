@@ -1,0 +1,479 @@
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/darkcode/infra/config"
+	"github.com/darkcode/infra/metrics"
+	"github.com/darkcode/infra/safeurl"
+	"github.com/darkcode/kernel/orchestrator"
+)
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		s.updateConfig(w, r)
+		return
+	}
+
+	s.cfgMu.RLock()
+	safeModels := make(map[string]config.ModelConfig)
+	for k, v := range s.cfg.Models {
+		v.APIKey = maskKey(v.APIKey)
+		safeModels[k] = v
+	}
+	// The flat-configured primary (model/provider/base_url fields) is a real
+	// registered cloud model even when the multi-model map is empty —
+	// synthesize an entry so the Models panel shows it instead of claiming
+	// "No cloud models registered" while the primary is actively serving.
+	if s.cfg.Model != "" && s.cfg.Provider != "" && s.cfg.Provider != "embedded" {
+		inMap := false
+		for k, v := range safeModels {
+			if k == s.cfg.Model || v.Model == s.cfg.Model {
+				inMap = true
+				break
+			}
+		}
+		if !inMap {
+			safeModels[s.cfg.Model] = config.ModelConfig{
+				BaseURL:  s.cfg.BaseURL,
+				APIKey:   maskKey(s.cfg.APIKey),
+				Model:    s.cfg.Model,
+				Provider: s.cfg.Provider,
+				Tier:     "reasoning",
+			}
+		}
+	}
+	model := s.cfg.Model
+	provider := s.cfg.Provider
+	baseURL := s.cfg.BaseURL
+	hasKey := s.cfg.APIKey != ""
+	routingMode := s.cfg.RoutingMode
+	safetyLevel := s.cfg.SafetyLevel
+	sandboxMode := s.cfg.ResolvedSandboxMode()
+	maxTurns := s.cfg.MaxTurns
+	compressContext := s.cfg.CompressContext
+	compressorModel := s.cfg.CompressorModel
+	uiMode := s.cfg.UIMode
+	contextLength := s.cfg.ContextLength
+	maxConcurrent := s.cfg.MaxConcurrent
+	temperature := s.cfg.Temperature
+	executionProfile := s.cfg.ExecutionProfile
+	planApproval := s.cfg.PlanApproval
+	planDepth := s.cfg.PlanDepth
+	s.cfgMu.RUnlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"model":                model,
+		"provider":             provider,
+		"base_url":             baseURL,
+		"routing_mode":         routingMode,
+		"safety_level":         safetyLevel,
+		"sandbox":              sandboxMode,
+		"max_turns":            maxTurns,
+		"compress_context":     compressContext,
+		"compressor_model":     compressorModel,
+		"ui_mode":              uiMode,
+		"context_length":       contextLength,
+		"max_concurrent":       maxConcurrent,
+		"temperature":          temperature,
+		"execution_profile":    executionProfile,
+		"plan_approval":        planApproval,
+		"plan_depth":           planDepth,
+		"enable_local_llm":     s.cfg.LocalEnabled(),
+		"background_work":      s.cfg.ResolvedBackgroundWork(),
+		"debate":               s.cfg.Debate,
+		"reviewer":             s.cfg.Reviewer,
+		"enable_self_critique": s.cfg.EnableSelfCritique,
+		"local_mode":           s.cfg.ResolvedLocalMode(),
+		"force_local":          s.cfg.ForceLocal(),
+		"local_model_role":     s.cfg.LocalModelRole,
+		"memory_profile":       s.cfg.MemoryProfile,
+		"has_api_key":          hasKey,
+		"models":               safeModels,
+		"embedded":             s.embeddedStatus(),
+		"registered_models":    s.kernelRegisteredModels(),
+		"metrics":              metrics.Default.Snapshot(),
+	})
+}
+
+func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	var req struct {
+		Action      string `json:"action"` // update_settings | add_model | remove_model | set_primary
+		RoutingMode string `json:"routing_mode,omitempty"`
+		SafetyLevel string `json:"safety_level,omitempty"`
+		// Sandbox mode: "off"|"auto"|"on"|"strict". Pointer so an unset field
+		// leaves the current value unchanged. Takes effect on next restart (the
+		// terminal tool's sandbox is wired at startup).
+		Sandbox  *string `json:"sandbox,omitempty"`
+		MaxTurns int     `json:"max_turns,omitempty"`
+
+		// Agentic loop (looping technology) toggle.
+		AgenticLoop *bool `json:"agentic_loop,omitempty"`
+		MaxLoops    int   `json:"max_loops,omitempty"`
+
+		// Execution profile (parallelism switcher): "parallel" | "sequential" |
+		// "auto". Pointer so an explicit "auto" is distinguishable from "not sent".
+		ExecutionProfile *string `json:"execution_profile,omitempty"`
+
+		// Planning phase: approval gate policy ("always"|"auto"|"never") and
+		// depth override ("auto"|"light"|"deep"). Pointers so unset fields
+		// leave current values unchanged.
+		PlanApproval *string `json:"plan_approval,omitempty"`
+		PlanDepth    *string `json:"plan_depth,omitempty"`
+
+		// MemoryProfile is the local model's context/RAM knob: "lean" | "balanced"
+		// | "max" | "" (auto). Pointer so an unset field leaves it unchanged.
+		MemoryProfile *string `json:"memory_profile,omitempty"`
+
+		EnableLocalLLM     *bool   `json:"enable_local_llm,omitempty"`
+		BackgroundWork     *string `json:"background_work,omitempty"`
+		Debate             *bool   `json:"debate,omitempty"`
+		Reviewer           *bool   `json:"reviewer,omitempty"`
+		EnableSelfCritique *bool   `json:"enable_self_critique,omitempty"`
+		// LocalMode sets the three-plus-state local preference directly:
+		// "off" | "auto" | "on" | "force". "force" pins routing to the local
+		// model (no cloud fallback) and starts it on demand. Pointer so an
+		// unset field leaves the current mode unchanged.
+		LocalMode *string `json:"local_mode,omitempty"`
+
+		// AirGap, CostLimitPerDayUSD and BlastRadiusThreshold back the
+		// settings-surface schema's TierPrimary/TierAdvanced fields of the same
+		// name (config/surface.go) — previously described by the schema but
+		// editable from nowhere: the schema view rendered them read-only, and no
+		// hand-written control existed either. Pointers so an unset field leaves
+		// the current value unchanged, matching every other toggle here.
+		AirGap               *bool    `json:"air_gap,omitempty"`
+		CostLimitPerDayUSD   *float64 `json:"cost_limit_per_day_usd,omitempty"`
+		BlastRadiusThreshold *float64 `json:"blast_radius_threshold,omitempty"`
+
+		ModelName       string `json:"model_name,omitempty"`
+		Provider        string `json:"provider,omitempty"`
+		APIKey          string `json:"api_key,omitempty"`
+		BaseURL         string `json:"base_url,omitempty"`
+		Role            string `json:"role,omitempty"`             // consensus role (set_role action)
+		CompressorModel string `json:"compressor_model,omitempty"` // model for context compression (set_compressor)
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	switch req.Action {
+	case "add_model":
+		if req.ModelName == "" {
+			writeError(w, http.StatusBadRequest, "model_name is required")
+			return
+		}
+		if s.cfg.Models == nil {
+			s.cfg.Models = make(map[string]config.ModelConfig)
+		}
+
+		providerID := req.Provider
+		if providerID == "" {
+			providerID = "openrouter" // sensible default
+		}
+
+		// Resolve base URL + auth scheme from the provider registry.
+		baseURL := req.BaseURL
+		if baseURL == "" {
+			if p, ok := config.LookupProvider(providerID); ok {
+				baseURL = p.BaseURL
+			} else {
+				writeError(w, http.StatusBadRequest, "unknown provider: "+providerID)
+				return
+			}
+		}
+
+		apiKey := req.APIKey
+		// For local providers, no key is needed; use a placeholder.
+		if p, ok := config.LookupProvider(providerID); ok && p.Local && apiKey == "" {
+			apiKey = "local"
+		}
+
+		s.cfg.Models[req.ModelName] = config.ModelConfig{
+			Model:    req.ModelName,
+			Provider: providerID,
+			APIKey:   apiKey,
+			BaseURL:  baseURL,
+			Tier:     config.ResolveTier(providerID, req.ModelName),
+		}
+
+		if s.cfg.Model == "" {
+			s.cfg.Model = req.ModelName
+			s.cfg.BaseURL = baseURL
+			s.cfg.APIKey = apiKey
+			s.cfg.Provider = providerID
+		}
+
+	case "remove_model":
+		if req.ModelName == "" {
+			writeError(w, http.StatusBadRequest, "model_name is required")
+			return
+		}
+		// The embedded/local model is a runtime entity, not a persisted
+		// config entry — it can't be "removed". The user toggles
+		// enable_local_llm instead.
+		if strings.HasPrefix(req.ModelName, "embedded/") {
+			writeError(w, http.StatusBadRequest, "local model cannot be removed; toggle 'Local LLM' in settings instead")
+			return
+		}
+		delete(s.cfg.Models, req.ModelName)
+		if s.cfg.Model == req.ModelName {
+			// Fall back to another registered model if present.
+			fallbackFound := false
+			for _, mc := range s.cfg.Models {
+				s.cfg.Model = mc.Model
+				s.cfg.BaseURL = mc.BaseURL
+				s.cfg.APIKey = mc.APIKey
+				s.cfg.Provider = mc.Provider
+				fallbackFound = true
+				break
+			}
+			if !fallbackFound {
+				s.cfg.Model = ""
+				s.cfg.BaseURL = ""
+				s.cfg.APIKey = ""
+				s.cfg.Provider = ""
+			}
+		}
+
+	case "set_primary":
+		// Embedded/local model: not in cfg.Models (it's a runtime entity).
+		// Clearing the cloud primary fields makes the embedded model the
+		// de-facto primary (ReloadModels marks it primary when cfg.Model == "").
+		if strings.HasPrefix(req.ModelName, "embedded/") {
+			s.cfg.Model = ""
+			s.cfg.BaseURL = ""
+			s.cfg.APIKey = ""
+			s.cfg.Provider = ""
+			break
+		}
+		if mc, ok := s.cfg.Models[req.ModelName]; ok {
+			s.cfg.Model = mc.Model
+			s.cfg.BaseURL = mc.BaseURL
+			s.cfg.APIKey = mc.APIKey
+			s.cfg.Provider = mc.Provider
+		} else {
+			writeError(w, http.StatusBadRequest, "model not registered: "+req.ModelName)
+			return
+		}
+
+	case "set_role":
+		// Set the consensus role for a registered model (critic, skeptic,
+		// knowledge_booster, …). The primary model's role is fixed (synthesizer)
+		// and cannot be changed here.
+		if req.ModelName == "" {
+			writeError(w, http.StatusBadRequest, "model_name is required")
+			return
+		}
+		if req.ModelName == s.cfg.Model {
+			writeError(w, http.StatusBadRequest, "primary model is always the synthesizer")
+			return
+		}
+		// Embedded/local model: persist the role in LocalModelRole and apply
+		// immediately at runtime via the kernel (the model is not in
+		// cfg.Models, so the normal config-map path doesn't apply).
+		if strings.HasPrefix(req.ModelName, "embedded/") {
+			// When cfg.Model is empty the embedded model IS the primary —
+			// reject the role change for consistency with cloud primaries.
+			if s.cfg.Model == "" {
+				writeError(w, http.StatusBadRequest, "primary model is always the synthesizer")
+				return
+			}
+			s.cfg.LocalModelRole = req.Role
+			if s.kernel != nil {
+				s.kernel.SetModelRole(req.ModelName, req.Role)
+			}
+			break
+		}
+		mc, ok := s.cfg.Models[req.ModelName]
+		if !ok {
+			writeError(w, http.StatusBadRequest, "model not registered: "+req.ModelName)
+			return
+		}
+		mc.Role = req.Role
+		s.cfg.Models[req.ModelName] = mc
+
+	case "set_compressor":
+		// Set the model used for context compression (Layer 3). Any registered
+		// model can be the compressor. An empty model_name resets to the default
+		// (primary model).
+		if req.CompressorModel != "" {
+			if _, ok := s.cfg.Models[req.CompressorModel]; !ok {
+				writeError(w, http.StatusBadRequest, "model not registered: "+req.CompressorModel)
+				return
+			}
+		}
+		s.cfg.CompressorModel = req.CompressorModel
+
+	case "update_settings":
+		if req.RoutingMode != "" {
+			s.cfg.RoutingMode = req.RoutingMode
+		}
+		if req.SafetyLevel != "" {
+			s.cfg.SafetyLevel = req.SafetyLevel
+		}
+		if req.Sandbox != nil {
+			switch v := strings.ToLower(strings.TrimSpace(*req.Sandbox)); v {
+			case "off", "auto", "on", "strict":
+				s.cfg.Sandbox = v
+			}
+		}
+		if req.MaxTurns > 0 {
+			s.cfg.MaxTurns = req.MaxTurns
+		}
+		if req.EnableLocalLLM != nil {
+			s.cfg.EnableLocalLLM = *req.EnableLocalLLM
+		}
+		// Air-gap takes effect immediately, not just on the next restart —
+		// SetAirGap is what app_wireup.go itself calls at startup, and a
+		// security boundary that only applies after a restart is one a user
+		// can believe is on when it isn't.
+		if req.AirGap != nil {
+			s.cfg.AirGap = *req.AirGap
+			safeurl.SetAirGap(*req.AirGap)
+		}
+		if req.CostLimitPerDayUSD != nil {
+			s.cfg.CostLimitPerDayUSD = *req.CostLimitPerDayUSD
+		}
+		if req.BlastRadiusThreshold != nil {
+			s.cfg.BlastRadiusThreshold = *req.BlastRadiusThreshold
+		}
+		// Memory profile (local model context/RAM knob). Validated against the
+		// known names; empty means auto. Takes effect on the next local-model
+		// (re)load.
+		if req.MemoryProfile != nil {
+			switch strings.ToLower(strings.TrimSpace(*req.MemoryProfile)) {
+			case "", "lean", "balanced", "max":
+				s.cfg.MemoryProfile = strings.ToLower(strings.TrimSpace(*req.MemoryProfile))
+			default:
+				writeError(w, http.StatusBadRequest, "invalid memory_profile (want lean|balanced|max)")
+				return
+			}
+		}
+		// Local mode ("off"|"auto"|"on"|"force"). Applied via
+		// ApplyLocalPreference below so force-local pins routing and starts the
+		// embedded model without a restart. Keep the legacy EnableLocalLLM bool
+		// in sync so a downgrade to an older build still behaves sensibly.
+		if req.Debate != nil {
+			s.cfg.Debate = *req.Debate
+			if s.kernel != nil {
+				s.kernel.SetDebate(*req.Debate)
+			}
+		}
+		if req.Reviewer != nil {
+			s.cfg.Reviewer = *req.Reviewer
+			if s.kernel != nil {
+				s.kernel.SetReviewer(*req.Reviewer)
+			}
+		}
+		if req.EnableSelfCritique != nil {
+			s.cfg.EnableSelfCritique = *req.EnableSelfCritique
+			if s.kernel != nil {
+				s.kernel.SetSelfCritique(*req.EnableSelfCritique)
+			}
+		}
+		if req.BackgroundWork != nil {
+			switch *req.BackgroundWork {
+			case config.BackgroundOff, config.BackgroundLight, config.BackgroundFull:
+				s.cfg.BackgroundWork = *req.BackgroundWork
+			default:
+				writeError(w, http.StatusBadRequest, "invalid background_work (want off|light|full)")
+				return
+			}
+		}
+		if req.LocalMode != nil {
+			switch *req.LocalMode {
+			case "off":
+				s.cfg.LocalMode = "off"
+				s.cfg.EnableLocalLLM = false
+			case "auto", "on", "force":
+				s.cfg.LocalMode = *req.LocalMode
+				s.cfg.EnableLocalLLM = true
+			default:
+				writeError(w, http.StatusBadRequest, "invalid local_mode (want off|auto|on|force)")
+				return
+			}
+		}
+		// The agentic loop is no longer a setting. It is the /loop verb, or
+		// the Loop chat mode, chosen per request — a persistent toggle asked
+		// the user to predict once, globally, something that varies every
+		// message. Requests carrying the old fields are accepted and ignored
+		// so an older UI build does not error; see config.deprecatedKeys.
+		// Execution profile (parallelism switcher) hot-toggle. Applied to the
+		// executor + router on the next Execute.
+		if req.ExecutionProfile != nil {
+			s.cfg.ExecutionProfile = *req.ExecutionProfile
+			if s.kernel != nil {
+				s.kernel.SetExecutionProfile(*req.ExecutionProfile)
+			}
+		}
+		// Planning-phase controls (approval gate + depth governor) hot-toggle.
+		if req.PlanApproval != nil || req.PlanDepth != nil {
+			if req.PlanApproval != nil {
+				s.cfg.PlanApproval = *req.PlanApproval
+			}
+			if req.PlanDepth != nil {
+				s.cfg.PlanDepth = *req.PlanDepth
+			}
+			if s.kernel != nil {
+				s.kernel.SetPlanControls(s.cfg.PlanApproval, s.cfg.PlanDepth)
+			}
+		}
+
+	default:
+		writeError(w, http.StatusBadRequest, "invalid action")
+		return
+	}
+
+	if err := s.cfg.Save(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+
+	// Hot-reload model clients so newly added/switched models take effect now.
+	if s.kernel != nil {
+		s.kernel.ReloadModels(s.cfg)
+	}
+
+	// Apply the local-LLM preference last: pin/unpin force-local routing and,
+	// when force-local is requested but not yet up, start the embedded model.
+	// A force-local failure is reported (never a silent cloud fallback) but
+	// does not fail the whole settings save — the rest of the update stuck.
+	warning := ""
+	if s.kernel != nil {
+		if err := s.kernel.ApplyLocalPreference(r.Context(), s.cfg); err != nil {
+			warning = err.Error()
+		}
+	}
+
+	resp := map[string]interface{}{
+		"success":     true,
+		"message":     "Configuration updated successfully",
+		"local_mode":  s.cfg.ResolvedLocalMode(),
+		"force_local": s.cfg.ForceLocal(),
+	}
+	if warning != "" {
+		resp["warning"] = warning
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// activeTask helpers
+
+// kernelRegisteredModels returns the router's live model list (including the
+// runtime embedded model) for the /api/config response. This is separate from
+// the persisted cfg.Models map: the embedded model is loaded at runtime and
+// never appears in cfg.Models, so without this the UI's "Registered Models"
+// list and header switcher can't see it.
+func (s *Server) kernelRegisteredModels() []orchestrator.RouterModelInfo {
+	if s.kernel == nil {
+		return nil
+	}
+	return s.kernel.RegisteredModels()
+}

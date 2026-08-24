@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/darkcode/safeurl"
+	"github.com/darkcode/infra/safeurl"
 )
 
 // Task is one benchmark case.

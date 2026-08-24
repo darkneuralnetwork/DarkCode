@@ -32,8 +32,9 @@
 #
 # THE MODEL-ID EXCEPTION
 #
-# `claude-sonnet-5` is a legitimate model identifier (cli/completer_test.go has
-# it). The vendor-name rules skip any token in `vendor-word-<alnum>-<digit>`
+# `claude-sonnet-5` is a legitimate model identifier
+# (surfaces/cli/completer_test.go has it). The vendor-name rules skip any
+# token in `vendor-word-<alnum>-<digit>`
 # form, so a model id never trips the guard while a bare "Claude" attribution
 # does.
 #
@@ -59,9 +60,10 @@ SELF_EXCLUDE=':(exclude)scripts/leak-check.sh'
 VENDOR='claude|anthropic|openai|chatgpt|copilot|gemini|bard|hermes'
 
 # Provider/protocol integration files legitimately carry a vendor name: the
-# whole point of provider/openai_provider.go and server/openai_compat.go is to
-# speak that vendor's API. "OpenAI-compatible" is a de-facto wire standard, not
-# attribution. A draft named after a vendor does not match this shape.
+# whole point of model/provider/openai_provider.go and
+# surfaces/server/openai_compat.go is to speak that vendor's API.
+# "OpenAI-compatible" is a de-facto wire standard, not attribution. A draft
+# named after a vendor does not match this shape.
 INTEGRATION='(_provider|_compat)(_test)?\.go$'
 
 # A model identifier: vendor-ish word then a hyphenated tail ending in a digit
@@ -86,9 +88,9 @@ SECRET_FILE='(^|/)\.env(\.|$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|ke
 
 # Top-level paths a tracked file is allowed to live under. A new file outside
 # this set is either misplaced or a stray draft. Keep in step with the tree.
-ALLOWED_TOP='acp|adjudicate|agents|attach|bench|candidate|capability|checkpoint|cli|compression|concurrency|config|core|ctxengine|dag|datasource|debugger|docs|eval|hooks|ingest|intelligence|internal|llm|loop|memory|metrics|modelport|observability|orchestrator|permission|plan|planwork|plugin|project|provider|recall|router|safeurl|scheduler|scripts|security|selfheal|server|spill|tools|ui|uiport|verb|\.github|\.githooks'
+ALLOWED_TOP='bench|build|cmd|docs|infra|internal|kernel|memory|model|scripts|surfaces|tools|\.github|\.githooks'
 # Top-level files that are allowed to exist (not under a directory).
-ALLOWED_FILE='app\.go|app_acp\.go|app_cli\.go|app_gui\.go|app_postturn\.go|app_wireup\.go|main\.go|build\.sh|Makefile|Dockerfile|\.dockerignore|go\.mod|go\.sum|README\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|SIGNING-KEY\.asc|\.gitignore|\.gitleaks\.toml|\.arch-baseline'
+ALLOWED_FILE='build\.sh|Makefile|Dockerfile|\.dockerignore|go\.mod|go\.sum|README\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|SIGNING-KEY\.asc|\.gitignore|\.gitleaks\.toml|\.arch-baseline'
 
 # ------------------------------------------------------------ check funcs ---
 # Each prints one line per violation to stdout and nothing when clean, so the
@@ -243,14 +245,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>' | grep -c .)"
   # Clean inputs — especially the model-id exception the vendor rules must honour.
   # A vendor draft under provider/ must still be caught — the exception is for
   # integration files by shape, not for the directory.
-  assert_fires "vendor-draft-in-provider" "$(printf 'provider/claude_notes.md\n' | check_filenames | grep -c .)"
+  assert_fires "vendor-draft-in-provider" "$(printf 'model/provider/claude_notes.md\n' | check_filenames | grep -c .)"
 
   assert_clean "modelid-branch"     "$(check_branch 'feature/tune-gpt-4o' | grep -c .)"
-  assert_clean "modelid-filename"   "$(printf 'config/claude-sonnet-5.json\n' | check_filenames | grep -c .)"
-  assert_clean "integration-openai" "$(printf 'provider/openai_provider.go\nserver/openai_compat.go\n' | check_filenames | grep -c .)"
+  assert_clean "modelid-filename"   "$(printf 'infra/config/claude-sonnet-5.json\n' | check_filenames | grep -c .)"
+  assert_clean "integration-openai" "$(printf 'model/provider/openai_provider.go\nsurfaces/server/openai_compat.go\n' | check_filenames | grep -c .)"
   assert_clean "provider-commit"    "$(check_commit_msg 'raise the anthropic provider rate limit' | grep -c .)"
-  assert_clean "normal-file"        "$(printf 'memory/retrieval.go\n' | check_filenames | grep -c .)"
-  assert_clean "normal-path"        "$(printf 'orchestrator/kernel.go\n' | check_paths | grep -c .)"
+  assert_clean "normal-file"        "$(printf 'memory/memory/retrieval.go\n' | check_filenames | grep -c .)"
+  assert_clean "normal-path"        "$(printf 'kernel/orchestrator/kernel.go\n' | check_paths | grep -c .)"
   assert_clean "modelid-content"    "$(printf '  Model: "claude-sonnet-5",\n' | check_secrets_content | grep -c .)"
 
   echo

@@ -1,0 +1,85 @@
+<!--
+  Projects — the workspaces the agent can be pointed at, and what it has
+  changed in the active one.
+
+  A project is a directory plus the standing context that goes with it. One
+  is active at a time; activating it is what decides where file tools read
+  and write. Checkpoint/rollback state is scoped to that same active
+  project, which is why Changes lives here as a sub-tab (formerly its own
+  top-level tab) rather than beside it.
+-->
+<div class="blueprint-layout" id="projects-layout">
+
+  <div class="bp-topbar">
+    <div>
+      <h2 class="gradient-text bp-h2">Projects</h2>
+      <div class="bp-subtitle">The active project sets the working directory for every file tool.</div>
+    </div>
+  </div>
+
+  <div class="bp-subtabs" role="tablist">
+    <button class="bp-subtab active" id="proj-subtab-registry" role="tab" aria-selected="true" aria-controls="proj-panel-registry">Registry</button>
+    <button class="bp-subtab" id="proj-subtab-changes" role="tab" aria-selected="false" aria-controls="proj-panel-changes">Changes</button>
+  </div>
+
+  <!-- ══ Registry — the project list (formerly this whole page) ══ -->
+  <div class="bp-subpanel" id="proj-panel-registry" role="tabpanel" aria-labelledby="proj-subtab-registry">
+    <div class="registry-layout" style="display:flex; flex-direction:column; width:100%; height:100%; overflow:hidden; background:var(--bg-void); padding:24px; gap:24px;">
+
+      <div style="display:flex; justify-content:flex-end; align-items:center;">
+        <div style="display:flex; gap:8px;">
+          <button class="btn-glow" id="proj-refresh">Reload</button>
+          <button class="btn-glow primary" id="proj-new">+ New</button>
+        </div>
+      </div>
+
+      <div class="glass-panel" id="bp-projects-panel" style="padding:20px; flex:1; overflow-y:auto;">
+        <div class="proj-grid" id="proj-grid"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ Changes — checkpoint diff/rollback (formerly pages/changes.html) ══ -->
+  <div class="bp-subpanel" id="proj-panel-changes" role="tabpanel" aria-labelledby="proj-subtab-changes" hidden>
+    <div class="changes-layout custom-scrollbar" style="display:flex;flex-direction:column;width:100%;height:100%;overflow-y:auto;background:var(--bg-void);padding:24px;gap:20px;">
+
+      <div class="glass-panel" style="padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 class="cfg-h3" style="margin:0;font-size:14px;text-transform:uppercase;">↩ Changes &amp; Rollback</h3>
+          <button class="fe-btn" id="ch-refresh">↻ Refresh</button>
+        </div>
+        <p style="color:var(--text-mute);font-size:12px;margin:0 0 12px;">
+          The workspace is snapshotted before every mutating tool call. Pick a checkpoint to see
+          what the agent changed since it was taken — and restore any of it.
+        </p>
+        <select id="ch-checkpoint" style="width:100%;padding:8px;background:var(--bg-panel);color:var(--text);
+                border:1px solid var(--border);border-radius:6px;font-size:12px;">
+          <option value="">Loading checkpoints…</option>
+        </select>
+      </div>
+
+      <div class="glass-panel" id="ch-files-panel" style="padding:20px;display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h4 class="cfg-h3" style="margin:0;font-size:12px;text-transform:uppercase;">Changed Files</h4>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span id="ch-summary" style="font-size:11px;color:var(--text-mute);"></span>
+            <button class="fe-btn" id="ch-rollback-all" title="Restore the whole workspace to this checkpoint">↩ Restore all</button>
+          </div>
+        </div>
+        <div id="ch-files" style="display:flex;flex-direction:column;gap:2px;max-height:240px;overflow-y:auto;"></div>
+      </div>
+
+      <div class="glass-panel" id="ch-diff-panel" style="padding:20px;display:none;flex:1;min-height:220px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h4 class="cfg-h3" style="margin:0;font-size:12px;text-transform:uppercase;" id="ch-diff-title">Diff</h4>
+          <button class="fe-btn" id="ch-rollback-file" title="Restore only this file">↩ Restore this file</button>
+        </div>
+        <div id="ch-diff" style="font-family:var(--font-mono);font-size:12px;line-height:1.55;
+             white-space:pre-wrap;word-break:break-word;overflow-x:auto;"></div>
+      </div>
+
+    </div>
+  </div>
+
+</div>

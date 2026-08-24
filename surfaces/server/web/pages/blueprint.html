@@ -1,0 +1,169 @@
+<!--
+  Blueprint — what the agent intends, what it has proven, and what it will break.
+
+  Two things share the name "plan" here and they are genuinely different. The
+  execution graph is one run: a DAG of tasks, each with an agent, dependencies,
+  acceptance criteria and a live status. The project plan below it is a
+  document — the standing description of the work, which outlives any run.
+  The run leads, because it is the thing that changes while you watch.
+
+  The run's three columns answer three separate questions, which is why they sit
+  side by side rather than behind tabs: the graph is the shape of the work, the
+  selected task is the detail of one step, and consequence is what you need
+  before approving it. Any one alone leaves a decision half-informed.
+-->
+<div class="blueprint-layout" id="blueprint-layout">
+
+  <div class="bp-topbar">
+    <div>
+      <h2 class="gradient-text bp-h2">Blueprint</h2>
+      <div class="bp-subtitle" id="bp-goal">No run yet — ask for something and its plan appears here.</div>
+    </div>
+    <div class="bp-topbar-actions">
+      <span class="bp-badge" id="bp-state" hidden></span>
+      <button class="btn-glow" id="blueprint-refresh">Refresh</button>
+      <button class="btn-glow max-btn" data-target="blueprint-layout">⛶ Maximize</button>
+    </div>
+  </div>
+
+  <!-- Two different things share the name "plan": the execution graph (one
+       run, changes while you watch) and the project plan (a standing
+       document, outlives any run). Sub-tabs within Blueprint rather than a
+       separate top-level page or a collapsible section — this is still one
+       subject, just two views of it, and the run leads because it's the one
+       that's live. -->
+  <div class="bp-subtabs" role="tablist">
+    <button class="bp-subtab active" id="bp-subtab-run" role="tab" aria-selected="true" aria-controls="bp-panel-run">Run Graph</button>
+    <button class="bp-subtab" id="bp-subtab-plan" role="tab" aria-selected="false" aria-controls="bp-panel-plan">Project Plan</button>
+    <button class="bp-subtab" id="bp-subtab-decisions" role="tab" aria-selected="false" aria-controls="bp-panel-decisions">Decisions</button>
+  </div>
+
+  <!-- ══ the live run ══════════════════════════════════════════════════ -->
+  <div class="bp-subpanel" id="bp-panel-run" role="tabpanel" aria-labelledby="bp-subtab-run">
+    <div class="bp-progress-track" title="Tasks completed in this run">
+      <div class="bp-progress-fill" id="bp-progress-fill"></div>
+    </div>
+
+    <div class="bp-columns">
+
+      <section class="bp-col glass-panel">
+        <header class="bp-col-head">
+          <span>Execution graph</span><span class="bp-count" id="bp-node-count"></span>
+        </header>
+        <div class="bp-nodes custom-scrollbar" id="bp-nodes">
+          <div class="bp-empty">Nothing running.</div>
+        </div>
+      </section>
+
+      <section class="bp-col glass-panel">
+        <header class="bp-col-head">
+          <span id="bp-task-title">Task</span><span class="bp-count" id="bp-task-agent"></span>
+        </header>
+        <div class="bp-task-body custom-scrollbar" id="bp-task-body">
+          <div class="bp-empty">Select a task to see its goal, acceptance criteria and what it produced.</div>
+        </div>
+      </section>
+
+      <section class="bp-col glass-panel">
+        <header class="bp-col-head">
+          <span>Consequence</span><span class="bp-count" id="bp-impact-count"></span>
+        </header>
+        <div class="bp-impact-body custom-scrollbar" id="bp-impact-body">
+          <div class="bp-empty">What this run reaches, and anything waiting on your approval.</div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ══ the project's standing documents ═════════════════════════════ -->
+  <div class="bp-subpanel" id="bp-panel-plan" role="tabpanel" aria-labelledby="bp-subtab-plan" hidden>
+    <div class="bp-docs-grid">
+      <div class="glass-panel bp-doc-col">
+        <div class="bp-docs-head">
+          <span class="fe-title bp-doc-title">Implementation Plan &amp; Architecture</span>
+          <div class="bp-docs-actions">
+            <button class="btn-glow bp-mini" id="plan-regenerate">↻ Regenerate</button>
+            <button class="fe-btn max-btn" data-target="workflow-plan-container">⛶</button>
+          </div>
+        </div>
+        <div class="workflow-container custom-scrollbar" id="workflow-plan-container">
+          <div id="workflow-plan-view" class="bp-board" data-kind="plan">
+            <p class="bp-muted"><i>Awaiting plan generation…</i></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass-panel bp-doc-col">
+        <div class="bp-docs-head">
+          <span class="fe-title bp-doc-title bp-doc-title-alt">Task Workflow</span>
+          <div class="bp-docs-actions">
+            <button class="btn-glow bp-mini" id="workflow-regenerate">↻ Regenerate</button>
+            <button class="fe-btn max-btn" data-target="workflow-arch-container">⛶</button>
+          </div>
+        </div>
+        <div class="workflow-container custom-scrollbar" id="workflow-arch-container">
+          <div id="workflow-arch-view" class="bp-board" data-kind="workflow">
+            <p class="bp-muted"><i>Awaiting workflow extraction…</i></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Decisions — why the router chose this path (formerly pages/cascade.html) ══
+       Two panels answering the same question from opposite ends: the cascade
+       shows which rung answered without a model call, consensus shows what
+       happened when several models did answer and disagreed.
+
+       Both panels are live: js/260-cascade.js's second IIFE listens on
+       EventBus for "consensus" events (surfaces/ui/events.go's EmitConsensus,
+       fired from kernel/orchestrator/consensus.go and kernel/router/router.go)
+       and renders #cs-model-count/#cs-method/#cs-conflict/#cs-debated/
+       #cs-transcript/#cs-history/#consensus-live directly — no fetch, no
+       history endpoint, it just watches the same event stream everything
+       else on this page does. -->
+  <div class="bp-subpanel" id="bp-panel-decisions" role="tabpanel" aria-labelledby="bp-subtab-decisions" hidden>
+    <div style="padding:20px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(460px, 1fr));">
+
+      <div class="glass-panel" id="tel-cascade-panel" style="padding:20px; grid-column:1 / -1;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 style="margin:0;">💸 Cognition cascade</h3>
+          <button class="fe-btn xs" id="cs-refresh">Refresh</button>
+        </div>
+        <p style="font-size:11px; color:var(--text-mute); margin:0 0 12px;">
+          A question descends smalltalk → deterministic → cache → graph → recall → llm.
+          Every rung that answers is a model call that did not happen.
+        </p>
+        <div id="cs-rungs"><div class="mem-empty">No cascade activity recorded yet.</div></div>
+      </div>
+
+      <div class="glass-panel" id="tel-consensus-panel" style="padding:20px; grid-column:1 / -1;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 style="margin:0;">🤝 Consensus &amp; debate</h3>
+          <span id="consensus-live" style="font-size:11px; color:var(--text-mute);">● IDLE</span>
+        </div>
+        <p style="font-size:11px; color:var(--text-mute); margin:0 0 14px;">
+          When models disagree, the knowledge graph is checked first — that settles it for zero extra
+          calls. Only when the graph cannot check the claims do the two most divergent answers
+          critique each other, once. The exchange is recorded below.
+        </p>
+
+        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:14px;">
+          <div><div class="kpi-label">MODELS</div><div class="kpi-value" id="cs-model-count">0</div></div>
+          <div><div class="kpi-label">DECIDED BY</div><div class="kpi-value" id="cs-method">—</div></div>
+          <div><div class="kpi-label">CONFLICT</div><div class="kpi-value" id="cs-conflict">—</div></div>
+          <div><div class="kpi-label">DEBATED</div><div class="kpi-value" id="cs-debated">—</div></div>
+        </div>
+
+        <div id="cs-transcript-wrap" hidden>
+          <div style="font-size:11px; color:var(--text-dim); margin-bottom:6px;">Exchange transcript</div>
+          <pre id="cs-transcript" class="custom-scrollbar" style="max-height:240px; overflow:auto; font-size:11px; line-height:1.5; background:var(--bg-deep); border:1px solid var(--border); border-radius:8px; padding:12px; white-space:pre-wrap;"></pre>
+        </div>
+        <div id="cs-history"><div class="mem-empty">No consensus rounds yet. Enable consensus routing and debate in Configuration.</div></div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
